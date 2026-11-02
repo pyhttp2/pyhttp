@@ -1,0 +1,3 @@
+# Extra tools for building the desktop executables (see packaging/build.py)
+pyinstaller>=6.10
+pillow>=10

@@ -1,0 +1,26 @@
+{
+  "name": "pyhttp-editor-bundle",
+  "private": true,
+  "description": "Builds pyhttp/static/vendor/codemirror.js (CodeMirror 6 as one IIFE bundle). Run: npm install && npm run build",
+  "scripts": {
+    "build": "esbuild entry.js --bundle --minify --format=iife --global-name=CM --target=es2020 --outfile=../../pyhttp/static/vendor/codemirror.js --legal-comments=none"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/commands": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/lang-html": "^6",
+    "@codemirror/lang-javascript": "^6",
+    "@codemirror/lang-json": "^6",
+    "@codemirror/lang-python": "^6",
+    "@codemirror/lang-xml": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/search": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24"
+  }
+}

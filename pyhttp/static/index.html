@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>
+  // apply the theme before first paint (the server value is synced after load)
+  (function () {
+    try {
+      var t = localStorage.getItem('pyhttp.theme') || 'dark';
+      if (t === 'system') t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+      var fs = localStorage.getItem('pyhttp.fontsize');
+      if (fs) document.documentElement.style.setProperty('--editor-font', fs + 'px');
+      var uf = localStorage.getItem('pyhttp.uifont'), mf = localStorage.getItem('pyhttp.monofont');
+      if (uf) document.documentElement.style.setProperty('--sans', uf);
+      if (mf) document.documentElement.style.setProperty('--mono', mf);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyhttp</title>
+<link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/features.css">
+</head>
+<body>
+<header class="topbar">
+  <button id="btn-sidebar" class="icon-btn hamburger on" title="Hide the sidebar (Ctrl+\)" aria-label="Show or hide the sidebar">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+  <div class="brand" title="pyhttp: local HTTP client">
+    <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+      <defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#10b981"/></linearGradient></defs>
+      <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#brand-g)"/>
+      <g fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 12h15M19 8l4 4-4 4"/>
+        <path d="M24 20H9M13 16l-4 4 4 4" opacity=".8"/>
+      </g>
+    </svg>
+    <span class="brand-word">py<span>http</span></span>
+  </div>
+  <div class="topbar-actions">
+    <button id="btn-update" class="update-pill" hidden title="A newer version is available">⬆ Update</button>
+    <div class="env-picker" title="Active environment: its variables override global variables">
+      <span class="env-dot"></span>
+      <select id="env-select"></select>
+    </div>
+    <button id="btn-envs" title="Create and edit environments (Dev, QA, Prod…)">Environments</button>
+    <button id="btn-variables" title="Global variables, used by every environment">Variables</button>
+    <button id="btn-cookies" title="Cookie jar: cookies stored from responses and sent with requests">Cookies</button>
+    <button id="btn-monitors" title="Scheduled checks: picked requests sent on an interval while the app is open; failures are flagged and can ping a webhook">Monitors<span id="mon-badge" class="tab-n fail" hidden></span></button>
+    <button id="btn-mocks" title="Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on (http://host:port/mock/&lt;name&gt;/…)">Mocks<span id="mock-badge" class="tab-n" hidden></span></button>
+    <button id="btn-import" title="Import a pyhttp export, a Postman collection or environment, or a cURL command">Import</button>
+    <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export ▾</button>
+    <button id="btn-help" class="icon-btn settings-btn" title="Keyboard shortcuts (?)">?</button>
+    <button id="btn-settings" class="icon-btn settings-btn" title="Settings: theme, SSL verification, redirects, proxy, certificates">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+    <span id="meta-info" class="muted small"></span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ------------------------------------------------ sidebar: collection -->
+  <aside class="sidebar">
+    <div class="tab-panels grow-panels" id="side-panels">
+      <div class="tab-panel side-panel" data-panel="collection">
+        <div class="sidebar-head">
+          <input id="search" type="search" placeholder="Search name, tags, url, description… (Ctrl+K)" autocomplete="off">
+          <button id="btn-new" class="primary" title="New request (Ctrl+N)">+<span class="btn-text"> New</span></button>
+          <button id="btn-new-folder" class="icon-btn folder-btn" title="New folder">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 11v5M9.5 13.5h5"/></svg>
+          </button>
+        </div>
+        <div id="tag-filter" class="tag-filter"></div>
+        <div class="select-bar">
+          <label title="Select everything currently shown"><input type="checkbox" id="select-all"> All shown</label>
+          <span id="selected-count" class="muted small">0 selected</span>
+          <button id="btn-clear-sel" class="link small" hidden>clear</button>
+          <span class="run-group">
+            <button id="btn-run" class="accent" disabled title="Choose a name, order and options, then run">▶ Run selected</button>
+            <button id="btn-run-now" class="icon" disabled title="Run now: skip the dialog and send the selected requests with the last run's options"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z"/></svg></button>
+          </span>
+        </div>
+        <ul id="req-list" class="req-list"></ul>
+      </div>
+    </div>
+  </aside>
+
+  <!-- --------------------------------------------------- editor + response -->
+  <section class="editor" id="editor-section">
+    <div id="req-tabs" class="req-tabs" hidden></div>
+    <div id="editor-empty" class="empty">
+      <svg class="empty-mark" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M21 3 10.5 13.5M21 3l-6.5 18-4-7.5L3 9.5z"/></svg>
+      <p>Select a request on the left, or create a new one.</p>
+      <div class="empty-keys">
+        <span><kbd>Ctrl</kbd> <kbd>N</kbd> new request</span>
+        <span><kbd>Ctrl</kbd> <kbd>K</kbd> search</span>
+        <span><kbd>Ctrl</kbd> <kbd>Enter</kbd> send</span>
+        <span><kbd>?</kbd> all shortcuts</span>
+      </div>
+      <p class="muted small">Tip: use <code>{{variable}}</code> in URL, headers and body. In a run, <code>{{prev.json.token}}</code> reads the previous response.</p>
+    </div>
+    <div id="editor-form" hidden>
+      <div class="editor-request">
+      <div class="row url-row">
+        <select id="f-method" class="method-select">
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option>
+          <option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+        </select>
+        <input id="f-url" class="grow mono" placeholder="https://api.example.com/users/:id?page={{page}}" spellcheck="false">
+        <button id="btn-code" class="icon-btn code-btn" title="Code snippet: cURL, Python, JavaScript… (Ctrl+Shift+C)">&lt;/&gt;</button>
+        <span class="send-group">
+          <button id="btn-send" class="accent" title="Ctrl+Enter">Send</button>
+          <button id="btn-send-mode" class="accent send-mode" hidden title="How the checked bodies are sent: in order or in parallel">▾</button>
+        </span>
+      </div>
+      <div class="meta-bar">
+        <span id="crumb" class="crumb"></span>
+        <input id="f-name" class="name-inline" placeholder="Untitled request" title="Request name (click to rename)" spellcheck="false">
+        <span id="meta-tags" class="meta-tags"></span>
+        <button id="btn-details" class="link small" title="Edit tags and description">Details ▾</button>
+        <span class="grow"></span>
+        <span id="save-state" class="save-state" title="Changes save automatically (Ctrl+S saves now)"></span>
+      </div>
+      <div id="details" class="details" hidden>
+        <label class="field">Tags <input id="f-tags" class="grow" placeholder="comma separated, e.g. auth, users, smoke"></label>
+        <div class="row tight">
+          <span class="muted small grow">Description (Markdown)</span>
+          <button id="btn-desc-preview" class="link small">Preview</button>
+        </div>
+        <textarea id="f-description" rows="3" placeholder="What this request is for. Markdown works: **bold**, `code`, lists, [links](https://…)"></textarea>
+        <div id="desc-preview" class="md" hidden></div>
+      </div>
+
+      <div class="tabs" id="editor-tabs">
+        <button data-tab="params" class="active">Params<span class="tab-n" id="n-params"></span></button>
+        <button data-tab="auth">Auth<span class="tab-n" id="n-auth"></span></button>
+        <button data-tab="headers">Headers<span class="tab-n" id="n-headers"></span></button>
+        <button data-tab="body">Body<span class="tab-n" id="n-body"></span></button>
+        <button data-tab="tests" title="Pre-request variables and script; tests, extractions and the test script that run on the response">Scripts<span class="tab-n" id="n-tests"></span></button>
+        <button data-tab="settings">Settings</button>
+      </div>
+      <div class="tab-panels" id="editor-panels">
+        <div class="tab-panel" data-panel="params">
+          <div id="kv-params" class="kv"></div>
+          <div id="path-vars" class="path-vars" hidden></div>
+        </div>
+        <div class="tab-panel" data-panel="auth" hidden><div id="auth-panel"></div></div>
+        <div class="tab-panel" data-panel="headers" hidden>
+          <div id="inherited-headers" class="inherited" hidden></div>
+          <div id="kv-headers" class="kv"></div>
+        </div>
+        <div class="tab-panel" data-panel="body" hidden>
+          <div class="row">
+            <select id="f-body-type">
+              <option value="none">No body</option>
+              <option value="json">JSON</option>
+              <option value="text">Text</option>
+              <option value="xml">XML</option>
+              <option value="html">HTML</option>
+              <option value="javascript">JavaScript</option>
+              <option value="form">Form (x-www-form-urlencoded)</option>
+              <option value="multipart">Form-data (multipart, files)</option>
+              <option value="binary">Binary file</option>
+              <option value="graphql">GraphQL</option>
+            </select>
+            <span id="bodies-hint" class="muted small grow"></span>
+          </div>
+          <div class="bodies">
+            <div class="bodies-side">
+              <div class="row tight">
+                <input id="body-search" type="search" class="grow" placeholder="Search bodies…" autocomplete="off">
+                <button id="btn-body-add" title="Add a new named body">+ Body</button>
+              </div>
+              <div class="row tight small">
+                <button id="btn-body-all" class="link small">check all</button>
+                <button id="btn-body-none" class="link small">uncheck all</button>
+                <span class="grow"></span>
+                <span id="bodies-count" class="muted small"></span>
+              </div>
+              <ul id="body-list" class="body-list"></ul>
+            </div>
+            <div class="bodies-main">
+              <div id="body-editor-empty" class="empty small">Add a body with “+ Body”. Each named body is sent separately when you press Send.</div>
+              <div id="body-editor" hidden>
+                <div class="row tight">
+                  <input id="body-name" class="grow" placeholder="Body name, e.g. valid user / missing email">
+                  <button id="btn-format-json" class="link" title="Beautify (Ctrl+B)">Beautify</button>
+                  <button id="btn-body-dup" title="Duplicate this body">Duplicate</button>
+                  <button id="btn-body-del" class="danger" title="Delete this body">Delete</button>
+                </div>
+                <div id="body-text-wrap">
+                  <textarea id="f-body" class="mono body-input" rows="14" spellcheck="false" placeholder='{"name": "{{user_name}}"}  // Ctrl+/ comments a line'></textarea>
+                  <div class="muted small body-hint" id="body-hint"></div>
+                </div>
+                <div id="body-form-wrap" hidden>
+                  <div id="kv-form" class="kv"></div>
+                  <p class="muted small" id="form-hint"></p>
+                </div>
+                <div id="body-binary-wrap" hidden>
+                  <div class="row tight">
+                    <input id="f-binary-path" class="grow mono" placeholder="Path to the file to send, e.g. C:\data\photo.jpg" spellcheck="false">
+                    <button id="btn-binary-browse">Browse…</button>
+                  </div>
+                  <p class="muted small" id="binary-info"></p>
+                </div>
+                <div id="body-graphql-wrap" hidden>
+                  <div class="gql">
+                    <div><div class="muted small">Query</div><textarea id="f-gql-query" class="mono" rows="10" spellcheck="false" placeholder="query { me { id name } }"></textarea></div>
+                    <div><div class="muted small">Variables (JSON)</div><textarea id="f-gql-vars" class="mono" rows="10" spellcheck="false" placeholder='{"id": 1}'></textarea></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-panel" data-panel="tests" hidden><div id="tests-panel"></div></div>
+        <div class="tab-panel" data-panel="settings" hidden>
+          <label class="field">Timeout (seconds) <input id="f-timeout" type="number" min="1" step="1" value="30"></label>
+          <label class="field">Follow redirects
+            <select id="f-redirects"><option value="">Use global setting</option><option value="1">Yes</option><option value="0">No</option></select>
+          </label>
+          <label class="field"><input type="checkbox" id="f-send-cookies" checked> Send stored cookies with this request</label>
+          <label class="field"><input type="checkbox" id="f-store-cookies" checked> Store cookies from the response</label>
+          <label class="field"><input type="checkbox" id="f-stream"> Stream the response live <span class="muted small">(Server-Sent Events, chunked and AI-style streaming endpoints)</span></label>
+          <div class="ts-sub" style="margin-top:16px">Depends on another request</div>
+          <p class="muted small">Send another request first, for example one that fetches a token and saves it with an extraction or <code>pm.environment.set("token", …)</code>. It is sent again only when its last result is older than the expiry, so one token serves many sends.</p>
+          <label class="field">Request <select id="f-dep"><option value="">none</option></select></label>
+          <div id="f-dep-opts" hidden>
+            <label class="field">Send it again after <input id="f-dep-ttl" type="number" min="0" step="1" value="30" style="width:80px"> <select id="f-dep-unit"><option value="60">minutes</option><option value="1">seconds</option><option value="3600">hours</option></select> <span class="muted small">0 = before every send</span></label>
+            <label class="field"><input type="checkbox" id="f-dep-retry" checked> If this request gets 401 or 403, refresh it and retry once</label>
+            <div class="muted small" id="f-dep-status"></div>
+          </div>
+          <p class="muted small">SSL verification, proxy, client certificates and the redirect default live in <button id="link-settings" class="link small" style="padding:0">⚙ Settings</button>.</p>
+        </div>
+      </div>
+      </div>
+
+      <div id="response" class="response" hidden>
+        <div id="resp-bodies" class="resp-bodies" hidden></div>
+        <div class="response-head">
+          <span id="r-body-name" class="badge" hidden></span>
+          <span id="r-status" class="status"></span>
+          <span id="r-time" class="muted small"></span>
+          <span id="r-size" class="muted small"></span>
+          <span id="r-tests-badge" class="tests-badge" hidden></span>
+          <span id="r-dep" class="dep-badge" hidden></span>
+          <span class="grow"></span>
+          <div class="tabs small" id="resp-tabs">
+            <button data-tab="body" class="active">Body</button>
+            <button data-tab="cookies">Cookies<span class="tab-n" id="n-r-cookies"></span></button>
+            <button data-tab="headers">Headers<span class="tab-n" id="n-r-headers"></span></button>
+            <button data-tab="tests">Tests<span class="tab-n" id="n-r-tests"></span></button>
+            <button data-tab="request">Request</button>
+          </div>
+          <button id="r-layout" class="copy-btn icon-only" title="Move the response to the right of the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg></button>
+          <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)">⤢</button>
+          <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request">▾</button>
+          <button id="r-save" class="copy-btn" title="Save the response body to a file">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
+            <span>Save</span>
+          </button>
+          <button id="r-copy" class="copy-btn" title="Copy the response body">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V6a2 2 0 0 1 2-2h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <span>Copy</span>
+          </button>
+        </div>
+        <div class="tab-panels" id="resp-panels">
+          <div id="r-body" class="tab-panel r-panel" data-panel="body"></div>
+          <div id="r-cookies" class="tab-panel r-panel" data-panel="cookies" hidden></div>
+          <div id="r-headers" class="tab-panel r-panel" data-panel="headers" hidden></div>
+          <div id="r-tests" class="tab-panel r-panel" data-panel="tests" hidden></div>
+          <div id="r-request" class="tab-panel r-panel" data-panel="request" hidden></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------------- runs -->
+  <aside class="runs" id="runs-panel">
+    <div class="tabs" id="runs-tabs">
+      <button data-tab="current" class="active">Current run</button>
+      <button data-tab="history" title="Collection runs and multi-body sends, newest first">Run history</button>
+      <button data-tab="requests" title="Every request sent, newest first">Request history</button>
+      <span class="grow"></span>
+      <button id="runs-close" class="icon-btn tabs-close" title="Hide this panel (the Runs button in the status bar brings it back)">✕</button>
+    </div>
+    <div class="tab-panels grow-panels" id="runs-panels">
+      <div id="run-current" class="tab-panel run-panel" data-panel="current">
+        <div class="empty"><p>No run yet.</p><p class="muted small">Tick requests in the list and press “Run selected”. Each one is sent in order and every response is saved to a folder.</p></div>
+      </div>
+      <div id="run-history" class="tab-panel run-panel" data-panel="history" hidden></div>
+      <div class="tab-panel side-panel" data-panel="requests" hidden>
+        <div class="sidebar-head">
+          <input id="history-search" type="search" placeholder="Filter by name, URL, method or status…" autocomplete="off">
+          <button id="btn-history-clear" class="link small" title="Clear the whole request history">Clear</button>
+        </div>
+        <div id="history-filters" class="h-filters">
+          <button data-status="" class="on">All</button><button data-status="2xx" class="ok-text">2xx</button><button data-status="3xx">3xx</button><button data-status="4xx" class="warn-text">4xx</button><button data-status="5xx" class="err-text">5xx</button><button data-status="error" class="err-text" title="No response: network errors and cancelled sends">Errors</button>
+        </div>
+        <div id="history-compare" class="h-compare" hidden></div>
+        <ul id="history-list" class="req-list history-list"></ul>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<section id="console" class="console" hidden>
+  <div id="console-resize" class="console-resize" title="Drag to resize"></div>
+  <div class="console-bar">
+    <strong>Console</strong>
+    <input id="console-filter" type="search" placeholder="Filter by URL, method, status, request…" autocomplete="off">
+    <label class="small"><input type="checkbox" id="console-errors"> Errors only</label>
+    <span id="console-info" class="muted small"></span>
+    <span class="grow"></span>
+    <button id="console-expand" class="link small" title="Expand or collapse all entries">Expand all</button>
+    <button id="console-clear" class="link small" title="Clear the log">Clear</button>
+    <button id="console-close" class="icon-btn" title="Close console (Ctrl+Alt+C)">✕</button>
+  </div>
+  <div id="console-list" class="console-list"></div>
+</section>
+<footer class="statusbar">
+  <button id="btn-console" class="status-btn" title="Show every request sent by the backend (Ctrl+Alt+C)">
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 6l5 6-5 6M12 18h8"/></svg>
+    Console <span id="console-count" class="sb-count"></span><span id="console-errcount" class="sb-count err" hidden></span>
+  </button>
+  <span id="sb-last" class="sb-last"></span>
+  <button id="sb-ssl" class="sb-ssl" hidden title="SSL certificate verification is off. Click to change.">⚠ SSL verification off</button>
+  <button id="sb-proxy" class="sb-ssl" hidden title="Requests go through a proxy. Click to change.">⇄ Proxy on</button>
+  <button id="sb-monitors" class="sb-ssl" hidden title="A monitor is failing. Click to see the checks.">⚠ Monitor failing</button>
+  <span class="grow"></span>
+  <button id="sb-runs" class="status-btn" title="Show or hide the runs and history panel">▶ Runs &amp; history</button>
+  <span id="sb-layout" class="sb-seg" title="Where the response is shown">
+    <span class="sb-seg-label">Response</span>
+    <button data-layout="below" class="on" title="Show the response below the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1" opacity=".45"/></svg>below</button>
+    <button data-layout="beside" title="Show the response to the right of the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg>right</button>
+  </span>
+  <span id="sb-env" class="sb-env"></span>
+</footer>
+
+<datalist id="header-names">
+  <option value="Accept"><option value="Accept-Encoding"><option value="Accept-Language"><option value="Authorization">
+  <option value="Cache-Control"><option value="Content-Type"><option value="Cookie"><option value="If-Match"><option value="If-None-Match">
+  <option value="If-Modified-Since"><option value="Origin"><option value="Referer"><option value="User-Agent"><option value="X-API-Key">
+  <option value="X-Requested-With"><option value="X-Request-ID"><option value="X-Correlation-ID"><option value="Idempotency-Key">
+</datalist>
+<datalist id="header-values">
+  <option value="application/json"><option value="application/xml"><option value="text/plain"><option value="text/html">
+  <option value="application/x-www-form-urlencoded"><option value="multipart/form-data"><option value="Bearer {{token}}">
+  <option value="Basic {{credentials}}"><option value="no-cache"><option value="gzip, deflate"><option value="*/*">
+</datalist>
+
+<div id="modal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" class="link">✕</button></div>
+    <div id="modal-body" class="modal-body"></div>
+    <div id="modal-foot" class="modal-foot"></div>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="import-file" accept="application/json,.json,.yaml,.yml,.har,.txt,.sh" hidden>
+<input type="file" id="data-file" accept=".csv,.json,text/csv,application/json" hidden>
+
+<script src="/static/vendor/codemirror.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/viewer.js"></script>
+<script src="/static/codegen.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/features.js"></script>
+</body>
+</html>
