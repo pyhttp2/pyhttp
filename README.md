@@ -191,7 +191,9 @@ pyhttp
 On Linux, install the GTK webview bindings first (see *Linux* below) or use
 `pyhttp --browser`. `brew install pyhttp2/pyhttp/pyhttp` installs the
 same package through Homebrew (macOS and Linux, Intel and ARM; the tap is
-[pyhttp2/homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp)).
+[pyhttp2/homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp)) — or tap
+once with `brew tap pyhttp2/pyhttp`, after which plain `brew install pyhttp`,
+`brew upgrade pyhttp` and `brew install --cask pyhttp` all work.
 
 **Windows**: double-click `run.bat`. The window opens without a console.
 WebView2 ships with Windows 10/11.
