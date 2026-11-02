@@ -24,7 +24,7 @@ from . import (USER_AGENT, __version__, console, curl, db, mock, monitors, oauth
 from .templating import build_context, render
 
 STATIC_DIR = Path(__file__).parent / "static"
-DEFAULT_RELEASE_REPO = "pyhttp2/pyhttp-releases"  # public repo that holds the .exe/.dmg releases
+DEFAULT_RELEASE_REPO = "pyhttp2/pyhttp"  # public repo whose Releases page holds the .exe/.dmg builds
 try:  # written by packaging/build.py so packaged apps know where their releases live
     from ._build import GITHUB_REPO as _BUILT_REPO
 except ImportError:  # pragma: no cover - source checkout

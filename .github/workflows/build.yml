@@ -7,15 +7,23 @@
 #
 # Every push to main runs the tests and builds (files appear under the run's
 # Artifacts for one day). Nothing is published automatically. Releases do not use
-# artifacts: each build uploads straight to a draft release, which is published at the end. To publish a release to the
-# public releases repository, either push a tag (git tag v0.2.0 && git push origin v0.2.0)
+# artifacts: each build uploads straight to a draft release, which is published at the end.
+# To publish a release, either push a tag (git tag v0.2.0 && git push origin v0.2.0)
 # or run the workflow by hand from the Actions tab and tick "publish". The release is
 # tagged v<version> from pyhttp/__init__.py; publishing the same version again replaces
 # the existing release.
 #
+# Releases are published on THIS repository's Releases page (GITHUB_TOKEN is enough)
+# and then, best effort: uploaded to PyPI as pyhttp-app, mirrored to the legacy
+# pyhttp-releases repository (so installs from before the move keep updating), and the
+# Homebrew tap(s) get the new cask and formula. Those extra steps warn and are skipped
+# when their secret is missing; they never fail the release itself.
+#
 # One-time setup in this repository (Settings > Secrets and variables > Actions):
 #   secret RELEASE_TOKEN: fine-grained PAT with Contents: read and write on
-#     pyhttp2/pyhttp-releases (GITHUB_TOKEN cannot write to another repository).
+#     pyhttp2/pyhttp-releases and pyhttp2/homebrew-pyhttp (GITHUB_TOKEN cannot write
+#     to other repositories). Used only for the mirror and the taps.
+#   secret PYPI_API_TOKEN: a pypi.org API token for the pyhttp-app project.
 # Optional, removes the macOS "Apple could not verify" warning (needs an Apple
 # Developer Program membership):
 #   secret MACOS_CERT_P12: Developer ID Application certificate, base64 of the .p12
@@ -35,8 +43,12 @@ on:
     branches: [main]
     tags: ["v*"]
 
+permissions:
+  contents: write   # gh release on this repository
+
 env:
-  RELEASE_REPO: pyhttp2/pyhttp-releases
+  LEGACY_REPO: pyhttp2/pyhttp-releases   # old release home: mirrored so older installs see updates
+  TAP_REPO: pyhttp2/homebrew-pyhttp      # Homebrew tap: brew install pyhttp2/pyhttp/<name>
 
 # One run per commit: a release pushes main and the tag at once, and the tag run (which
 # publishes) supersedes the main run instead of competing with it for a macOS runner.
@@ -80,23 +92,22 @@ jobs:
             exit 1
           fi
 
-      - name: Check release token
+      - name: Check secrets
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error::Secret RELEASE_TOKEN is not set. Create a fine-grained PAT with Contents: write on ${RELEASE_REPO} and add it under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
+          [ -n "$RELEASE_TOKEN" ] || echo "::warning::Secret RELEASE_TOKEN is not set: the release will publish here, but the legacy mirror and the Homebrew taps will be skipped."
+          [ -n "$PYPI_API_TOKEN" ] || echo "::warning::Secret PYPI_API_TOKEN is not set: the PyPI upload will be skipped."
 
       - name: Replace any release of this version with an empty draft
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           # same version => replace the whole release (old assets and notes disappear)
-          gh release delete "v${VERSION}" --repo "$RELEASE_REPO" --yes --cleanup-tag || echo "no previous release"
-          gh release create "v${VERSION}" --repo "$RELEASE_REPO" --draft --title "pyhttp ${VERSION}" --notes "Building…"
+          gh release delete "v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo "no previous release"
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft --title "pyhttp ${VERSION}" --notes "Building…"
 
   build:
     needs: prepare
@@ -170,7 +181,7 @@ jobs:
 
       - name: Build
         env:
-          PYHTTP_GITHUB_REPO: ${{ env.RELEASE_REPO }}   # where the app checks for updates
+          PYHTTP_GITHUB_REPO: ${{ github.repository }}  # where the app checks for updates
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -195,9 +206,9 @@ jobs:
         if: needs.prepare.result == 'success'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: gh release upload "v${VERSION}" ${{ matrix.files }} --repo "$RELEASE_REPO" --clobber
+        run: gh release upload "v${VERSION}" ${{ matrix.files }} --repo "$GITHUB_REPOSITORY" --clobber
 
       # Test builds (pushes to main) keep their files for a day. A full storage quota must not
       # fail the build, so this step may fail without failing the job.
@@ -215,7 +226,7 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
@@ -223,7 +234,7 @@ jobs:
       - name: Download the built files from the draft
         run: |
           mkdir artifacts
-          gh release download "v${VERSION}" --repo "$RELEASE_REPO" --dir artifacts --pattern 'pyhttp-*'
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --dir artifacts --pattern 'pyhttp-*'
 
       - name: Checksums
         run: |
@@ -234,13 +245,13 @@ jobs:
           sha256sum pyhttp-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Publish to ${{ env.RELEASE_REPO }}
+      - name: Publish the release
         run: |
           cat > notes.md <<'EOF'
           pyhttp @VERSION@, built from @SHA@.
 
           - Windows 10/11: run the installer `pyhttp-@VERSION@-windows-x64-setup.exe` (per user, no admin rights, Start menu entry, uninstaller), or use the portable `pyhttp-@VERSION@-windows-x64.exe` (one file, no install). SmartScreen: More info → Run anyway.
-          - macOS (Apple Silicon): `brew tap pyhttp2/pyhttp https://github.com/pyhttp2/pyhttp-releases && brew install --cask pyhttp2/pyhttp/pyhttp`, or open the `.dmg` and drag pyhttp to Applications.
+          - macOS (Apple Silicon): `brew install --cask pyhttp2/pyhttp/pyhttp`, or open the `.dmg` and drag pyhttp to Applications.
             If macOS says it cannot verify the app: System Settings → Privacy & Security → Open Anyway, or `xattr -dr com.apple.quarantine /Applications/pyhttp.app`.
           - Ubuntu 22.04+ / Debian 12+: `sudo apt install ./pyhttp-@VERSION@-linux-amd64.deb` (uses the distro's GTK and WebKitGTK; other distros run from source).
           - Any OS with Python 3.10+: `pip install pyhttp-app` (or `brew install pyhttp2/pyhttp/pyhttp-app`), then run `pyhttp`.
@@ -249,47 +260,17 @@ jobs:
           Free for everyone under the pyhttp Free License 1.1 (LICENSE.md): home or work, any company size, any purpose, no fees. By downloading you accept LICENSE.md. Bundled components: THIRD-PARTY-NOTICES.md.
           EOF
           sed -i "s/@VERSION@/${VERSION}/g; s/@SHA@/${GITHUB_SHA}/g" notes.md
-          gh release upload "v${VERSION}" artifacts/SHA256SUMS.txt LICENSE.md THIRD-PARTY-NOTICES.md --repo "$RELEASE_REPO" --clobber
-          gh release edit "v${VERSION}" --repo "$RELEASE_REPO" --title "pyhttp ${VERSION}" --notes-file notes.md --draft=false --latest
-
-      - name: Update the Homebrew cask in ${{ env.RELEASE_REPO }}
-        run: |
-          DMG=$(ls artifacts/pyhttp-*-macos-arm64.dmg | head -1)
-          SHA=$(sha256sum "$DMG" | cut -d' ' -f1)
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${RELEASE_REPO}.git" rel
-          mkdir -p rel/Casks
-          cat > rel/Casks/pyhttp.rb <<EOF
-          cask "pyhttp" do
-            version "${VERSION}"
-            sha256 "${SHA}"
-
-            url "https://github.com/${RELEASE_REPO}/releases/download/v#{version}/pyhttp-#{version}-macos-arm64.dmg"
-            name "pyhttp"
-            desc "Local, Postman-like HTTP client with a collection runner"
-            homepage "https://github.com/${RELEASE_REPO}"
-
-            depends_on arch: :arm64
-            app "pyhttp.app"
-
-            zap trash: "~/Library/Application Support/pyhttp"
-          end
-          EOF
-          cd rel
-          git config user.name "pyhttp"
-          git config user.email "dev@pyhttp.com"
-          git add Casks/pyhttp.rb
-          git commit -m "Homebrew cask: pyhttp ${VERSION}" || echo "cask unchanged"
-          git push
+          gh release upload "v${VERSION}" artifacts/SHA256SUMS.txt LICENSE.md THIRD-PARTY-NOTICES.md --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --title "pyhttp ${VERSION}" --notes-file notes.md --draft=false --latest
 
       # PyPI: the same version as the tag, as pyhttp-app (the name pyhttp is taken).
-      # Needs secret PYPI_API_TOKEN (a pypi.org API token for the pyhttp-app project);
-      # without it this step is skipped with a warning instead of failing the release.
+      # Without PYPI_API_TOKEN this is skipped with a warning instead of failing the release.
       - name: Publish to PyPI (pyhttp-app)
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           if [ -z "$PYPI_API_TOKEN" ]; then
-            echo "::warning::Secret PYPI_API_TOKEN is not set; skipping the PyPI upload. Add it under Settings > Secrets and variables > Actions."
+            echo "::warning::Secret PYPI_API_TOKEN is not set; skipping the PyPI upload."
             exit 0
           fi
           python3 -m pip install --quiet build twine
@@ -297,23 +278,76 @@ jobs:
           TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_API_TOKEN" python3 -m twine upload --non-interactive dist/*
           echo "uploaded https://pypi.org/project/pyhttp-app/${VERSION}/"
 
-      - name: Update the Homebrew formula in ${{ env.RELEASE_REPO }}
+      # Installs from before the releases moved here check pyhttp-releases for updates, and
+      # the old Homebrew tap lives there: mirror the release so they all keep updating.
+      # Best effort: a mirror problem must not fail the release that already published above.
+      - name: Mirror the release to the legacy repository
+        continue-on-error: true
         env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          if [ -z "$PYPI_API_TOKEN" ] || [ ! -f dist/pyhttp_app-${VERSION}.tar.gz ]; then
-            echo "::warning::no PyPI upload, leaving Formula/pyhttp-app.rb unchanged"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN is not set; skipping the legacy mirror (older installs will not see this update)."
             exit 0
           fi
-          SHA=$(sha256sum "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
-          # the sdist URL contains a content hash; ask PyPI for it (retry while the index catches up)
-          for i in 1 2 3 4 5 6; do
-            URL=$(curl -fsS "https://pypi.org/pypi/pyhttp-app/${VERSION}/json" | python3 -c "import json,sys; print(next(u['url'] for u in json.load(sys.stdin)['urls'] if u['packagetype']=='sdist'))") && break
-            echo "PyPI index not ready, retry $i"; sleep 20
+          { head -1 notes.md; echo; echo "> Releases now live at https://github.com/${GITHUB_REPOSITORY}/releases — this mirror exists so installs from before the move keep updating."; tail -n +2 notes.md; } > legacy-notes.md
+          gh release delete "v${VERSION}" --repo "$LEGACY_REPO" --yes --cleanup-tag || echo "no previous release"
+          gh release create "v${VERSION}" --repo "$LEGACY_REPO" --title "pyhttp ${VERSION}" --notes-file legacy-notes.md --latest \
+            artifacts/* LICENSE.md THIRD-PARTY-NOTICES.md
+
+      # The cask points at this repository's release assets; the formula at the PyPI sdist.
+      # Both are pushed to the canonical tap (homebrew-pyhttp) and to the legacy tap in
+      # pyhttp-releases, where existing brew installs look. Best effort, like the mirror.
+      - name: Update the Homebrew taps (cask + formula)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN is not set; skipping the Homebrew taps."
+            exit 0
+          fi
+          DMG=$(ls artifacts/pyhttp-*-macos-arm64.dmg | head -1)
+          DMG_SHA=$(sha256sum "$DMG" | cut -d' ' -f1)
+          mkdir tap-files
+          cat > tap-files/pyhttp.rb <<EOF
+          cask "pyhttp" do
+            version "${VERSION}"
+            sha256 "${DMG_SHA}"
+
+            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/pyhttp-#{version}-macos-arm64.dmg"
+            name "pyhttp"
+            desc "Local API client with a collection runner (alternative to Postman)"
+            homepage "https://pyhttp.com"
+
+            depends_on arch: :arm64
+            app "pyhttp.app"
+
+            zap trash: "~/Library/Application Support/pyhttp"
+          end
+          EOF
+          # formula: only when this release reached PyPI (the sdist URL carries a content hash)
+          if [ -n "$PYPI_API_TOKEN" ] && [ -f "dist/pyhttp_app-${VERSION}.tar.gz" ]; then
+            SDIST_SHA=$(sha256sum "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
+            for i in 1 2 3 4 5 6; do
+              SDIST_URL=$(curl -fsS "https://pypi.org/pypi/pyhttp-app/${VERSION}/json" | python3 -c "import json,sys; print(next(u['url'] for u in json.load(sys.stdin)['urls'] if u['packagetype']=='sdist'))") && break
+              echo "PyPI index not ready, retry $i"; sleep 20
+            done
+            test -n "$SDIST_URL"
+          fi
+          for REPO in "$TAP_REPO" "$LEGACY_REPO"; do
+            rm -rf tap && git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" tap || { echo "::warning::cannot clone ${REPO}"; continue; }
+            mkdir -p tap/Casks tap/Formula
+            cp tap-files/pyhttp.rb tap/Casks/pyhttp.rb
+            if [ -n "${SDIST_URL:-}" ] && [ -f tap/Formula/pyhttp-app.rb ]; then
+              sed -i -E "s|^  url \".*\"$|  url \"${SDIST_URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SDIST_SHA}\"|" tap/Formula/pyhttp-app.rb
+            fi
+            cd tap
+            git config user.name "pyhttp Dev Team"
+            git config user.email "dev@pyhttp.com"
+            git add Casks/pyhttp.rb Formula/pyhttp-app.rb 2>/dev/null || git add Casks/pyhttp.rb
+            git commit -m "pyhttp ${VERSION}: cask + formula" || echo "tap ${REPO} unchanged"
+            git push
+            cd ..
           done
-          test -n "$URL"
-          cd rel
-          sed -i -E "s|^  url \".*\"$|  url \"${URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SHA}\"|" Formula/pyhttp-app.rb
-          git add Formula/pyhttp-app.rb
-          git commit -m "Homebrew formula: pyhttp-app ${VERSION}" || echo "formula unchanged"
-          git push

@@ -31,7 +31,7 @@ from . import USER_AGENT
 FROZEN = bool(getattr(sys, "frozen", False))
 CASK = "pyhttp"
 TAP = "pyhttp2/pyhttp"
-TAP_URL = "https://github.com/pyhttp2/pyhttp-releases"
+TAP_URL = "https://github.com/pyhttp2/homebrew-pyhttp"
 SUMS_FILE = "SHA256SUMS.txt"
 SELF_UPDATE_KINDS = ("installer", "portable", "brew")
 

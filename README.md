@@ -190,7 +190,8 @@ pyhttp
 
 On Linux, install the GTK webview bindings first (see *Linux* below) or use
 `pyhttp --browser`. `brew install pyhttp2/pyhttp/pyhttp-app` installs the
-same package through Homebrew (macOS and Linux, Intel and ARM).
+same package through Homebrew (macOS and Linux, Intel and ARM; the tap is
+[pyhttp2/homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp)).
 
 **Windows**: double-click `run.bat`. The window opens without a console.
 WebView2 ships with Windows 10/11.
@@ -297,7 +298,7 @@ Packaged builds bundle Python and every dependency, so users just double-click.
 |---|---|---|
 | Windows 10/11 | `pyhttp-<version>-windows-x64-setup.exe`: installer (per user, no admin rights, into `%LOCALAPPDATA%\Programs\pyhttp`, Start menu entry, optional desktop icon, uninstaller in *Apps*) | `%APPDATA%\pyhttp` |
 | Windows 10/11 | `pyhttp-<version>-windows-x64.exe`: portable, one file, no install | `%APPDATA%\pyhttp` |
-| macOS 11+ | `brew tap pyhttp2/pyhttp https://github.com/pyhttp2/pyhttp-releases && brew install --cask pyhttp2/pyhttp/pyhttp`, or `pyhttp-<version>-macos-arm64.dmg` (drag pyhttp to Applications) | `~/Library/Application Support/pyhttp` |
+| macOS 11+ | `brew install --cask pyhttp2/pyhttp/pyhttp`, or `pyhttp-<version>-macos-arm64.dmg` (drag pyhttp to Applications) | `~/Library/Application Support/pyhttp` |
 | Ubuntu 22.04+, Debian 12+ | `sudo apt install ./pyhttp-<version>-linux-amd64.deb`: installs to `/usr/lib/pyhttp`, adds `pyhttp` to the PATH and an app-menu entry; uses the distro's GTK and WebKitGTK (pulled in as dependencies) | `~/.local/share/pyhttp` |
 
 Running from source keeps using `./data`. In the packaged app, output that would
@@ -358,10 +359,14 @@ python packaging/bump.py 0.1.2
 ```
 
 That sets `__version__`, commits, creates the tag `v0.1.2` and pushes both. The
-tag run publishes the installer, the portable `.exe`, the `.dmg`, `SHA256SUMS.txt`,
-the license files and the Homebrew cask to the public
-[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases) repository (needs the
-`RELEASE_TOKEN` secret). The Windows runner installs Inno Setup with Chocolatey when
+tag run publishes the installer, the portable `.exe`, the `.dmg`, `SHA256SUMS.txt`
+and the license files to this repository's Releases page, uploads `pyhttp-app` to
+PyPI (secret `PYPI_API_TOKEN`), updates the Homebrew tap
+([homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp): cask + formula)
+and mirrors everything to
+[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases) so installs from
+before the move keep updating (the mirror and taps need the `RELEASE_TOKEN`
+secret, a fine-grained PAT with Contents: write on those two repositories). The Windows runner installs Inno Setup with Chocolatey when
 it is not already there. The in-app updater refuses a release without `SHA256SUMS.txt`,
 so keep that step in the workflow. A tag whose version differs from `__version__` is refused,
 because the release name, file names and the in-app update check all come from
@@ -423,8 +428,10 @@ is not allowed, and the name and logo stay with the project. The source code is
 published on PyPI as [`pyhttp-app`](https://pypi.org/project/pyhttp-app/)
 so it can be inspected and installed with pip; you may modify your own copy but
 not distribute the changes. The packaged installer, `.exe`, `.dmg` and `.deb`
-builds are published from the public
-[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases) repository.
+builds are published on this repository's
+[Releases](https://github.com/pyhttp2/pyhttp/releases) page and mirrored to
+[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases), the old home,
+so installs from before the move keep updating.
 Bundled open-source components are listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
