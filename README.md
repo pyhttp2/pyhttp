@@ -189,7 +189,7 @@ pyhttp
 ```
 
 On Linux, install the GTK webview bindings first (see *Linux* below) or use
-`pyhttp --browser`. `brew install pyhttp2/pyhttp/pyhttp-app` installs the
+`pyhttp --browser`. `brew install pyhttp2/pyhttp/pyhttp` installs the
 same package through Homebrew (macOS and Linux, Intel and ARM; the tap is
 [pyhttp2/homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp)).
 

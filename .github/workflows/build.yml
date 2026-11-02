@@ -254,7 +254,7 @@ jobs:
           - macOS (Apple Silicon): `brew install --cask pyhttp2/pyhttp/pyhttp`, or open the `.dmg` and drag pyhttp to Applications.
             If macOS says it cannot verify the app: System Settings → Privacy & Security → Open Anyway, or `xattr -dr com.apple.quarantine /Applications/pyhttp.app`.
           - Ubuntu 22.04+ / Debian 12+: `sudo apt install ./pyhttp-@VERSION@-linux-amd64.deb` (uses the distro's GTK and WebKitGTK; other distros run from source).
-          - Any OS with Python 3.10+: `pip install pyhttp-app` (or `brew install pyhttp2/pyhttp/pyhttp-app`), then run `pyhttp`.
+          - Any OS with Python 3.10+: `pip install pyhttp-app` (or `brew install pyhttp2/pyhttp/pyhttp`), then run `pyhttp`.
           - Updating: pyhttp shows an **Update** button when a newer version exists. On Windows (installer or portable) and on macOS installed with Homebrew it downloads and installs the update itself and restarts; other installs get the download and the commands to run. `SHA256SUMS.txt` lists the checksums of the files above.
 
           Free for everyone under the pyhttp Free License 1.1 (LICENSE.md): home or work, any company size, any purpose, no fees. By downloading you accept LICENSE.md. Bundled components: THIRD-PARTY-NOTICES.md.
@@ -343,13 +343,13 @@ jobs:
             rm -rf tap && git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" tap || { echo "::warning::cannot clone ${REPO}"; continue; }
             mkdir -p tap/Casks tap/Formula
             cp tap-files/pyhttp.rb tap/Casks/pyhttp.rb
-            if [ -n "${SDIST_URL:-}" ] && [ -f tap/Formula/pyhttp-app.rb ]; then
-              sed -i -E "s|^  url \".*\"$|  url \"${SDIST_URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SDIST_SHA}\"|" tap/Formula/pyhttp-app.rb
+            if [ -n "${SDIST_URL:-}" ] && [ -f tap/Formula/pyhttp.rb ]; then
+              sed -i -E "s|^  url \".*\"$|  url \"${SDIST_URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SDIST_SHA}\"|" tap/Formula/pyhttp.rb
             fi
             cd tap
             git config user.name "pyhttp Dev Team"
             git config user.email "dev@pyhttp.com"
-            git add Casks/pyhttp.rb Formula/pyhttp-app.rb 2>/dev/null || git add Casks/pyhttp.rb
+            git add Casks/pyhttp.rb Formula/pyhttp.rb 2>/dev/null || git add Casks/pyhttp.rb
             git commit -m "pyhttp ${VERSION}: cask + formula" || echo "tap ${REPO} unchanged"
             git push
             cd ..
