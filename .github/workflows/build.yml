@@ -119,8 +119,8 @@ jobs:
         include:
           - os: windows-latest
             files: dist/pyhttp-*-windows-x64*.exe
-          - os: macos-15              # Apple Silicon (arm64). Pinned: macos-latest moved to macOS 26 and its runner pool
-                                      # left our jobs queued for 15 minutes and cancelled (Oct 2026).
+          - os: macos-latest          # Apple Silicon (arm64). macos-15 runners stopped picking up this repo's
+                                      # jobs (queued 15 min, then cancelled; Nov 2026), so track the current pool.
             files: dist/pyhttp-*-macos-*.dmg
           - os: ubuntu-22.04          # oldest glibc we support: the .deb then runs on 22.04, 24.04 and Debian 12+
             files: dist/pyhttp-*-linux-*.deb
