@@ -263,9 +263,18 @@ jobs:
           gh release upload "v${VERSION}" artifacts/SHA256SUMS.txt LICENSE.md THIRD-PARTY-NOTICES.md --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --title "pyhttp ${VERSION}" --notes-file notes.md --draft=false --latest
 
-      # PyPI: the same version as the tag, as pyhttp-app (the name pyhttp is taken).
-      # Without PYPI_API_TOKEN this is skipped with a warning instead of failing the release.
+      # The Python package (pyhttp-app). The sdist is attached to the release above and is
+      # what the Homebrew formula installs, so brew does not depend on PyPI being updated.
+      - name: Build the Python package and attach the sdist to the release
+        run: |
+          python3 -m pip install --quiet build
+          python3 -m build
+          gh release upload "v${VERSION}" "dist/pyhttp_app-${VERSION}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+
+      # PyPI gets the same files (the pip install channel). Skipped with a warning
+      # when PYPI_API_TOKEN is missing; never fails the release.
       - name: Publish to PyPI (pyhttp-app)
+        continue-on-error: true
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
@@ -273,8 +282,7 @@ jobs:
             echo "::warning::Secret PYPI_API_TOKEN is not set; skipping the PyPI upload."
             exit 0
           fi
-          python3 -m pip install --quiet build twine
-          python3 -m build
+          python3 -m pip install --quiet twine
           TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_API_TOKEN" python3 -m twine upload --non-interactive dist/*
           echo "uploaded https://pypi.org/project/pyhttp-app/${VERSION}/"
 
@@ -302,7 +310,6 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::warning::RELEASE_TOKEN is not set; skipping the Homebrew taps."
@@ -327,14 +334,10 @@ jobs:
             zap trash: "~/Library/Application Support/pyhttp"
           end
           EOF
-          # formula: only when this release reached PyPI (the sdist URL carries a content hash)
-          if [ -n "$PYPI_API_TOKEN" ] && [ -f "dist/pyhttp_app-${VERSION}.tar.gz" ]; then
+          # the formula installs the sdist attached to this release (not the PyPI copy)
+          if [ -f "dist/pyhttp_app-${VERSION}.tar.gz" ]; then
             SDIST_SHA=$(sha256sum "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
-            for i in 1 2 3 4 5 6; do
-              SDIST_URL=$(curl -fsS "https://pypi.org/pypi/pyhttp-app/${VERSION}/json" | python3 -c "import json,sys; print(next(u['url'] for u in json.load(sys.stdin)['urls'] if u['packagetype']=='sdist'))") && break
-              echo "PyPI index not ready, retry $i"; sleep 20
-            done
-            test -n "$SDIST_URL"
+            SDIST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/pyhttp_app-${VERSION}.tar.gz"
           fi
           for REPO in "$TAP_REPO" "$LEGACY_REPO"; do
             rm -rf tap && git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" tap || { echo "::warning::cannot clone ${REPO}"; continue; }
