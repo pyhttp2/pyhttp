@@ -32,6 +32,9 @@ FROZEN = bool(getattr(sys, "frozen", False))
 CASK = "pyhttp"
 TAP = "pyhttp2/pyhttp"
 TAP_URL = "https://github.com/pyhttp2/homebrew-pyhttp"
+TAP_CASK_RAW = "https://raw.githubusercontent.com/pyhttp2/homebrew-pyhttp/main/Casks/pyhttp.rb"
+BREW_WAIT_ROUNDS = 4      # the cask is pushed a minute or two after a release: how often to retry `brew update`
+BREW_WAIT_SECONDS = 15
 SUMS_FILE = "SHA256SUMS.txt"
 SELF_UPDATE_KINDS = ("installer", "portable", "brew")
 
@@ -64,6 +67,44 @@ def brew_caskroom() -> Path | None:
         if d.is_dir():
             return d
     return None
+
+
+def version_tuple(v: str) -> tuple[int, ...]:
+    out = []
+    for part in str(v or "").lstrip("vV").split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def parse_cask_version(text: str) -> str | None:
+    """The `version "x.y.z"` line of a cask file."""
+    m = re.search(r'^\s*version\s+"([^"]+)"', text or "", re.M)
+    return m.group(1) if m else None
+
+
+def tap_cask_version(timeout: float = 6.0) -> str | None:
+    """The version the Homebrew tap offers right now, read from the tap on GitHub (one small
+    GET, no `brew update`). None when offline."""
+    try:
+        r = httpx.get(TAP_CASK_RAW, headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True)
+        return parse_cask_version(r.text) if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001 - offline or GitHub down: unknown
+        return None
+
+
+def local_cask_version(brew: str, env: dict[str, str]) -> str | None:
+    """The version of the cask as Homebrew on this machine sees it (after `brew update`)."""
+    try:
+        out = subprocess.run([brew, "info", "--cask", "--json=v2", CASK], env=env, capture_output=True, text=True,
+                             timeout=60, stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            return None
+        import json
+        casks = json.loads(out.stdout).get("casks") or []
+        return str(casks[0].get("version")) if casks else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def app_bundle() -> Path | None:
@@ -114,14 +155,21 @@ def _commands(kind: str, latest: str | None = None) -> tuple[str, str, list[str]
 
 
 def info(latest: str | None = None) -> dict[str, Any]:
-    """How pyhttp is installed and whether it can update itself (for /api/meta and the dialog)."""
+    """How pyhttp is installed and whether it can update itself (for /api/meta and the dialog).
+    With `latest` (the update check), a Homebrew install also learns whether the tap already
+    offers that version: the cask is pushed a minute or two after the release itself."""
     kind = install_kind()
     title, note, commands = _commands(kind, latest)
-    return {
+    out = {
         "kind": kind, "platform": sys.platform, "self_update": kind in SELF_UPDATE_KINDS,
         "brew": bool(brew_path()) if sys.platform == "darwin" else False,
         "exe": str(_exe()) if FROZEN else "", "commands": commands, "commands_title": title, "commands_note": note,
     }
+    if kind == "brew" and latest:
+        cask = tap_cask_version()
+        out["cask_version"] = cask
+        out["ready"] = None if cask is None else version_tuple(cask) >= version_tuple(latest)
+    return out
 
 
 # ----------------------------------------------------------------- release assets
@@ -358,11 +406,27 @@ class Updater:
                "HOMEBREW_COLOR": "0", "NO_COLOR": "1", "NONINTERACTIVE": "1"}
         self._set("updating", None, "Updating Homebrew…")
         self._run_logged([brew, "update"], env)
+        # The cask lands in the tap a minute or two after the release is published. Rather than
+        # failing in that window, wait for it a little (re-running `brew update` each time).
+        if latest:
+            for attempt in range(BREW_WAIT_ROUNDS + 1):
+                offered = local_cask_version(brew, env)
+                if offered is None or version_tuple(offered) >= version_tuple(latest):
+                    break
+                if attempt == BREW_WAIT_ROUNDS:
+                    raise RuntimeError(
+                        f"The release {latest} is out, but Homebrew's cask still offers {offered}; the cask is updated "
+                        f"within minutes of a release. Try again shortly (or run: brew update && brew upgrade --cask {CASK}).")
+                self._set("updating", None, f"Homebrew still offers {offered}; waiting for the {latest} cask… ({attempt + 1}/{BREW_WAIT_ROUNDS})")
+                self._log(f"cask offers {offered}, waiting {BREW_WAIT_SECONDS}s for {latest}")
+                time.sleep(BREW_WAIT_SECONDS)
+                self._run_logged([brew, "update"], env)
         self._set("upgrading", None, f"Upgrading {CASK}…")
         self._run_logged([brew, "upgrade", "--cask", CASK], env)
         room = brew_caskroom()
         if latest and room and not (room / latest).is_dir():
-            raise RuntimeError(f"Homebrew does not offer {latest} yet (the cask is updated shortly after a release); try again later")
+            raise RuntimeError(f"Homebrew did not install {latest} (the Caskroom has no {latest} folder); "
+                               f"run: brew update && brew upgrade --cask {CASK}")
         app = app_bundle() or Path("/Applications/pyhttp.app")
         subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(app)], env=env, check=False,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

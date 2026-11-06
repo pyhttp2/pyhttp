@@ -1452,3 +1452,42 @@ def test_update_repo_never_points_at_the_old_releases_repo(client, monkeypatch):
     assert app_mod.github_repo() == "pyhttp2/pyhttp"
     monkeypatch.setattr(app_mod, "_BUILT_REPO", "pyhttp2/pyhttp-releases")
     assert app_mod.github_repo() == "pyhttp2/pyhttp"
+
+
+def test_updater_reads_the_cask_version_and_waits_for_it(monkeypatch):
+    from pyhttp import updater
+
+    assert updater.parse_cask_version('cask "pyhttp" do\n  version "2.0.5"\n  sha256 "x"\nend') == "2.0.5"
+    assert updater.parse_cask_version("nothing") is None
+    assert updater.version_tuple("2.0.10") > updater.version_tuple("v2.0.9")
+    # a brew install learns from the update check whether the tap already offers the release
+    monkeypatch.setattr(updater, "install_kind", lambda: "brew")
+    monkeypatch.setattr(updater, "tap_cask_version", lambda timeout=6.0: "2.0.4")
+    inf = updater.info("2.0.5")
+    assert inf["cask_version"] == "2.0.4" and inf["ready"] is False
+    monkeypatch.setattr(updater, "tap_cask_version", lambda timeout=6.0: "2.0.5")
+    assert updater.info("2.0.5")["ready"] is True
+    monkeypatch.setattr(updater, "tap_cask_version", lambda timeout=6.0: None)
+    assert updater.info("2.0.5")["ready"] is None
+    assert "ready" not in updater.info()          # /api/meta: no network call
+    # the brew run re-runs `brew update` while the cask lags, then upgrades once it is there
+    calls = []
+    offered = iter(["2.0.4", "2.0.4", "2.0.5"])
+    u = updater.Updater(Path(tempfile.mkdtemp()))
+    monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: next(offered))
+    monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
+    monkeypatch.setattr(updater, "BREW_WAIT_SECONDS", 0)
+    monkeypatch.setattr(updater, "_quit_later", lambda *a, **k: None)
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: type("P", (), {"wait": lambda self: 0})())
+    monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(u, "_run_logged", lambda cmd, env: calls.append(cmd[1:3]))
+    u._run_brew("2.0.5")
+    assert calls == [["update"], ["update"], ["update"], ["upgrade", "--cask"]]
+    # still lagging after every round: a clear error, no upgrade attempt
+    calls.clear()
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: "2.0.4")
+    monkeypatch.setattr(updater, "BREW_WAIT_ROUNDS", 1)
+    with pytest.raises(RuntimeError, match="still offers 2.0.4"):
+        u._run_brew("2.0.5")
+    assert ["upgrade", "--cask"] not in calls

@@ -1633,8 +1633,12 @@ function openUpdateDialog(u) {
     buttons.push({ label: 'Download instead', onClick: () => openExternal(a.url) });
     buttons.push({ label: 'Install and restart', cls: 'primary', onClick: () => startSelfUpdate() });
   } else if (inst.self_update && inst.kind === 'brew') {
-    body = head + `<p>pyhttp was installed with Homebrew. The update runs <code>brew upgrade --cask pyhttp</code> here, then pyhttp opens again on the new version.</p>` + progress + cmds + notes;
-    buttons.push({ label: 'Update with Homebrew', cls: 'primary', onClick: () => startSelfUpdate() });
+    // the cask is pushed a minute or two after the release: say so instead of failing
+    const lag = inst.ready === false
+      ? `<p class="small muted">Homebrew's cask still offers ${esc(inst.cask_version || 'the previous version')}; it is updated within minutes of a release. The update waits for it for about a minute, or you can come back later.</p>`
+      : '';
+    body = head + `<p>pyhttp was installed with Homebrew. The update runs <code>brew upgrade --cask pyhttp</code> here, then pyhttp opens again on the new version.</p>` + lag + progress + cmds + notes;
+    buttons.push({ label: inst.ready === false ? 'Wait for the cask and update' : 'Update with Homebrew', cls: 'primary', onClick: () => startSelfUpdate() });
   } else {
     body = head + download + cmds + notes;
     buttons.push({ label: a ? 'Download' : 'Open release page', cls: 'primary', onClick: () => openExternal(a ? a.url : u.url) });
