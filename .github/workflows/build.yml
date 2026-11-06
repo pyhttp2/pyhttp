@@ -17,12 +17,13 @@
 # and then, best effort: uploaded to PyPI as pyhttp-app, and the Homebrew tap gets the
 # new cask and formula. Those extra steps warn and are skipped when their secret is
 # missing; they never fail the release itself. (Releases used to live in
-# pyhttp2/pyhttp-releases; nothing is published there any more.)
+# pyhttp2/pyhttp-releases; no release is published there any more, only the cask file
+# for Macs that still tap it, see LEGACY_TAP_REPO.)
 #
 # One-time setup in this repository (Settings > Secrets and variables > Actions):
 #   secret RELEASE_TOKEN: fine-grained PAT with Contents: read and write on
-#     pyhttp2/homebrew-pyhttp (GITHUB_TOKEN cannot write to other repositories).
-#     Used only for the tap.
+#     pyhttp2/homebrew-pyhttp and pyhttp2/pyhttp-releases (GITHUB_TOKEN cannot write
+#     to other repositories). Used only for the taps.
 #   secret PYPI_API_TOKEN: a pypi.org API token for the pyhttp-app project.
 # Optional, removes the macOS "Apple could not verify" warning (needs an Apple
 # Developer Program membership):
@@ -48,6 +49,10 @@ permissions:
 
 env:
   TAP_REPO: pyhttp2/homebrew-pyhttp      # Homebrew tap: brew install pyhttp2/pyhttp/<name>
+  # Macs that tapped pyhttp2/pyhttp before the move still fetch the cask from this repository, so it
+  # gets the same cask/formula files (nothing else: releases are not mirrored). The app re-points
+  # such taps at TAP_REPO on its next update, so this can be dropped once old installs are gone.
+  LEGACY_TAP_REPO: pyhttp2/pyhttp-releases
 
 # One run per commit: a release pushes main and the tag at once, and the tag run (which
 # publishes) supersedes the main run instead of competing with it for a macOS runner.
@@ -288,7 +293,7 @@ jobs:
       # The cask points at this repository's release assets; the formula at the sdist attached
       # to the release. Pushed to the tap (homebrew-pyhttp). Best effort: a tap problem must
       # not fail the release that already published above.
-      - name: Update the Homebrew tap (cask + formula)
+      - name: Update the Homebrew taps (cask + formula)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -321,7 +326,7 @@ jobs:
             SDIST_SHA=$(sha256sum "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
             SDIST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/pyhttp_app-${VERSION}.tar.gz"
           fi
-          for REPO in "$TAP_REPO"; do
+          for REPO in "$TAP_REPO" "$LEGACY_TAP_REPO"; do
             rm -rf tap && git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" tap || { echo "::warning::cannot clone ${REPO}"; continue; }
             mkdir -p tap/Casks tap/Formula
             cp tap-files/pyhttp.rb tap/Casks/pyhttp.rb

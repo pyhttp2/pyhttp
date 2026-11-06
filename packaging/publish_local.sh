@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=${REPO:-pyhttp2/pyhttp}
 TAP_REPO=${TAP_REPO:-pyhttp2/homebrew-pyhttp}
+LEGACY_TAP_REPO=${LEGACY_TAP_REPO:-pyhttp2/pyhttp-releases}   # old tap URL some Macs still use: same cask file, no releases
 PY=${PY:-.venv/bin/python}
 VERSION=$(grep -E '^__version__' pyhttp/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')
 TAG="v${VERSION}"
@@ -83,10 +84,8 @@ DMG_SHA=$(shasum -a 256 "$DMG" | cut -d' ' -f1)
 SDIST_SHA=$(shasum -a 256 "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
 SDIST_URL="https://github.com/${REPO}/releases/download/${TAG}/pyhttp_app-${VERSION}.tar.gz"
 rm -rf packaging/build/tap
-# push with the gh login (HTTPS), so the tap does not depend on which account the SSH key belongs to
-git clone -q --depth 1 "https://x-access-token:$(gh auth token)@github.com/${TAP_REPO}.git" packaging/build/tap
-mkdir -p packaging/build/tap/Casks packaging/build/tap/Formula
-cat > packaging/build/tap/Casks/pyhttp.rb <<CASK_EOF
+mkdir -p packaging/build/tap-files
+cat > packaging/build/tap-files/pyhttp.rb <<CASK_EOF
 cask "pyhttp" do
   version "${VERSION}"
   sha256 "${DMG_SHA}"
@@ -102,12 +101,19 @@ cask "pyhttp" do
   zap trash: "~/Library/Application Support/pyhttp"
 end
 CASK_EOF
-if [ -f packaging/build/tap/Formula/pyhttp.rb ]; then
-  sed -i '' -E "s|^  url \".*\"$|  url \"${SDIST_URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SDIST_SHA}\"|" packaging/build/tap/Formula/pyhttp.rb
-fi
-( cd packaging/build/tap
-  git add Casks/pyhttp.rb Formula/pyhttp.rb 2>/dev/null || git add Casks/pyhttp.rb
-  git -c user.name="pyhttp Dev Team" -c user.email="dev@pyhttp.com" commit -q -m "pyhttp ${VERSION}: cask + formula" || { echo "tap unchanged"; exit 0; }
-  git push -q
-  echo "tap updated: https://github.com/${TAP_REPO}" )
+for TR in "$TAP_REPO" "$LEGACY_TAP_REPO"; do
+  rm -rf packaging/build/tap
+  # push with the gh login (HTTPS), so the tap does not depend on which account the SSH key belongs to
+  git clone -q --depth 1 "https://x-access-token:$(gh auth token)@github.com/${TR}.git" packaging/build/tap || { echo "cannot clone ${TR}; skipped"; continue; }
+  mkdir -p packaging/build/tap/Casks packaging/build/tap/Formula
+  cp packaging/build/tap-files/pyhttp.rb packaging/build/tap/Casks/pyhttp.rb
+  if [ -f packaging/build/tap/Formula/pyhttp.rb ]; then
+    sed -i '' -E "s|^  url \".*\"$|  url \"${SDIST_URL}\"|; s|^  sha256 \".*\"$|  sha256 \"${SDIST_SHA}\"|" packaging/build/tap/Formula/pyhttp.rb
+  fi
+  ( cd packaging/build/tap
+    git add Casks/pyhttp.rb Formula/pyhttp.rb 2>/dev/null || git add Casks/pyhttp.rb
+    git -c user.name="pyhttp Dev Team" -c user.email="dev@pyhttp.com" commit -q -m "pyhttp ${VERSION}: cask + formula" || { echo "tap ${TR} unchanged"; exit 0; }
+    git push -q
+    echo "tap updated: https://github.com/${TR}" )
+done
 echo "done: pyhttp ${VERSION} is published"

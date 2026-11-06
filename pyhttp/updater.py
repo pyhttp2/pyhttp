@@ -33,6 +33,7 @@ CASK = "pyhttp"
 TAP = "pyhttp2/pyhttp"
 TAP_URL = "https://github.com/pyhttp2/homebrew-pyhttp"
 TAP_CASK_RAW = "https://raw.githubusercontent.com/pyhttp2/homebrew-pyhttp/main/Casks/pyhttp.rb"
+LEGACY_TAP_REPO = "pyhttp2/pyhttp-releases"   # where the tap lived before the move; some Macs still fetch it from there
 BREW_WAIT_ROUNDS = 4      # the cask is pushed a minute or two after a release: how often to retry `brew update`
 BREW_WAIT_SECONDS = 15
 SUMS_FILE = "SHA256SUMS.txt"
@@ -91,6 +92,28 @@ def tap_cask_version(timeout: float = 6.0) -> str | None:
         return parse_cask_version(r.text) if r.status_code == 200 else None
     except Exception:  # noqa: BLE001 - offline or GitHub down: unknown
         return None
+
+
+def tap_remote(brew: str, env: dict[str, str]) -> tuple[Path | None, str]:
+    """(folder, origin URL) of the pyhttp tap on this machine; (None, "") when it is not tapped."""
+    try:
+        out = subprocess.run([brew, "--repository", TAP], env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        d = Path(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        if not d or not (d / ".git").exists():
+            return None, ""
+        url = subprocess.run(["git", "-C", str(d), "remote", "get-url", "origin"], env=env, capture_output=True, text=True,
+                             timeout=30, stdin=subprocess.DEVNULL).stdout.strip()
+        return d, url
+    except Exception:  # noqa: BLE001
+        return None, ""
+
+
+def tap_needs_repointing(url: str) -> bool:
+    """True when the tap fetches from the old repository (pyhttp-releases) instead of homebrew-pyhttp."""
+    u = (url or "").lower().rstrip("/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    return bool(u) and LEGACY_TAP_REPO in u and "homebrew-pyhttp" not in u
 
 
 def local_cask_version(brew: str, env: dict[str, str]) -> str | None:
@@ -404,6 +427,15 @@ class Updater:
         env = {**os.environ, "PATH": f"{Path(brew).parent}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                "HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_INSTALL_CLEANUP": "1",
                "HOMEBREW_COLOR": "0", "NO_COLOR": "1", "NONINTERACTIVE": "1"}
+        # Taps made before the move still fetch the cask from the old repository, which stopped
+        # getting new versions: point them at the current tap first, then update as usual.
+        tap_dir, origin = tap_remote(brew, env)
+        if tap_dir and tap_needs_repointing(origin):
+            self._set("updating", None, "Pointing the Homebrew tap at its new home…")
+            self._run_logged(["git", "-C", str(tap_dir), "remote", "set-url", "origin", TAP_URL], env)
+        elif not tap_dir:
+            self._set("updating", None, "Adding the Homebrew tap…")
+            self._run_logged([brew, "tap", TAP, TAP_URL], env)
         self._set("updating", None, "Updating Homebrew…")
         self._run_logged([brew, "update"], env)
         # The cask lands in the tap a minute or two after the release is published. Rather than

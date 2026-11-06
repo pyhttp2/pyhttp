@@ -1475,6 +1475,7 @@ def test_updater_reads_the_cask_version_and_waits_for_it(monkeypatch):
     offered = iter(["2.0.4", "2.0.4", "2.0.5"])
     u = updater.Updater(Path(tempfile.mkdtemp()))
     monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
+    monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (Path("/taps/pyhttp"), updater.TAP_URL))
     monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: next(offered))
     monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
     monkeypatch.setattr(updater, "BREW_WAIT_SECONDS", 0)
@@ -1491,3 +1492,30 @@ def test_updater_reads_the_cask_version_and_waits_for_it(monkeypatch):
     with pytest.raises(RuntimeError, match="still offers 2.0.4"):
         u._run_brew("2.0.5")
     assert ["upgrade", "--cask"] not in calls
+
+
+def test_updater_repoints_a_tap_that_still_fetches_the_old_repository(monkeypatch):
+    from pyhttp import updater
+
+    assert updater.tap_needs_repointing("https://github.com/pyhttp2/pyhttp-releases")
+    assert updater.tap_needs_repointing("git@github.com:pyhttp2/pyhttp-releases.git")
+    assert not updater.tap_needs_repointing("https://github.com/pyhttp2/homebrew-pyhttp")
+    assert not updater.tap_needs_repointing("")
+    calls = []
+    u = updater.Updater(Path(tempfile.mkdtemp()))
+    monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
+    monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (Path("/taps/pyhttp"), "https://github.com/pyhttp2/pyhttp-releases"))
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: "2.0.6")
+    monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
+    monkeypatch.setattr(updater, "_quit_later", lambda *a, **k: None)
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: type("P", (), {"wait": lambda self: 0})())
+    monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(u, "_run_logged", lambda cmd, env: calls.append(cmd))
+    u._run_brew("2.0.6")
+    assert calls[0] == ["git", "-C", "/taps/pyhttp", "remote", "set-url", "origin", updater.TAP_URL]
+    assert calls[1][1] == "update" and calls[-1][1:3] == ["upgrade", "--cask"]
+    # not tapped at all: tap it first
+    calls.clear()
+    monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (None, ""))
+    u._run_brew("2.0.6")
+    assert calls[0][1:] == ["tap", updater.TAP, updater.TAP_URL]
