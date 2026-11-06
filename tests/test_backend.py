@@ -1504,7 +1504,8 @@ def test_updater_repoints_a_tap_that_still_fetches_the_old_repository(monkeypatc
     calls = []
     u = updater.Updater(Path(tempfile.mkdtemp()))
     monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
-    monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (Path("/taps/pyhttp"), "https://github.com/pyhttp2/pyhttp-releases"))
+    tap_dir = Path(tempfile.gettempdir()) / "taps" / "pyhttp"   # a real-looking path on every OS
+    monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (tap_dir, "https://github.com/pyhttp2/pyhttp-releases"))
     monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: "2.0.6")
     monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
     monkeypatch.setattr(updater, "_quit_later", lambda *a, **k: None)
@@ -1512,7 +1513,7 @@ def test_updater_repoints_a_tap_that_still_fetches_the_old_repository(monkeypatc
     monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
     monkeypatch.setattr(u, "_run_logged", lambda cmd, env: calls.append(cmd))
     u._run_brew("2.0.6")
-    assert calls[0] == ["git", "-C", "/taps/pyhttp", "remote", "set-url", "origin", updater.TAP_URL]
+    assert calls[0] == ["git", "-C", str(tap_dir), "remote", "set-url", "origin", updater.TAP_URL]
     assert calls[1][1] == "update" and calls[-1][1:3] == ["upgrade", "--cask"]
     # not tapped at all: tap it first
     calls.clear()
