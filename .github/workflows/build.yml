@@ -104,13 +104,19 @@ jobs:
           [ -n "$RELEASE_TOKEN" ] || echo "::warning::Secret RELEASE_TOKEN is not set: the release will publish here, but the Homebrew tap will be skipped."
           [ -n "$PYPI_API_TOKEN" ] || echo "::warning::Secret PYPI_API_TOKEN is not set: the PyPI upload will be skipped."
 
-      - name: Replace any release of this version with an empty draft
+      - name: Start an empty draft for this version
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          # same version => replace the whole release (old assets and notes disappear)
-          gh release delete "v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo "no previous release"
+          # A release that is already PUBLISHED for this version is never touched: pushing the tag
+          # again (or re-running) must not delete what users already download. Bump the version
+          # instead, or delete the release by hand first. A leftover draft is replaced.
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
+            echo "::error::v${VERSION} is already published at https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}. Release a new version (python packaging/bump.py <next>), or delete that release first if you really mean to replace it."
+            exit 1
+          fi
+          gh release delete "v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || echo "no previous draft"
           gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft --title "pyhttp ${VERSION}" --notes "Building…"
 
   build:

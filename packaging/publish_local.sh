@@ -24,7 +24,7 @@ SKIP_TAP=0; SKIP_PYPI=0; ONLY_TAP=0
 for a in "$@"; do case "$a" in --skip-tap) SKIP_TAP=1;; --skip-pypi) SKIP_PYPI=1;; --only-tap) ONLY_TAP=1;; esac; done
 
 gh auth status >/dev/null 2>&1 || { echo "gh is not signed in: run  gh auth login"; exit 2; }
-[ "$(git rev-parse "$TAG" 2>/dev/null)" = "$SHA" ] || echo "note: HEAD is not the commit tagged ${TAG}; the notes will cite $SHA"
+[ "$(git rev-parse "${TAG}^{commit}" 2>/dev/null)" = "$SHA" ] || echo "note: HEAD is not the commit tagged ${TAG}; the notes will cite $SHA"
 DMG="dist/pyhttp-${VERSION}-macos-arm64.dmg"
 [ -f "$DMG" ] || { echo "missing $DMG: run  python packaging/build.py  first"; exit 2; }
 gh release view "$TAG" --repo "$REPO" --json isDraft,assets --jq '"draft=\(.isDraft) assets=\([.assets[].name] | join(", "))"'
@@ -66,14 +66,23 @@ gh release edit "$TAG" --repo "$REPO" --title "pyhttp ${VERSION}" --notes-file "
 echo "published https://github.com/${REPO}/releases/tag/${TAG}"
 
 echo "== 4. sdist (attached to the release; the formula installs it)"
-rm -f dist/pyhttp_app-"${VERSION}"* 
-"$PY" -m pip install --quiet build
-"$PY" -m build --sdist --wheel >/dev/null
-gh release upload "$TAG" "dist/pyhttp_app-${VERSION}.tar.gz" --repo "$REPO" --clobber
+# a re-run keeps the sdist already attached (PyPI holds the same file; the formula's hash must match it)
+if gh release download "$TAG" --repo "$REPO" --pattern "pyhttp_app-${VERSION}.tar.gz" --dir packaging/build/release >/dev/null 2>&1 \
+   && [ -f "packaging/build/release/pyhttp_app-${VERSION}.tar.gz" ]; then
+  cp "packaging/build/release/pyhttp_app-${VERSION}.tar.gz" "dist/pyhttp_app-${VERSION}.tar.gz"
+  echo "sdist already on the release: kept"
+else
+  rm -f dist/pyhttp_app-"${VERSION}".tar.gz dist/pyhttp_app-"${VERSION}"-py3-none-any.whl
+  "$PY" -m pip install --quiet build
+  "$PY" -m build --sdist --wheel >/dev/null
+  gh release upload "$TAG" "dist/pyhttp_app-${VERSION}.tar.gz" --repo "$REPO" --clobber
+fi
+[ -f "dist/pyhttp_app-${VERSION}-py3-none-any.whl" ] || "$PY" -m build --wheel >/dev/null
 if [ "$SKIP_PYPI" = 1 ]; then echo "PyPI: skipped (--skip-pypi)"
 elif [ -n "${PYPI_API_TOKEN:-}" ]; then
   "$PY" -m pip install --quiet twine
-  TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_API_TOKEN" "$PY" -m twine upload --non-interactive "dist/pyhttp_app-${VERSION}.tar.gz" "dist/pyhttp_app-${VERSION}-py3-none-any.whl"
+  # --skip-existing: re-running after a partial publish must not stop here (PyPI never replaces a file)
+  TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_API_TOKEN" "$PY" -m twine upload --non-interactive --skip-existing "dist/pyhttp_app-${VERSION}.tar.gz" "dist/pyhttp_app-${VERSION}-py3-none-any.whl"
   echo "uploaded https://pypi.org/project/pyhttp-app/${VERSION}/"
 else echo "PyPI: skipped (set PYPI_API_TOKEN to upload)"; fi
 fi   # ONLY_TAP
