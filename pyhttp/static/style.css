@@ -411,6 +411,10 @@ button.danger-solid:hover { background: #dc2626; }
 @media (hover: none) { .folder-item .more { opacity: 1; } }
 
 /* --------------------------------------------------------- environments */
+.project-btn { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; font-weight: 600; }
+.project-btn #project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.project-btn .caret { font-size: 11px; opacity: .7; }
+.topbar-actions > .project-btn { color: var(--text); }
 .env-picker { position: relative; display: flex; align-items: center; }
 .env-picker .env-dot { position: absolute; left: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); pointer-events: none; }
 .env-picker select { padding-left: 24px; min-width: 170px; max-width: 220px; }

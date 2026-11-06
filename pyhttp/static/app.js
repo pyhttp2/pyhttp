@@ -788,6 +788,10 @@ async function saveNow() {
         : await api('/requests', { method: 'POST', body: { ...data, folder_id: target.folder_id || null } });
       const wasDraft = !target.id;
       if (wasDraft) moveResponses('draft', saved.id);
+      // the sidebar shows name, method, tags, folder and the body count (and filters on text):
+      // typing in a URL, header or body must not re-fetch and redraw the whole tree
+      const sidebarSig = (r) => JSON.stringify([r.name, r.method, r.tags, r.folder_id, r.body_type, sendCount(r)]);
+      const sidebarChanged = wasDraft || !!(state.q || state.tag) || sidebarSig(target) !== sidebarSig(saved);
       Object.assign(target, { id: saved.id, folder_id: saved.folder_id, name: saved.name, method: saved.method, tags: saved.tags,
         body_type: saved.body_type, bodies: saved.bodies, auth: saved.auth, tests: saved.tests, extract: saved.extract,
         pre_vars: saved.pre_vars, options: saved.options });
@@ -796,7 +800,12 @@ async function saveNow() {
       if (state.current === target) {
         if (!autosave.dirty) setSaveState('saved', 'Saved');
       }
-      loadRequests();
+      if (sidebarChanged) loadRequests();
+      else {
+        // keep the in-memory list current so a later full render shows the saved values
+        const i = state.requests.findIndex((r) => r.id === saved.id);
+        if (i >= 0) state.requests[i] = saved;
+      }
     } catch (e) {
       autosave.dirty = true;
       setSaveState('error', 'Not saved, retrying…');
@@ -2028,6 +2037,76 @@ async function loadEnvironments() {
   renderEnvSelect();
   return data;
 }
+// ------------------------------------------------------------- projects
+// A project is a separate workspace (own database and output folder). Switching reopens the
+// database on the server, so the page reloads to drop every in-memory bit of the old project.
+let projectsInfo = { current: 'default', projects: [] };
+async function loadProjects() {
+  try { projectsInfo = await api('/projects'); } catch { return; }
+  renderProjectButton();
+}
+function currentProject() {
+  return projectsInfo.projects.find((p) => p.id === projectsInfo.current) || { id: projectsInfo.current, name: 'Default' };
+}
+function renderProjectButton() {
+  const p = currentProject();
+  $('#project-name').textContent = p.name;
+  document.title = p.id === 'default' && projectsInfo.projects.length < 2 ? 'pyhttp' : `${p.name} · pyhttp`;
+  $('#btn-project').classList.toggle('many', projectsInfo.projects.length > 1);
+}
+async function switchProject(id) {
+  if (id === projectsInfo.current) return;
+  await saveNow();
+  try {
+    await api(`/projects/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+  } catch (e) { toast(e.message, 'error'); return; }
+  location.reload();
+}
+async function createProjectDialog() {
+  const name = await promptDialog('New project', {
+    label: 'Project name', placeholder: 'e.g. Shop API, Client X, Playground', okLabel: 'Create and open',
+    message: 'A project is a separate workspace: its own requests, folders, environments, variables, history, cookies, mocks and monitors. Your app settings are copied into it.',
+  });
+  if (!name) return;
+  await saveNow();
+  try {
+    await api('/projects', { method: 'POST', body: { name } });
+  } catch (e) { toast(e.message, 'error'); return; }
+  location.reload();
+}
+async function renameProjectDialog() {
+  const p = currentProject();
+  const name = await promptDialog('Rename project', { label: 'Project name', value: p.name, okLabel: 'Rename' });
+  if (!name) return;
+  try {
+    projectsInfo = await api(`/projects/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { name } });
+    renderProjectButton();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function deleteProjectDialog(p) {
+  const ok = await confirmDialog('Delete project', `Delete ${strong(p.name)} with all its requests, environments, history, run outputs, mocks and monitors? This cannot be undone.`, { okLabel: 'Delete project', danger: true });
+  if (!ok) return;
+  try {
+    projectsInfo = await api(`/projects/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+    renderProjectButton();
+    toast(`Project “${p.name}” deleted`, 'ok');
+  } catch (e) { toast(e.message, 'error'); }
+}
+function openProjectMenu(anchor) {
+  const cur = projectsInfo.current;
+  const items = projectsInfo.projects.map((p) => ({
+    act: 'p:' + p.id, icon: p.id === cur ? '✓' : '', label: p.name, run: () => switchProject(p.id),
+  }));
+  const others = projectsInfo.projects.filter((p) => p.id !== cur);
+  items.push('-', { act: 'new', icon: '＋', label: 'New project…', run: createProjectDialog });
+  items.push({ act: 'rename', icon: '✎', label: `Rename “${currentProject().name}”…`, run: renameProjectDialog });
+  if (others.length) {
+    items.push('-');
+    others.forEach((p) => items.push({ act: 'del:' + p.id, icon: '🗑', label: `Delete “${p.name}”…`, danger: true, run: () => deleteProjectDialog(p) }));
+  }
+  openMenu('projects', anchor, null, items);
+}
+
 function renderEnvSelect() {
   setTimeout(updateStatusbar, 0);
   const sel = $('#env-select');
@@ -2655,6 +2734,7 @@ function init() {
     setActiveEnv(v);
   });
   $('#btn-envs').addEventListener('click', () => openEnvManager());
+  $('#btn-project').addEventListener('click', (e) => openProjectMenu(e.currentTarget));
   $('#select-all').addEventListener('change', (e) => {
     if (e.target.checked) {
       state.treeOrder.forEach((r) => { if (!isSelected(r.id)) state.selected.push(selEntry(r)); });
@@ -2722,7 +2802,7 @@ function init() {
     e.target.value = '';
   });
 
-  document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctx-menu, .more, #btn-export, #btn-send-mode')) closeMenu(); });
+  document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctx-menu, .more, #btn-export, #btn-send-mode, #btn-project')) closeMenu(); });
   $('#req-list').addEventListener('scroll', closeMenu);
   window.addEventListener('resize', closeMenu);
   $('#modal-close').addEventListener('click', closeModal);
@@ -2730,7 +2810,11 @@ function init() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('#ctx-menu')) { closeMenu(); return; }
     if (e.key === 'Escape' && !$('#modal').hidden) closeModal();
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && state.current) { e.preventDefault(); sendCurrent(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && state.current) {
+      e.preventDefault();
+      // Shift: only the body being viewed, like its ➤ button
+      if (e.shiftKey && activeBody() && $('#f-body-type').value !== 'none') sendOneBody(state.activeBodyId); else sendCurrent();
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && state.current) { e.preventDefault(); autosave.dirty = true; saveNow().then(() => toast('Saved', 'ok')); }
     // list navigation, only while not typing and nothing modal is open
     const typing = e.target.closest && e.target.closest('input, textarea, select, button, [contenteditable], .cm-editor');
@@ -2754,6 +2838,7 @@ function init() {
   $('#sb-ssl').addEventListener('click', openSettings);
   $('#link-settings').addEventListener('click', openSettings);
   loadExpanded();
+  loadProjects();
   loadRequests();
   loadEnvironments();
   loadHistory();

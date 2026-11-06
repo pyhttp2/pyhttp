@@ -901,6 +901,9 @@ class RunManager:
         t = self._tasks.get(run_id)
         return t is not None and not t.done()
 
+    def any_active(self) -> bool:
+        return any(not t.done() for t in self._tasks.values())
+
     async def start_saved(self, request_ids: list[str], options: dict[str, Any]) -> dict[str, Any]:
         requests = db.get_requests(request_ids)
         if not requests:

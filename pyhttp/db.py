@@ -212,6 +212,35 @@ def close() -> None:
         _conn = None
 
 
+def switch(path: Path) -> None:
+    """Point the module at another database (another project). Taken under the module lock,
+    so a monitor check or a request in flight finishes its statement on the old connection first."""
+    with _lock:
+        close()
+        init(path)
+
+
+def app_settings_rows() -> dict[str, str]:
+    """The raw app settings (theme, proxy, fonts…) — what a new project starts with."""
+    with _lock:
+        rows = _c().execute("SELECT key, value FROM settings").fetchall()
+    return {r["key"]: r["value"] for r in rows if r["key"] in APP_SETTINGS_DEFAULTS and r["value"] is not None}
+
+
+def seed_database(path: Path, settings: dict[str, str] | None = None) -> None:
+    """Create an empty database at ``path`` (schema only), optionally with app settings copied in."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        if settings:
+            conn.executemany("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", list(settings.items()))
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 

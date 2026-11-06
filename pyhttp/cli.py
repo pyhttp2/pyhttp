@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from . import __version__, db, openapi, postman, runner
+from . import __version__, db, openapi, postman, projects, runner
 
 
 def _color(enabled: bool):
@@ -34,6 +34,7 @@ def build_parser(default_data_dir: Path) -> argparse.ArgumentParser:
     p.add_argument("targets", nargs="*", help="folder names or paths (A/B), request names or ids, or a collection "
                                                "file (Postman v2.1, pyhttp export, OpenAPI). Default: everything")
     p.add_argument("--data-dir", type=Path, default=default_data_dir, help=f"pyhttp data folder (default: {default_data_dir})")
+    p.add_argument("--project", help="project (workspace) to run from, by name or id; default: the active one")
     p.add_argument("-e", "--env", help="environment to use (name); default: the active one")
     p.add_argument("--env-file", type=Path, help="Postman environment file to use instead of a saved environment")
     p.add_argument("--var", action="append", default=[], metavar="KEY=VALUE", help="set a global variable (repeatable)")
@@ -219,18 +220,30 @@ def main(argv: list[str], default_data_dir: Path) -> int:
         data_dir = args.data_dir.resolve()
         targets = list(args.targets)
         args.targets_from_files = False
-        if not (data_dir / "pyhttp.db").exists():
-            print(f"No pyhttp data in {data_dir} (use --data-dir, or pass a collection file)", file=sys.stderr)
+        registry = projects.Registry(data_dir)
+        if args.project:
+            found = registry.find(args.project)
+            if found is None:
+                print(f"No project called {args.project!r} (projects: {', '.join(p['name'] for p in registry.list())})", file=sys.stderr)
+                return 2
+            project_id = found["id"]
+        else:
+            project_id = registry.active()
+        db_path, out_root = registry.paths(project_id)
+        if not db_path.exists():
+            print(f"No pyhttp data in {db_path.parent} (use --data-dir / --project, or pass a collection file)", file=sys.stderr)
             return 2
+    if files:
+        db_path, out_root = data_dir / "pyhttp.db", data_dir / "outputs"
     try:
-        db.init(data_dir / "pyhttp.db")
+        db.init(db_path)
         if files:
             from .app import import_collection
             for f in files:
                 conv = load_file(f)
                 import_collection(conv["folders"], conv["requests"], conv.get("environments") or [],
                                   conv.get("variables") or {}, False)
-        return _run(args, targets, data_dir, paint)
+        return _run(args, targets, out_root, paint)
     except ValueError as exc:
         print(f"pyhttp run: {exc}", file=sys.stderr)
         return 2
@@ -240,7 +253,7 @@ def main(argv: list[str], default_data_dir: Path) -> int:
             tmp.cleanup()
 
 
-def _run(args: argparse.Namespace, targets: list[str], data_dir: Path, paint) -> int:
+def _run(args: argparse.Namespace, targets: list[str], out_root: Path, paint) -> int:
     # environment, variables and settings for this run (restored afterwards when using the user's data)
     restore: dict[str, Any] = {"active_env": db.get_setting("active_env"), "settings": db.app_settings(),
                                "variables": db.get_variables()}
@@ -297,7 +310,7 @@ def _run(args: argparse.Namespace, targets: list[str], data_dir: Path, paint) ->
         if not args.quiet:
             print(paint("1", f"pyhttp {__version__} · {name}") + paint("2", f" · {len(chosen)} request(s)"
                   + (f" · environment {env['name']}" if env else "") + (f" · {max(1, args.iterations) if not data_rows else len(data_rows)} iterations" if (args.iterations > 1 or data_rows) else "")))
-        run = asyncio.run(_execute(chosen, options, data_dir, args.quiet, paint))
+        run = asyncio.run(_execute(chosen, options, out_root, args.quiet, paint))
     finally:
         if temp_env_id:
             db.delete_environment(temp_env_id)
@@ -336,8 +349,7 @@ def _run(args: argparse.Namespace, targets: list[str], data_dir: Path, paint) ->
     return 1 if failed or run["status"] not in ("completed",) else 0
 
 
-async def _execute(chosen: list[dict[str, Any]], options: dict[str, Any], data_dir: Path, quiet: bool, paint) -> dict[str, Any]:
-    out_root = data_dir / "outputs"
+async def _execute(chosen: list[dict[str, Any]], options: dict[str, Any], out_root: Path, quiet: bool, paint) -> dict[str, Any]:
     out_root.mkdir(parents=True, exist_ok=True)
     manager = runner.RunManager(out_root)
     run = await manager.start_saved([r["id"] for r in chosen], options)

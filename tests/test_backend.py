@@ -1267,3 +1267,77 @@ def test_mock_routes_edit_reorder_and_slugs(client):
     assert client.delete("/api/mocks/" + mid).json() == {"ok": True}
     assert client.get("/mock/billing/x").status_code == 404
     assert len(client.get("/api/mocks").json()["mocks"]) == 1
+
+
+def test_projects_are_separate_workspaces(client):
+    from pyhttp import projects as pj
+
+    client.put("/api/settings", json={"theme": "light"})
+    client.post("/api/requests", json={"name": "only in default", "method": "GET", "url": "http://x"})
+    data_dir = Path(client.get("/api/meta").json()["data_dir"])
+    assert client.get("/api/meta").json()["project"]["id"] == "default"
+    # create + switch: empty collection, settings copied, registry on disk
+    r = client.post("/api/projects", json={"name": "Shop API"})
+    assert r.status_code == 200, r.text
+    pid = r.json()["current"]
+    assert pid != "default" and r.json()["active"] == pid
+    assert [p["name"] for p in r.json()["projects"]] == ["Default", "Shop API"]
+    assert client.get("/api/requests").json() == []
+    assert client.get("/api/settings").json()["theme"] == "light"
+    assert (data_dir / "projects" / pid / "pyhttp.db").exists()
+    assert client.get("/api/meta").json()["project"]["name"] == "Shop API"
+    assert client.get("/api/meta").json()["output_dir"].endswith(str(Path("projects") / pid / "outputs"))
+    client.post("/api/requests", json={"name": "only in shop", "method": "GET", "url": "http://y"})
+    # runs write into the project's own output folder
+    rid = client.get("/api/requests").json()[0]["id"]
+    run = client.post("/api/runs", json={"name": "r", "request_ids": [rid]}).json()
+    run = _wait_run(client, run["id"])
+    assert str(Path("projects") / pid / "outputs") in run["output_dir"]
+    # names are unique, case-insensitively; renaming works
+    assert client.post("/api/projects", json={"name": "shop api"}).status_code == 400
+    assert client.post("/api/projects", json={"name": "  "}).status_code == 400
+    assert client.patch(f"/api/projects/{pid}", json={"name": "Shop API v2"}).json()["projects"][1]["name"] == "Shop API v2"
+    # the open project cannot be deleted; back to Default brings the old data back
+    assert client.delete(f"/api/projects/{pid}").status_code == 409
+    r = client.post("/api/projects/default/activate")
+    assert r.json()["current"] == "default"
+    assert [x["name"] for x in client.get("/api/requests").json()] == ["only in default"]
+    # the choice is remembered for the next start
+    assert pj.Registry(data_dir).active() == "default"
+    client.post(f"/api/projects/{pid}/activate")
+    assert pj.Registry(data_dir).active() == pid
+    client.post("/api/projects/default/activate")
+    # delete removes the files
+    assert client.delete(f"/api/projects/{pid}").status_code == 200
+    assert not (data_dir / "projects" / pid).exists()
+    assert client.delete(f"/api/projects/{pid}").status_code == 404
+    assert client.post("/api/projects/nope/activate").status_code == 404
+
+
+def test_projects_registry_file_and_cli_project(tmp_path):
+    from pyhttp import projects as pj
+
+    reg = pj.Registry(tmp_path)
+    assert [p["id"] for p in reg.list()] == ["default"] and reg.active() == "default"
+    p = reg.create("QA / Staging")
+    assert p["id"].startswith("qa-staging-")
+    assert reg.find("qa / staging")["id"] == p["id"] and reg.find(p["id"])["name"] == "QA / Staging"
+    reg.set_active(p["id"])
+    assert pj.Registry(tmp_path).active() == p["id"]   # re-read from disk
+    with pytest.raises(ValueError):
+        reg.delete(p["id"])                            # active
+    # a corrupt registry file falls back to Default instead of crashing
+    (tmp_path / "projects.json").write_text("{not json", encoding="utf-8")
+    assert pj.Registry(tmp_path).active() == "default"
+    # create_app(project=...) opens a named project without touching the active one
+    reg = pj.Registry(tmp_path)
+    p = reg.create("Other")
+    db.seed_database(reg.paths(p["id"])[0])
+    app = create_app(tmp_path, project="other")
+    with TestClient(app) as c:
+        assert c.get("/api/meta").json()["project"]["id"] == p["id"]
+        assert c.get("/api/projects").json()["active"] == "default"
+    db.close()
+    with pytest.raises(ValueError):
+        create_app(tmp_path, project="missing")
+    db.close()

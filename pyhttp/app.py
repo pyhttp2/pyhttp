@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import io
 import json
@@ -19,8 +20,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, console, curl, db, mock, monitors, oauth2, openapi, postman, runner,
-               templating, updater)
+from . import (USER_AGENT, __version__, console, curl, db, mock, monitors, oauth2, openapi, postman, projects,
+               runner, templating, updater)
 from .templating import build_context, render
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -385,34 +386,116 @@ def _mock_route_payload(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def create_app(data_dir: Path) -> FastAPI:
+def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
+    """``project`` (an id or a name) opens that project instead of the active one, without changing
+    which one is active — the CLI uses it for ``--project``."""
     data_dir = data_dir.resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
-    output_dir = data_dir / "outputs"
+    registry = projects.Registry(data_dir)
+    if project:
+        found = registry.find(project)
+        if found is None:
+            raise ValueError(f"No project called “{project}” (projects: {', '.join(p['name'] for p in registry.list())})")
+        project_id = found["id"]
+    else:
+        project_id = registry.active()
+    db_path, output_dir = registry.paths(project_id)
     output_dir.mkdir(parents=True, exist_ok=True)
-    db.init(data_dir / "pyhttp.db")
+    db.init(db_path)
     db.mark_interrupted_runs()
     manager = runner.RunManager(output_dir)
     scheduler = monitors.MonitorScheduler()
     update_cache: dict[str, Any] = {}
     self_updater = updater.Updater(data_dir)
+    current = {"id": project_id}   # the project this app instance has open
 
-    app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None)
-
-    @app.on_event("startup")
-    async def _start_monitors() -> None:
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
         scheduler.start()
+        try:
+            yield
+        finally:
+            scheduler.stop()
 
-    @app.on_event("shutdown")
-    async def _stop_monitors() -> None:
-        scheduler.stop()
+    app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+
+    def current_project() -> dict[str, Any]:
+        return registry.get(current["id"]) or {"id": current["id"], "name": current["id"]}
+
+    def open_project(pid: str) -> None:
+        """Switch this app to another project's database and output folder."""
+        new_db, new_out = registry.paths(pid)
+        new_out.mkdir(parents=True, exist_ok=True)
+        db.switch(new_db)
+        db.mark_interrupted_runs()
+        manager.output_root = new_out
+        oauth2.forget()   # tokens belong to the project they were fetched in
+        current["id"] = pid
 
     # ------------------------------------------------------------------ meta
     @app.get("/api/meta")
     def meta() -> dict[str, Any]:
-        return {"version": __version__, "data_dir": str(data_dir), "output_dir": str(output_dir),
+        return {"version": __version__, "data_dir": str(data_dir), "output_dir": str(manager.output_root),
+                "project": current_project(),
                 "github_repo": github_repo(), "frozen": bool(getattr(sys, "frozen", False)), "platform": sys.platform,
                 "install": updater.info(), "user_agent": USER_AGENT, "python": sys.executable}
+
+    # -------------------------------------------------------------- projects
+    # A project is a separate workspace (its own database and output folder, see projects.py).
+    # Switching reopens the database under this process, so the UI reloads afterwards.
+    def projects_payload() -> dict[str, Any]:
+        return {"current": current["id"], "active": registry.active(), "projects": registry.list()}
+
+    @app.get("/api/projects")
+    def list_projects() -> dict[str, Any]:
+        return projects_payload()
+
+    @app.post("/api/projects")
+    def create_project(body: dict[str, Any]) -> dict[str, Any]:
+        """Create a project (app settings are copied in so it does not start bare) and switch to it,
+        unless ``switch`` is false."""
+        try:
+            p = registry.create(str(body.get("name") or ""))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        settings = db.app_settings_rows() if body.get("copy_settings", True) else None
+        db.seed_database(registry.paths(p["id"])[0], settings)
+        if body.get("switch", True):
+            return activate_project(p["id"])
+        return {**projects_payload(), "created": p}
+
+    @app.post("/api/projects/{pid}/activate")
+    def activate_project(pid: str) -> dict[str, Any]:
+        if registry.get(pid) is None:
+            raise HTTPException(404, "Project not found")
+        if manager.any_active():
+            raise HTTPException(409, "A run is still going. Wait for it to finish or cancel it, then switch.")
+        if pid != current["id"]:
+            open_project(pid)
+        registry.set_active(pid)
+        return projects_payload()
+
+    @app.patch("/api/projects/{pid}")
+    def rename_project(pid: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            registry.rename(pid, str(body.get("name") or ""))
+        except KeyError as exc:
+            raise HTTPException(404, "Project not found") from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return projects_payload()
+
+    @app.delete("/api/projects/{pid}")
+    def delete_project(pid: str) -> dict[str, Any]:
+        if pid == current["id"]:
+            raise HTTPException(409, "Switch to another project before deleting this one")
+        try:
+            registry.delete(pid)
+        except KeyError as exc:
+            raise HTTPException(404, "Project not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return projects_payload()
 
     @app.get("/api/update-check")
     async def update_check(force: bool = Query(False)) -> dict[str, Any]:

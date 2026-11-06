@@ -1310,7 +1310,7 @@ async function closeTab(key) {
 // ============================================================== shortcuts
 function openHelp() {
   const rows = [
-    ['Ctrl+Enter', 'Send the request'], ['Ctrl+S', 'Save now'], ['Ctrl+N', 'New request'], ['Ctrl+D', 'Duplicate the request'],
+    ['Ctrl+Enter', 'Send the request'], ['Ctrl+Shift+Enter', 'Send only the body you are viewing'], ['Ctrl+S', 'Save now'], ['Ctrl+N', 'New request'], ['Ctrl+D', 'Duplicate the request'],
     ['Ctrl+W', 'Close the current tab'], ['Ctrl+K', 'Search the collection'], ['Ctrl+\\', 'Show or hide the sidebar'], ['Ctrl+Shift+C', 'Code snippet'],
     ['Ctrl+/', 'Comment or uncomment the line(s) in the body'], ['Ctrl+B', 'Beautify the body'], ['Tab / Shift+Tab', 'Indent / outdent in the body'],
     ['Ctrl+F', 'Search in the response body'], ['Ctrl+Alt+C', 'Toggle the console'], ['Escape', 'Close dialogs and menus'], ['?', 'This help'],

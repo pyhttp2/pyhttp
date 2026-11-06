@@ -135,6 +135,16 @@ only on `127.0.0.1`.
 - No Node, no Electron, no build step to run it. Python 3.10+ only (the editor is a
   prebuilt CodeMirror bundle checked into the repo).
 
+## Projects
+
+A project is a separate workspace: its own requests, folders, environments, variables,
+history, cookies, run outputs, mocks and monitors. Click the project name in the top bar to
+switch, create, rename or delete one. Everything you had before projects existed is the
+*Default* project and stays where it was; each new project lives in its own folder under
+the data directory (`projects/<id>/pyhttp.db` and `projects/<id>/outputs`). App settings
+(theme, proxy, fonts…) are copied into a new project so it does not start bare. The CLI
+runner uses the active project, or `pyhttp run --project "Shop API" …` for another one.
+
 ## Mock servers
 
 An API you need does not exist yet, or you want it to fail on demand. Open

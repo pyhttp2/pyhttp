@@ -1169,3 +1169,34 @@ def test_send_one_body_button_keeps_checkboxes(page, servers):
     # with "No body" the per-body buttons are hidden
     page.select_option("#f-body-type", "none")
     assert page.locator("#body-list .body-item .bsend").nth(0).is_hidden()
+
+
+def test_project_switch_from_topbar(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "In default")
+    assert page.locator("#project-name").text_content() == "Default"
+    page.click("#btn-project")
+    page.click("#ctx-menu button[data-act='new']")
+    page.fill("#dlg-in", "Client X")
+    page.click(".dialog-backdrop button:has-text('Create and open')")
+    page.wait_for_function("document.querySelector('#project-name').textContent === 'Client X'")
+    page.wait_for_selector("#req-list .empty")
+    assert page.locator("#req-list .req-item").count() == 0
+    assert page.title() == "Client X · pyhttp"
+    new_request(page, echo_url, "In client x")
+    # the menu lists both, ticks the open one, and switching brings the other collection back
+    page.click("#btn-project")
+    labels = page.locator("#ctx-menu button").all_text_contents()
+    assert any("Default" in t for t in labels) and any("✓" in t and "Client X" in t for t in labels)
+    page.click("#ctx-menu button:has-text('Default')")
+    page.wait_for_function("document.querySelector('#project-name').textContent === 'Default'")
+    page.wait_for_selector("#req-list .req-item:has-text('In default')")
+    assert page.locator("#req-list .req-item:has-text('In client x')").count() == 0
+    # delete the other project from the menu
+    page.click("#btn-project")
+    page.click("#ctx-menu button:has-text('Delete “Client X”')")
+    page.click(".dialog-backdrop button:has-text('Delete project')")
+    page.wait_for_function("document.querySelector('.toast') && document.querySelector('.toast').textContent.includes('deleted')")
+    page.click("#btn-project")
+    assert page.locator("#ctx-menu button:has-text('Client X')").count() == 0
+    page.keyboard.press("Escape")
