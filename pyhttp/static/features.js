@@ -1331,7 +1331,7 @@ function openHelp() {
     ['Ctrl+Enter', 'Send the request'], ['Ctrl+Shift+Enter', 'Send only the body you are viewing'], ['Ctrl+S', 'Save now'], ['Ctrl+N', 'New request'], ['Ctrl+D', 'Duplicate the request'],
     ['Ctrl+W', 'Close the current tab'], ['Ctrl+K', 'Search the collection'], ['Ctrl+\\', 'Show or hide the sidebar'], ['Ctrl+Shift+C', 'Code snippet'],
     ['Ctrl+/', 'Comment or uncomment the line(s) in the body'], ['Ctrl+B', 'Beautify the body'], ['Tab / Shift+Tab', 'Indent / outdent in the body'],
-    ['Ctrl+F', 'Search in the response body'], ['Ctrl+Alt+C', 'Toggle the console'], ['Escape', 'Close dialogs and menus'], ['?', 'This help'],
+    ['Ctrl+F', 'Find: in the body editor when the request has focus, in the response body otherwise'], ['Ctrl+Alt+C', 'Toggle the console'], ['Escape', 'Close dialogs and menus'], ['?', 'This help'],
   ];
   openModal('Keyboard shortcuts', `<table class="htable keys"><tbody>${rows.map(([k, d]) => `<tr><td class="k"><kbd>${esc(k).replace(/\+/g, '</kbd>+<kbd>')}</kbd></td><td>${esc(d)}</td></tr>`).join('')}</tbody></table>
     <p class="muted small">On macOS use ⌘ instead of Ctrl.</p>`, [{ label: 'Close', cls: 'primary', onClick: closeModal }]);
@@ -1350,7 +1350,24 @@ function bindShortcuts() {
     if (mod && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); if (!sidebarShown()) setSidebar(true); $('#search').focus(); $('#search').select(); return; }
     if (mod && e.key === '\\') { e.preventDefault(); setSidebar(!sidebarShown()); return; }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'c' && state.current) { e.preventDefault(); openCodeModal(); return; }
-    if (mod && !e.shiftKey && e.key.toLowerCase() === 'f' && state.current && !$('#response').hidden) {
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'f' && state.current) {
+      // Find follows the focus: in the request pane it searches the body editor (CodeMirror has its
+      // own panel), in the response pane (or anywhere else) it searches the response body.
+      const t = e.target instanceof Element ? e.target : null;
+      if (t && t.closest('.editor-request') && !t.closest('#response')) {
+        const cm = t.closest('.cm-editor');
+        if (cm) {
+          // Cmd+F reaches CodeMirror's own keymap on a Mac, Ctrl+F does not: open the panel of the focused editor either way
+          const own = $$('textarea').find((ta) => ta._enhanced && ta._enhanced.wrap && ta._enhanced.wrap.contains(cm));
+          if (own) { e.preventDefault(); own._enhanced.search(); }
+          return;
+        }
+        const api = $('#f-body')._enhanced;
+        const bodyTab = $('#editor-panels .tab-panel[data-panel="body"]');
+        if (api && bodyTab && !bodyTab.hidden && !$('#body-text-wrap').hidden && !$('#body-editor').hidden) { e.preventDefault(); api.search(); }
+        return;   // other tabs: the browser's own find
+      }
+      if ($('#response').hidden) return;
       const box = $('#r-body');
       if (box._focusSearch) { e.preventDefault(); showTab($('#resp-tabs'), 'body'); box._focusSearch(); }
       return;

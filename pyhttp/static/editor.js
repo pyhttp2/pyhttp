@@ -247,7 +247,18 @@ function cmTheme() {
     '.cm-lintRange-error': { backgroundImage: 'none', borderBottom: '2px solid var(--danger)' },
     '.cm-tooltip': { backgroundColor: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text)' },
     '.cm-panels': { backgroundColor: 'var(--bg-2)', color: 'var(--text)', borderColor: 'var(--border)' },
-    '.cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label': { fontSize: '12px' },
+    // the search / replace panel: CodeMirror's defaults are a light gradient button with inherited (light)
+    // text, i.e. unreadable on the dark theme; one wrapping row in the app's own controls instead
+    '.cm-panel.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 6px', padding: '6px 30px 6px 8px', position: 'relative' },
+    '.cm-panel.cm-search br': { display: 'none' },
+    '.cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label': { fontSize: '12px', margin: '0' },
+    '.cm-panel.cm-search label': { color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap' },
+    '.cm-panel.cm-search .cm-textfield': { backgroundColor: 'var(--bg-3)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '4px 8px', width: '12em', minWidth: '8em', flex: '1 1 8em', maxWidth: '18em', fontFamily: 'var(--mono)' },
+    '.cm-panel.cm-search .cm-textfield:focus': { outline: '2px solid var(--primary)', outlineOffset: '1px' },
+    '.cm-panel.cm-search .cm-button': { backgroundImage: 'none', backgroundColor: 'var(--bg-4)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '4px 9px', cursor: 'pointer', whiteSpace: 'nowrap' },
+    '.cm-panel.cm-search .cm-button:hover': { backgroundColor: 'var(--bg-3)' },
+    '.cm-panel.cm-search [name=close]': { position: 'absolute', top: '4px', right: '6px', background: 'none', border: 'none', color: 'var(--muted)', fontSize: '16px', lineHeight: '1', padding: '2px 6px', cursor: 'pointer' },
+    '.cm-panel.cm-search [name=close]:hover': { color: 'var(--text)' },
     '.cm-placeholder': { color: 'var(--muted)', fontStyle: 'italic' },
   });
   cmThemeCache = [theme, C.syntaxHighlighting(highlight)];
@@ -270,7 +281,7 @@ function enhanceTextarea(ta, opts = {}) {
   let currentLang = lang();
   let syncing = false;
   let lintTimer = null;
-  const api = { wrap, status, lang, refresh, lint, format, setValue, setCursor, focus: () => view.focus(), view: null };
+  const api = { wrap, status, lang, refresh, lint, format, setValue, setCursor, focus: () => view.focus(), search: () => C.openSearchPanel(view), view: null };
   ta._enhanced = api;
 
   const keys = [

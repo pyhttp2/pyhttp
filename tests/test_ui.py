@@ -1247,3 +1247,34 @@ def test_body_menu_duplicate_move_delete(page, servers):
     page.wait_for_function("document.querySelector('#f-name').value === 'Body menu'")
     page.click("#editor-tabs button[data-tab='body']")
     assert page.evaluate(names) == "b0,b1,b0 (copy)"
+
+
+def test_find_shortcut_follows_focus(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Find")
+    page.select_option("#f-method", "POST")
+    page.click("#editor-tabs button[data-tab='body']")
+    page.click("#btn-body-add")
+    set_editor(page, "#f-body", '{"a": 1}')
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    page.click("#btn-send")
+    page.wait_for_selector("#response:not([hidden]) .jv")
+    where = "document.activeElement.closest('#response') ? 'response' : document.activeElement.closest('.cm-panel.cm-search') ? 'body-search' : 'other'"
+    # focus in the body editor: Ctrl+F opens the editor's own search panel, not the response search
+    page.click("#body-text-wrap .cm-content")
+    page.keyboard.press("Control+f")
+    page.wait_for_selector("#body-text-wrap .cm-panel.cm-search")
+    assert page.evaluate(where) == "body-search"
+    assert page.locator("#body-text-wrap .cm-panel.cm-search .cm-button").first.is_visible()
+    page.click("#body-text-wrap .cm-panel.cm-search [name=close]")
+    # focus elsewhere in the request pane (the body name) also searches the body
+    page.click("#body-name")
+    page.keyboard.press("Control+f")
+    page.wait_for_selector("#body-text-wrap .cm-panel.cm-search")
+    assert page.evaluate(where) == "body-search"
+    page.click("#body-text-wrap .cm-panel.cm-search [name=close]")
+    # focus in the response: Ctrl+F goes to the response search
+    page.click("#r-body .jv")
+    page.keyboard.press("Control+f")
+    assert page.evaluate(where) == "response"
+    assert page.evaluate("document.activeElement.classList.contains('rv-search')")

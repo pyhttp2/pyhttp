@@ -490,10 +490,11 @@ function updateBodyHints() {
   $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body ➤ when bodies are not sent
   let hint = '';
   if (type === 'none' && total) hint = 'Body type is “No body”, so bodies are not sent.';
-  else if (type !== 'none' && on > 1) hint = `Send will hit this request ${on} times, once per checked body, and save each output.`;
+  else if (type !== 'none' && on > 1) hint = `Send hits this request ${on}× (once per checked body) and saves each output.`;
   else if (type !== 'none' && on === 1) hint = 'Send uses the one checked body.';
   else if (type !== 'none' && total) hint = 'No body is checked, so the request is sent without a body.';
   $('#bodies-hint').textContent = hint;
+  $('#bodies-hint').title = hint;
   renderSendButton();
 }
 // Send turns into Cancel while this request's call (or multi-body run) is in flight.
