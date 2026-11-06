@@ -7,6 +7,7 @@ Run: python -m pytest tests/test_ui.py -q
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -53,14 +54,23 @@ def servers():
 
 @pytest.fixture(scope="module")
 def browser():
+    """Chromium by default. PYHTTP_UI_BROWSER=webkit runs the suite in WebKit — the engine the macOS
+    app window uses, and the one that behaves differently on scroll restoration and rebuilt lists."""
+    engine = os.environ.get("PYHTTP_UI_BROWSER", "chromium").lower()
     with pw.sync_playwright() as p:
         b = None
-        for kw in ({"channel": "msedge"}, {"channel": "chrome"}, {}):
+        if engine in ("webkit", "firefox"):
             try:
-                b = p.chromium.launch(headless=True, **kw)
-                break
-            except Exception:  # noqa: BLE001
-                continue
+                b = getattr(p, engine).launch(headless=True)
+            except Exception as exc:  # noqa: BLE001
+                pytest.skip(f"{engine} is not installed for Playwright ({exc}); run: python -m playwright install {engine}")
+        else:
+            for kw in ({"channel": "msedge"}, {"channel": "chrome"}, {}):
+                try:
+                    b = p.chromium.launch(headless=True, **kw)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
         if b is None:
             pytest.skip("no Chromium-based browser available for Playwright")
         yield b
@@ -1200,3 +1210,40 @@ def test_project_switch_from_topbar(page, servers):
     page.click("#btn-project")
     assert page.locator("#ctx-menu button:has-text('Client X')").count() == 0
     page.keyboard.press("Escape")
+
+
+def test_body_menu_duplicate_move_delete(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Body menu")
+    page.click("#editor-tabs button[data-tab='body']")
+    for i in range(2):
+        page.click("#btn-body-add")
+        page.fill("#body-name", f"b{i}")
+        page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    names = "Array.from(document.querySelectorAll('#body-list .bname')).map(e => e.textContent).join()"
+    active = "document.querySelector('#body-list .body-item.active .bname').textContent"
+    assert page.evaluate(names) == "b0,b1" and page.evaluate(active) == "b1"
+    # ⋯ on b0 → duplicate: the copy lands right after b0 and becomes active
+    page.hover("#body-list .body-item >> nth=0")
+    page.click("#body-list .body-item >> nth=0 >> .bmore")
+    page.click("#ctx-menu button[data-act='dup']")
+    assert page.evaluate(names) == "b0,b0 (copy),b1" and page.evaluate(active) == "b0 (copy)"
+    # move b1 up, from a right-click menu, without touching the active body
+    page.click("#body-list .body-item >> nth=2", button="right")
+    page.click("#ctx-menu button[data-act='up']")
+    assert page.evaluate(names) == "b0,b1,b0 (copy)" and page.evaluate(active) == "b0 (copy)"
+    # delete a non-active body: the editor keeps showing the active one; undo brings it back
+    page.hover("#body-list .body-item >> nth=0")
+    page.click("#body-list .body-item >> nth=0 >> .bmore")
+    page.click("#ctx-menu button[data-act='del']")
+    assert page.evaluate(names) == "b1,b0 (copy)" and page.evaluate(active) == "b0 (copy)"
+    page.click(".toast .toast-act")
+    assert page.evaluate(names) == "b0,b1,b0 (copy)" and page.evaluate(active) == "b0 (copy)"
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    # the order survives a reload
+    page.reload()
+    page.wait_for_selector("#btn-new")
+    page.click("#req-list .req-item:has-text('Body menu')")
+    page.wait_for_function("document.querySelector('#f-name').value === 'Body menu'")
+    page.click("#editor-tabs button[data-tab='body']")
+    assert page.evaluate(names) == "b0,b1,b0 (copy)"

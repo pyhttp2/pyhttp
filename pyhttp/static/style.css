@@ -287,12 +287,17 @@ body.native .result-item, body.native .history-item { cursor: default; }
 .bodies-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); padding-right: 12px; }
 .bodies-main { min-width: 0; }
 .body-list { list-style: none; margin: 0; padding: 0; overflow: auto; max-height: 340px; display: flex; flex-direction: column; gap: 2px; user-select: none; }
-.body-item { display: grid; grid-template-columns: 20px 1fr auto; gap: 6px; align-items: center; padding: 6px 4px 6px 8px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
+.body-item { display: grid; grid-template-columns: 20px 1fr auto auto; gap: 4px; align-items: center; padding: 6px 4px 6px 8px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
 /* ➤ sends that one body, whatever is checked: quiet until the row is hovered or active */
 .body-item .bsend { min-width: 24px; height: 24px; padding: 0; background: none; border-color: transparent; color: var(--muted); opacity: .55; }
 .body-item:hover .bsend, .body-item.active .bsend, .body-item .bsend:focus-visible { opacity: 1; }
 .body-item .bsend:hover { color: var(--accent); border-color: var(--border); background: var(--bg-4); }
 .body-list.no-send .bsend, .body-list.sending .bsend { visibility: hidden; }
+.body-item .bmore { min-width: 22px; height: 24px; padding: 0; background: none; border-color: transparent; color: var(--muted); opacity: 0; }
+.body-item:hover .bmore, .body-item.active .bmore, .body-item .bmore:focus-visible, .body-item.menu-open .bmore { opacity: 1; }
+.body-item .bmore:hover { border-color: var(--border); background: var(--bg-4); color: var(--text); }
+.load-more { list-style: none; padding: 6px 8px; text-align: center; }
+#run-history .load-more { display: block; margin: 8px auto; }
 .body-item:hover { background: var(--bg-3); }
 .body-item.active { background: var(--bg-3); border-left-color: var(--primary); }
 .body-item .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

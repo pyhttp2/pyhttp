@@ -250,7 +250,7 @@ function testRow(t) {
     <input class="t-value mono${NO_VALUE_OPS.has(op) ? ' t-blank' : ''}" value="${esc(t.value || '')}" placeholder="${type === 'json' && op === 'type_is' ? 'string | number | boolean | object | array | null' : 'expected value'}" ${NO_VALUE_OPS.has(op) ? 'tabindex="-1"' : ''} spellcheck="false">
     <input class="t-name" value="${esc(t.name || '')}" placeholder="name (optional)" spellcheck="false">
     <select class="t-body" title="Which body this test applies to">${bodyScopeOptions(t.body_id)}</select>
-    <button class="kv-del" title="Remove">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
   $('.t-body', row).addEventListener('change', scheduleSave);
   $('.t-type', row).addEventListener('change', () => { const cur = readTestRow(row); cur.op = ''; row.replaceWith(testRow(cur)); scheduleSave(); });
   $('.t-op', row).addEventListener('change', () => { row.replaceWith(testRow(readTestRow(row))); scheduleSave(); });
@@ -289,7 +289,7 @@ function extractRow(e) {
     <span class="muted small">from</span>
     <select class="x-source">${EXTRACT_SOURCES.map(([v, l]) => `<option value="${v}" ${v === src ? 'selected' : ''}>${l}</option>`).join('')}</select>
     <input class="x-path mono" value="${esc(e.path || '')}" placeholder="${src === 'json' ? 'data.token' : src === 'header' ? 'Set-Cookie' : src === 'regex' ? 'token=(\\w+)' : ''}" ${src === 'status' || src === 'body' ? 'hidden' : ''} spellcheck="false">
-    <button class="kv-del" title="Remove">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
   $('.x-source', row).addEventListener('change', () => { row.replaceWith(extractRow(readExtractRow(row))); scheduleSave(); });
   $('.kv-del', row).addEventListener('click', () => { row.remove(); updateTabCounts(); scheduleSave(); });
   return row;
@@ -305,7 +305,7 @@ function preVarRow(v) {
     <input class="p-key mono" value="${esc(v.key || '')}" placeholder="name" spellcheck="false">
     <input class="p-value mono grow" value="${esc(v.value || '')}" placeholder="value, e.g. {{$guid}} or {{$timestamp}}" spellcheck="false">
     <select class="p-scope"><option value="local" ${!v.scope || v.scope === 'local' ? 'selected' : ''}>this request only</option><option value="env" ${v.scope === 'env' ? 'selected' : ''}>save in environment</option><option value="global" ${v.scope === 'global' ? 'selected' : ''}>save globally</option></select>
-    <button class="kv-del" title="Remove">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
   $('.kv-del', row).addEventListener('click', () => { row.remove(); scheduleSave(); });
   return row;
 }
@@ -807,15 +807,20 @@ function refreshHistoryList() {
   const panel = $('#runs-panels .tab-panel[data-panel="requests"]');
   if (panel && !panel.hidden && runsPanelShown()) loadHistoryList();
 }
-async function loadHistoryList() {
+const HISTORY_PAGE = 200;
+async function loadHistoryList(before = null) {
   const ul = $('#history-list');
-  renderCompareBanner();
+  if (!before) renderCompareBanner();
   try {
-    const items = await api('/history?q=' + encodeURIComponent(hist.q) + '&status=' + encodeURIComponent(hist.status));
+    const items = await api('/history?q=' + encodeURIComponent(hist.q) + '&status=' + encodeURIComponent(hist.status)
+      + '&limit=' + HISTORY_PAGE + (before ? '&before=' + encodeURIComponent(before) : ''));
     hist.loaded = true;
-    if (!items.length) { ul.innerHTML = `<li class="empty small">${hist.q || hist.status ? 'Nothing matches.' : 'Nothing sent yet. Every request you send or run appears here.'}</li>`; return; }
-    let lastDay = '';
-    ul.innerHTML = items.map((h) => {
+    if (!items.length && !before) { ul.innerHTML = `<li class="empty small">${hist.q || hist.status ? 'Nothing matches.' : 'Nothing sent yet. Every request you send or run appears here.'}</li>`; return; }
+    const oldMore = $('.load-more', ul);
+    let lastDay = oldMore ? oldMore.dataset.day : '';
+    if (oldMore) oldMore.remove();
+    const keep = before ? ul.scrollTop : 0;
+    const html = items.map((h) => {
       const day = new Date(h.ts * 1000).toLocaleDateString();
       const head = day !== lastDay ? `<li class="h-day">${esc(day)}</li>` : '';
       lastDay = day;
@@ -825,10 +830,15 @@ async function loadHistoryList() {
         <span class="method m-${esc(h.method)}">${esc(h.method)}</span>
         <div style="min-width:0"><div class="name">${esc(h.request_name || h.url)}${h.body_name ? ` <span class="bn">· ${esc(h.body_name)}</span>` : ''}</div><div class="sub">${esc(h.url)}</div></div>
         <span class="h-code ${codeClass(h.status_code)}">${h.status_code ?? 'ERR'}</span>
-        <button class="h-resend" title="Send again">↻</button>
-        <button class="more" title="More actions">⋯</button></li>`;
-    }).join('');
-    $$('.h-item', ul).forEach((li) => {
+        <button class="h-resend" title="Send again" aria-label="Send again">↻</button>
+        <button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button></li>`;
+    }).join('') + (items.length === HISTORY_PAGE ? `<li class="load-more" data-before="${items[items.length - 1].ts}" data-day="${esc(lastDay)}"><button class="link small">Show older entries…</button></li>` : '');
+    if (before) ul.insertAdjacentHTML('beforeend', html); else ul.innerHTML = html;
+    if (before) ul.scrollTop = keep;
+    const lm = $('.load-more', ul);
+    if (lm) $('button', lm).addEventListener('click', () => loadHistoryList(Number(lm.dataset.before)));
+    $$('.h-item:not([data-bound])', ul).forEach((li) => {
+      li.dataset.bound = '1';
       li.addEventListener('click', () => {
         if (hist.compare && hist.compare.id !== li.dataset.hid) { const a = hist.compare.id; setCompareBase(null); openCompare(a, li.dataset.hid); return; }
         openHistoryEntry(li.dataset.hid);
@@ -1023,7 +1033,7 @@ async function openCookieManager() {
     box.innerHTML = cookies.length ? domains.map((d) => `
       <div class="cookie-domain"><div class="cd-head"><strong>${esc(d)}</strong><span class="muted small">${cookies.filter((c) => c.domain === d).length} cookie(s)</span><span class="grow"></span><button class="link small danger" data-deldom="${esc(d)}">Delete all</button></div>
       <table class="htable"><thead><tr><th>Name</th><th>Value</th><th>Path</th><th>Expires</th><th></th><th></th></tr></thead><tbody>
-      ${cookies.filter((c) => c.domain === d).map((c) => `<tr><td class="k">${esc(c.name)}</td><td class="v"><input class="mono ck-val" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" value="${esc(c.value)}"></td><td>${esc(c.path)}</td><td>${c.expires ? esc(fmtDate(c.expires)) : 'session'}</td><td>${c.secure ? '<span class="chip">secure</span>' : ''}${c.http_only ? '<span class="chip">httpOnly</span>' : ''}</td><td><button class="kv-del" data-del="1" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" title="Delete">✕</button></td></tr>`).join('')}
+      ${cookies.filter((c) => c.domain === d).map((c) => `<tr><td class="k">${esc(c.name)}</td><td class="v"><input class="mono ck-val" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" value="${esc(c.value)}"></td><td>${esc(c.path)}</td><td>${c.expires ? esc(fmtDate(c.expires)) : 'session'}</td><td>${c.secure ? '<span class="chip">secure</span>' : ''}${c.http_only ? '<span class="chip">httpOnly</span>' : ''}</td><td><button class="kv-del" data-del="1" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" title="Delete" aria-label="Delete cookie">✕</button></td></tr>`).join('')}
       </tbody></table></div>`).join('') : '<div class="empty small">The cookie jar is empty. Cookies set by responses are stored here and sent with later requests to the same domain, like a browser.</div>';
     $$('[data-deldom]', box).forEach((b) => b.addEventListener('click', async () => {
       if (!await confirmDialog('Delete cookies?', `All cookies for ${strong(b.dataset.deldom)} will be removed.`, { okLabel: 'Delete', danger: true })) return;
@@ -1159,10 +1169,18 @@ async function importPostman(data, kind, info) {
 }
 function exportMenu(anchor) {
   openMenu('export', anchor, null, [
-    { act: 'pyhttp', icon: '⬇', label: 'pyhttp JSON (everything)', run: exportAll },
+    { act: 'pyhttp', icon: '⬇', label: 'pyhttp JSON (whole project: collection, environments, mocks, monitors)', run: exportAll },
     { act: 'postman', icon: '🚀', label: 'Postman collection (v2.1)', run: () => exportPostman() },
     { act: 'postman-env', icon: '🌐', label: 'Postman environments', run: () => exportPostman(true) },
+    '-',
+    { act: 'docs', icon: '📄', label: 'Documentation (Markdown)', run: () => exportDocs() },
   ]);
+}
+async function exportDocs(folderId = '') {
+  try {
+    const d = await api('/export/docs' + (folderId ? '?folder_id=' + encodeURIComponent(folderId) : ''));
+    await downloadText(d.markdown, d.filename);
+  } catch (e) { toast('Export failed: ' + e.message, 'error'); }
 }
 async function exportPostman(envsOnly = false, folderId = '') {
   try {

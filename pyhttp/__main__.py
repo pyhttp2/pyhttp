@@ -189,8 +189,12 @@ def main() -> None:
         from . import mcp
         mcp.main(sys.argv[2:], DEFAULT_DATA_DIR)
         return
+    if len(sys.argv) > 1 and sys.argv[1] in ("projects", "doctor"):
+        from . import tools
+        fn = tools.projects_main if sys.argv[1] == "projects" else tools.doctor_main
+        sys.exit(fn(sys.argv[2:], DEFAULT_DATA_DIR))
     parser = argparse.ArgumentParser(prog="pyhttp", description="Local API client (alternative to Postman)",
-                                     epilog="Headless runs for CI: pyhttp run --help")
+                                     epilog="Headless runs for CI: pyhttp run --help · workspaces: pyhttp projects --help · checks: pyhttp doctor")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--browser", action="store_true", help="open the UI in your web browser")
     mode.add_argument("--server", action="store_true", help="run the API server only, no UI")

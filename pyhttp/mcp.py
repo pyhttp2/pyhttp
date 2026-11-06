@@ -32,12 +32,15 @@ server = MCPServer(
 
 _client: httpx.AsyncClient | None = None
 _data_dir: Path | None = None
+_project: str | None = None
 
 
-def configure(data_dir: Path) -> None:
-    """Pick the data folder; the app (and its database) starts on first use."""
-    global _data_dir, _client
+def configure(data_dir: Path, project: str | None = None) -> None:
+    """Pick the data folder (and optionally a project by name or id; default: the active one);
+    the app (and its database) starts on first use."""
+    global _data_dir, _project, _client
     _data_dir = data_dir
+    _project = project
     _client = None
 
 
@@ -48,7 +51,7 @@ def _get_client() -> httpx.AsyncClient:
             raise RuntimeError("configure(data_dir) was not called")
         from .app import create_app  # imported late: starting the app opens the database
 
-        _client = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(_data_dir)), base_url="http://pyhttp")
+        _client = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(_data_dir, project=_project)), base_url="http://pyhttp")
     return _client
 
 
@@ -302,11 +305,12 @@ def main(argv: list[str], default_data_dir: Path) -> None:
     p = argparse.ArgumentParser(prog="pyhttp mcp", description="Serve the pyhttp MCP server on stdio.")
     p.add_argument("--data-dir", type=Path, default=default_data_dir,
                    help=f"pyhttp data folder (default: {default_data_dir})")
+    p.add_argument("--project", help="project (workspace) to serve, by name or id; default: the active one")
     args = p.parse_args(argv)
     import logging
 
     logging.getLogger("httpx").setLevel(logging.WARNING)  # keep tool-call noise out of MCP logs
-    configure(args.data_dir)
+    configure(args.data_dir, args.project)
     server.run("stdio")
 
 

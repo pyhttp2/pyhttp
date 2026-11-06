@@ -53,8 +53,8 @@
     <button id="btn-mocks" title="Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on (http://host:port/mock/&lt;name&gt;/…)">Mocks<span id="mock-badge" class="tab-n" hidden></span></button>
     <button id="btn-import" title="Import a pyhttp export, a Postman collection or environment, or a cURL command">Import</button>
     <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export ▾</button>
-    <button id="btn-help" class="icon-btn settings-btn" title="Keyboard shortcuts (?)">?</button>
-    <button id="btn-settings" class="icon-btn settings-btn" title="Settings: theme, SSL verification, redirects, proxy, certificates">
+    <button id="btn-help" class="icon-btn settings-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button id="btn-settings" class="icon-btn settings-btn" title="Settings: theme, SSL verification, redirects, proxy, certificates" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
     <span id="meta-info" class="muted small"></span>
@@ -69,7 +69,7 @@
         <div class="sidebar-head">
           <input id="search" type="search" placeholder="Search name, tags, url, description… (Ctrl+K)" autocomplete="off">
           <button id="btn-new" class="primary" title="New request (Ctrl+N)">+<span class="btn-text"> New</span></button>
-          <button id="btn-new-folder" class="icon-btn folder-btn" title="New folder">
+          <button id="btn-new-folder" class="icon-btn folder-btn" title="New folder" aria-label="New folder">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 11v5M9.5 13.5h5"/></svg>
           </button>
         </div>
@@ -80,7 +80,7 @@
           <button id="btn-clear-sel" class="link small" hidden>clear</button>
           <span class="run-group">
             <button id="btn-run" class="accent" disabled title="Choose a name, order and options, then run">▶ Run selected</button>
-            <button id="btn-run-now" class="icon" disabled title="Run now: skip the dialog and send the selected requests with the last run's options"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z"/></svg></button>
+            <button id="btn-run-now" class="icon" disabled title="Run now: skip the dialog and send the selected requests with the last run's options" aria-label="Run selected now"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z"/></svg></button>
           </span>
         </div>
         <ul id="req-list" class="req-list"></ul>
@@ -110,7 +110,7 @@
           <option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
         </select>
         <input id="f-url" class="grow mono" placeholder="https://api.example.com/users/:id?page={{page}}" spellcheck="false">
-        <button id="btn-code" class="icon-btn code-btn" title="Code snippet: cURL, Python, JavaScript… (Ctrl+Shift+C)">&lt;/&gt;</button>
+        <button id="btn-code" class="icon-btn code-btn" title="Code snippet: cURL, Python, JavaScript… (Ctrl+Shift+C)" aria-label="Code snippet">&lt;/&gt;</button>
         <span class="send-group">
           <button id="btn-send" class="accent" title="Ctrl+Enter">Send</button>
           <button id="btn-send-mode" class="accent send-mode" hidden title="How the checked bodies are sent: in order or in parallel">▾</button>
@@ -255,9 +255,9 @@
             <button data-tab="tests">Tests<span class="tab-n" id="n-r-tests"></span></button>
             <button data-tab="request">Request</button>
           </div>
-          <button id="r-layout" class="copy-btn icon-only" title="Move the response to the right of the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg></button>
-          <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)">⤢</button>
-          <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request">▾</button>
+          <button id="r-layout" class="copy-btn icon-only" title="Move the response to the right of the request" aria-label="Move the response beside the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg></button>
+          <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)" aria-label="Maximize the response">⤢</button>
+          <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request" aria-label="Hide the response">▾</button>
           <button id="r-save" class="copy-btn" title="Save the response body to a file">
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
             <span>Save</span>
@@ -285,7 +285,7 @@
       <button data-tab="history" title="Collection runs and multi-body sends, newest first">Run history</button>
       <button data-tab="requests" title="Every request sent, newest first">Request history</button>
       <span class="grow"></span>
-      <button id="runs-close" class="icon-btn tabs-close" title="Hide this panel (the Runs button in the status bar brings it back)">✕</button>
+      <button id="runs-close" class="icon-btn tabs-close" title="Hide this panel (the Runs button in the status bar brings it back)" aria-label="Hide the runs panel">✕</button>
     </div>
     <div class="tab-panels grow-panels" id="runs-panels">
       <div id="run-current" class="tab-panel run-panel" data-panel="current">
@@ -317,7 +317,7 @@
     <span class="grow"></span>
     <button id="console-expand" class="link small" title="Expand or collapse all entries">Expand all</button>
     <button id="console-clear" class="link small" title="Clear the log">Clear</button>
-    <button id="console-close" class="icon-btn" title="Close console (Ctrl+Alt+C)">✕</button>
+    <button id="console-close" class="icon-btn" title="Close console (Ctrl+Alt+C)" aria-label="Close console">✕</button>
   </div>
   <div id="console-list" class="console-list"></div>
 </section>

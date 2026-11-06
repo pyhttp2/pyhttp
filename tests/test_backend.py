@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -1341,3 +1342,97 @@ def test_projects_registry_file_and_cli_project(tmp_path):
     with pytest.raises(ValueError):
         create_app(tmp_path, project="missing")
     db.close()
+
+
+def test_light_request_list_and_paging(client):
+    big = "x" * 5000
+    for i in range(3):
+        client.post("/api/requests", json={"name": f"r{i}", "method": "POST", "url": "http://x", "body_type": "json",
+                                           "bodies": [{"id": f"b{i}", "name": "main", "body": big, "enabled": True}],
+                                           "headers": [{"key": "X", "value": "y", "enabled": True}]})
+    full = client.get("/api/requests").json()
+    light = client.get("/api/requests?fields=list").json()
+    assert len(full) == len(light) == 3
+    assert "headers" not in light[0] and light[0]["bodies"] == [{"id": "b0", "name": "main", "enabled": True}]
+    assert len(json.dumps(light)) < len(json.dumps(full)) / 10
+    # history: filters run in SQL over the whole table, `before` pages back
+    from pyhttp import db as _db
+    for i in range(30):
+        _db.add_history({"ts": 1000 + i, "method": "GET", "url": f"http://h/{i}", "request_name": "h",
+                         "status": "ok" if i % 3 else "error", "status_code": None if i % 3 == 0 else (200 if i % 2 else 404)})
+    page = client.get("/api/history?limit=10").json()
+    assert [h["url"] for h in page][:2] == ["http://h/29", "http://h/28"]
+    older = client.get(f"/api/history?limit=10&before={page[-1]['ts']}").json()
+    assert older[0]["url"] == "http://h/19" and len(older) == 10
+    assert all(h["status_code"] is None for h in client.get("/api/history?status=error").json())
+    assert len(client.get("/api/history?status=error").json()) == 10
+    assert all(h["status_code"] == 404 for h in client.get("/api/history?status=4xx").json())
+    assert [h["url"] for h in client.get("/api/history?q=h/2").json()] == [f"http://h/{i}" for i in (29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 2)]
+    assert client.get("/api/history?q=%25").json() == []   # LIKE wildcards are literal
+    # runs: paging too
+    rid = full[0]["id"]
+    for _ in range(3):
+        _wait_run(client, client.post("/api/runs", json={"request_ids": [rid]}).json()["id"])
+    runs = client.get("/api/runs?limit=2").json()
+    assert len(runs) == 2
+    assert len(client.get(f"/api/runs?limit=2&before={runs[-1]['started_at']}").json()) == 1
+
+
+def test_full_export_import_keeps_mocks_monitors_and_links(client):
+    tok = client.post("/api/requests", json={"name": "token", "method": "POST", "url": "http://x/token"}).json()
+    client.post("/api/requests", json={"name": "me", "method": "GET", "url": "http://x/me",
+                                       "options": {"depends": {"request_id": tok["id"], "ttl": 60}}})
+    client.post("/api/mocks", json={"name": "Pay", "routes": [{"method": "GET", "path": "/ping", "status_code": 200, "body": "{}"}]})
+    client.post("/api/monitors", json={"name": "Health", "request_ids": [tok["id"]], "interval_s": 60})
+    exp = client.get("/api/export").json()
+    assert len(exp["mocks"]) == 1 and exp["mocks"][0]["routes"][0]["path"] == "/ping"
+    assert exp["monitors"][0]["request_ids"] == [tok["id"]]
+    assert all(r["id"] for r in exp["requests"])
+    det = client.post("/api/import/detect", json={"data": exp}).json()
+    assert det["kind"] == "pyhttp" and det["mocks"] == 1 and det["monitors"] == 1
+    # into a fresh project: everything comes back and the links point at the new ids
+    client.post("/api/projects", json={"name": "Copy"})
+    res = client.post("/api/import", json={**exp, "replace": False}).json()
+    assert res["mocks"] == 1 and res["monitors"] == 1 and res["imported"] == 2
+    reqs = {r["name"]: r for r in client.get("/api/requests").json()}
+    assert reqs["me"]["options"]["depends"]["request_id"] == reqs["token"]["id"] != tok["id"]
+    mons = client.get("/api/monitors").json()
+    mons = mons["monitors"] if isinstance(mons, dict) else mons
+    assert mons[0]["request_ids"] == [reqs["token"]["id"]]
+    mocks = client.get("/api/mocks").json()
+    mocks = mocks["mocks"] if isinstance(mocks, dict) else mocks
+    assert mocks[0]["name"] == "Pay" and len(mocks[0]["routes"]) == 1
+    # replace wipes mocks/monitors too when the file carries them
+    res = client.post("/api/import", json={**exp, "replace": True}).json()
+    mocks = client.get("/api/mocks").json()
+    mocks = mocks["mocks"] if isinstance(mocks, dict) else mocks
+    assert len(mocks) == 1
+    # docs export
+    d = client.get("/api/export/docs").json()
+    assert d["filename"].endswith(".md") and "## Contents" in d["markdown"] and "`POST` `http://x/token`" in d["markdown"]
+    assert "Sends **token** first." in d["markdown"]
+
+
+def test_tools_cli(tmp_path, capsys):
+    from pyhttp import tools
+
+    assert tools.projects_main(["create", "QA", "--use"], tmp_path) == 0
+    assert tools.projects_main(["list"], tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "* QA" in out and "  Default" in out
+    assert tools.projects_main(["rename", "qa", "QA2"], tmp_path) == 0
+    assert tools.projects_main(["delete", "QA2", "--yes"], tmp_path) == 2      # active
+    assert tools.projects_main(["use", "default"], tmp_path) == 0
+    assert tools.projects_main(["delete", "QA2", "--yes"], tmp_path) == 0
+    assert tools.projects_main(["use", "nothing"], tmp_path) == 2
+    capsys.readouterr()
+    # doctor: an orphan output folder is reported, old ones are cleaned
+    db.seed_database(tmp_path / "pyhttp.db")
+    old = tmp_path / "outputs" / "2020-01-01_old"
+    old.mkdir(parents=True)
+    (old / "a.txt").write_text("x")
+    os.utime(old, (0, 0))
+    assert tools.doctor_main(["--clean-outputs", "30", "--yes"], tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "integrity ok" in out and "orphans:  1" in out and "Deleted 1 folder" in out
+    assert not old.exists()

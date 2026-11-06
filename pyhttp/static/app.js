@@ -107,7 +107,7 @@ function kvRow(r, withEnable, lists = null, secrets = false) {
     `<input class="kv-key mono" placeholder="Key" value="${esc(r.key)}" spellcheck="false" autocomplete="off" ${lists ? `list="${lists.key}"` : ''}>` +
     `<input class="kv-val mono" placeholder="Value" value="${esc(r.value)}" spellcheck="false" autocomplete="off" ${lists ? `list="${lists.value}"` : ''} ${r.secret ? 'type="password"' : ''}>` +
     (secrets ? `<button class="kv-secret" title="${r.secret ? 'Secret: masked here and in saved history and run files. Click to make it a normal value' : 'Mark as secret (masked here and in saved history and run files)'}">${r.secret ? '🔒' : '🔓'}</button>` : '') +
-    `<button class="kv-del" title="Remove">✕</button>`;
+    `<button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
   $('.kv-del', row).addEventListener('click', () => row.remove());
   if (secrets) {
     const val = $('.kv-val', row);
@@ -277,7 +277,7 @@ const isSelected = (id) => state.selected.some((s) => s.id === id);
 
 // --------------------------------------------------------------- collection
 async function loadRequests() {
-  const qs = new URLSearchParams({ q: state.q, tag: state.tag });
+  const qs = new URLSearchParams({ q: state.q, tag: state.tag, fields: 'list' });   // sidebar rows only, never body text
   const [requests, tags, folders] = await Promise.all([
     api('/requests?' + qs.toString()), api('/tags'), api('/folders'),
   ]);
@@ -452,7 +452,8 @@ function renderBodies() {
     li.innerHTML =
       `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Include this body when pressing Send">` +
       `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>` +
-      `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)">${SEND_ICON}</button>`;
+      `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)" aria-label="Send only ${esc(b.name || 'Unnamed')}">${SEND_ICON}</button>` +
+      `<button type="button" class="icon bmore" title="Body actions" aria-label="Actions for ${esc(b.name || 'Unnamed')}" aria-haspopup="menu">⋯</button>`;
     $('input', li).addEventListener('click', (e) => {
       e.stopPropagation();
       b.enabled = e.target.checked;
@@ -463,10 +464,13 @@ function renderBodies() {
       e.stopPropagation();
       sendOneBody(b.id);
     });
+    $('.bmore', li).addEventListener('click', (e) => { e.stopPropagation(); openBodyMenu(b, e.currentTarget); });
+    li.addEventListener('contextmenu', (e) => { e.preventDefault(); openBodyMenu(b, li, { x: e.clientX, y: e.clientY }); });
     li.addEventListener('click', () => selectBody(b.id));
     ul.appendChild(li);
   });
   ul.scrollTop = keepScroll;
+  ul.classList.toggle('one', state.bodies.length < 2);
   const b = activeBody();
   $('#body-editor').hidden = !b;
   $('#body-editor-empty').hidden = !!b;
@@ -518,8 +522,13 @@ function renderSendButton() {
   btn.classList.toggle('cancel', !!sending);
   btn.disabled = false;
   const par = !!appSettings.parallel;
-  btn.title = sending ? 'Stop the call(s) in flight' : n > 1 ? `Send the ${n} checked bodies ${par ? 'in parallel (at most ' + (appSettings.concurrency || 8) + ' at once)' : 'one after another'}. Use ▾ to change. Ctrl+Enter` : 'Ctrl+Enter';
-  btn.textContent = sending ? (state.sending.kind === 'run' ? `Cancel (${state.sending.done || 0}/${state.sending.total})` : 'Cancel') : (n > 1 ? `Send ×${n}${par ? ' ∥' : ''}` : 'Send');
+  const title = sending ? 'Stop the call(s) in flight' : n > 1 ? `Send the ${n} checked bodies ${par ? 'in parallel (at most ' + (appSettings.concurrency || 8) + ' at once)' : 'one after another'}. Use ▾ to change. Ctrl+Enter` : 'Ctrl+Enter';
+  const label = sending ? (state.sending.kind === 'run' ? `Cancel (${state.sending.done || 0}/${state.sending.total})` : 'Cancel') : (n > 1 ? `Send ×${n}${par ? ' ∥' : ''}` : 'Send');
+  // Only touch the DOM when the text changes: this runs on every blur of a body field, i.e. between
+  // the mousedown and mouseup of a click on Send, and WebKit drops a click whose target text node
+  // was replaced in between (the macOS app window is WebKit, where Send then did nothing).
+  if (btn.title !== title) btn.title = title;
+  if (btn.textContent !== label) btn.textContent = label;
   $('#body-list').classList.toggle('sending', !!sending);
   const mode = $('#btn-send-mode');
   mode.hidden = sending || n < 2;
@@ -709,7 +718,7 @@ function selectBody(id) {
   if (key && bodyOfKey(rs.selected || '') !== id) { rs.selected = key; renderResponseArea(); }
   else if (rs && rs.selected && rs.byKey[rs.selected] && !rs.byKey[rs.selected].pending && !rs.byKey[rs.selected].notSent) renderResponse(rs.byKey[rs.selected], !$('#resp-bodies').hidden);
 }
-function addBody(from) {
+function addBody(from, at = null) {
   flushBody();
   const b = {
     id: newBodyId(),
@@ -717,7 +726,7 @@ function addBody(from) {
     body: from ? from.body : '',
     enabled: true,
   };
-  state.bodies.push(b);
+  if (at == null || at < 0 || at > state.bodies.length) state.bodies.push(b); else state.bodies.splice(at, 0, b);
   state.activeBodyId = b.id;
   if ($('#f-body-type').value === 'none') $('#f-body-type').value = 'json';
   if (!bodyMatches(b, state.bodyQ)) { state.bodyQ = ''; $('#body-search').value = ''; }
@@ -726,21 +735,43 @@ function addBody(from) {
   $('#body-name').focus();
   $('#body-name').select();
 }
-async function deleteBody() {
-  const b = activeBody();
+// The ⋯ of a body row: manage a body without making it the one in the editor.
+function openBodyMenu(b, anchor, at) {
+  flushBody();
+  const i = state.bodies.indexOf(b);
+  const moveTo = (j) => {
+    state.bodies.splice(i, 1);
+    state.bodies.splice(j, 0, b);
+    renderBodies();
+    scheduleSave();
+  };
+  openMenu('body:' + b.id, anchor, at, [
+    { act: 'send', icon: '➤', label: 'Send only this body', run: () => sendOneBody(b.id) },
+    { act: 'dup', icon: '⧉', label: 'Duplicate', run: () => addBody(b, i + 1) },
+    { act: 'up', icon: '▲', label: 'Move up', run: () => { if (i > 0) moveTo(i - 1); } },
+    { act: 'down', icon: '▼', label: 'Move down', run: () => { if (i < state.bodies.length - 1) moveTo(i + 1); } },
+    '-',
+    { act: 'del', icon: '🗑', label: 'Delete', danger: true, run: () => deleteBody(b) },
+  ]);
+}
+async function deleteBody(which = null) {
+  const b = which || activeBody();
   if (!b) return;
+  flushBody();
   const reqId = state.current && state.current.id;
   const i = state.bodies.indexOf(b);
+  if (i < 0) return;
   state.bodies.splice(i, 1);
+  const wasActive = state.activeBodyId === b.id;
   const next = state.bodies[Math.min(i, state.bodies.length - 1)];
-  state.activeBodyId = next ? next.id : null;
+  if (wasActive) state.activeBodyId = next ? next.id : null;
   renderBodies();
   renderResponseArea();
   scheduleSave();
   toast(`Deleted body “${b.name || 'Unnamed'}”`, '', { label: 'Undo', onClick: () => {
     if (!state.current || state.current.id !== reqId) { toast('That body belongs to another request', 'error'); return; }
     state.bodies.splice(Math.min(i, state.bodies.length), 0, b);
-    state.activeBodyId = b.id;
+    if (wasActive || !state.activeBodyId) state.activeBodyId = b.id;
     renderBodies();
     renderResponseArea();
     scheduleSave();
@@ -804,7 +835,7 @@ async function saveNow() {
       else {
         // keep the in-memory list current so a later full render shows the saved values
         const i = state.requests.findIndex((r) => r.id === saved.id);
-        if (i >= 0) state.requests[i] = saved;
+        if (i >= 0) state.requests[i] = { ...state.requests[i], name: saved.name, method: saved.method, url: saved.url, tags: saved.tags, folder_id: saved.folder_id, body_type: saved.body_type, bodies: saved.bodies.map((b) => ({ id: b.id, name: b.name, enabled: b.enabled })), updated_at: saved.updated_at };
       }
     } catch (e) {
       autosave.dirty = true;
@@ -1210,9 +1241,9 @@ function openRunModal(opts = {}) {
         `<span class="muted small">${i + 1}</span>` +
         `<span class="method m-${esc(s.method)}">${esc(s.method)}</span>` +
         `<span class="name">${esc(s.name)}${s.n > 1 ? ` <span class="bcount">×${s.n} bodies</span>` : ''}</span>` +
-        `<span class="ctl"><button class="icon" data-act="up" ${i === 0 ? 'disabled' : ''}>▲</button>` +
-        `<button class="icon" data-act="down" ${i === order.length - 1 ? 'disabled' : ''}>▼</button>` +
-        `<button class="icon" data-act="rm" title="Remove from run">✕</button></span>`;
+        `<span class="ctl"><button class="icon" data-act="up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>` +
+        `<button class="icon" data-act="down" title="Move down" aria-label="Move down" ${i === order.length - 1 ? 'disabled' : ''}>▼</button>` +
+        `<button class="icon" data-act="rm" title="Remove from run" aria-label="Remove from run">✕</button></span>`;
       $$('button', li).forEach((b) => b.addEventListener('click', () => {
         if (b.dataset.act === 'up') [order[i - 1], order[i]] = [order[i], order[i - 1]];
         if (b.dataset.act === 'down') [order[i + 1], order[i]] = [order[i], order[i + 1]];
@@ -1474,27 +1505,34 @@ function openResultModal(run, r) {
   if (go) go.addEventListener('click', () => { closeModal(); openRequest(r.request_id).catch(() => toast('That request no longer exists', 'error')); });
 }
 
-async function loadHistory() {
+const RUN_PAGE = 100;
+async function loadHistory(before = null) {
   const box = $('#run-history');
   try {
-    const runs = await api('/runs');
-    if (!runs.length) { box.innerHTML = '<div class="empty small">No runs yet.</div>'; return; }
-    box.innerHTML = runs.map((r) => `
+    const runs = await api('/runs?limit=' + RUN_PAGE + (before ? '&before=' + encodeURIComponent(before) : ''));
+    if (!runs.length && !before) { box.innerHTML = '<div class="empty small">No runs yet.</div>'; return; }
+    const more = $('.load-more', box);
+    if (more) more.remove();
+    const html = runs.map((r) => `
       <div class="history-item" data-id="${r.id}">
         <div class="line"><span class="name">${esc(r.name)}</span><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
-          <button class="icon link" data-del="${r.id}" title="Delete from run history (files are kept)">✕</button></div>
+          <button class="icon link" data-del="${r.id}" title="Delete from run history (files are kept)" aria-label="Delete run from history">✕</button></div>
         <div class="line muted small"><span>${fmtDate(r.started_at)}</span><span>· ${r.completed}/${r.total} sent</span><span>· ${r.failed} failed</span>${r.options && r.options.environment ? `<span>· ${esc(r.options.environment)}</span>` : ''}</div>
-      </div>`).join('');
-    $$('.history-item', box).forEach((el) => el.addEventListener('click', () => {
+      </div>`).join('') + (runs.length === RUN_PAGE ? `<button class="link small load-more" data-before="${runs[runs.length - 1].started_at}">Show older runs…</button>` : '');
+    if (before) box.insertAdjacentHTML('beforeend', html); else box.innerHTML = html;
+    const lm = $('.load-more', box);
+    if (lm) lm.addEventListener('click', () => loadHistory(Number(lm.dataset.before)));
+    $$('.history-item:not([data-bound])', box).forEach((el) => el.addEventListener('click', () => {
       watchRun(el.dataset.id);
       showTab($('#runs-tabs'), 'current');
     }));
-    $$('button[data-del]', box).forEach((b) => b.addEventListener('click', async (e) => {
+    $$('.history-item:not([data-bound]) button[data-del]', box).forEach((b) => b.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!await confirmDialog('Remove run from run history?', 'The run is removed from this list. Its output files stay on disk.', { okLabel: 'Remove', danger: true })) return;
       try { await api('/runs/' + b.dataset.del, { method: 'DELETE' }); loadHistory(); }
       catch (err) { toast(err.message, 'error'); }
     }));
+    $$('.history-item:not([data-bound])', box).forEach((el) => { el.dataset.bound = '1'; });
   } catch (e) { box.innerHTML = `<div class="empty small">${esc(e.message)}</div>`; }
 }
 
@@ -1561,9 +1599,13 @@ async function importText(text) {
   const folders = Array.isArray(data) ? [] : (data.folders || []);
   const environments = Array.isArray(data) ? [] : (data.environments || []);
   const variables = Array.isArray(data) ? {} : (data.variables || {});
+  const mocks = Array.isArray(data) ? [] : (data.mocks || []);
+  const monitors = Array.isArray(data) ? [] : (data.monitors || []);
   const what = [`${requests.length} request(s)`];
   if (folders.length) what.push(`${folders.length} folder(s)`);
   if (environments.length) what.push(`${environments.length} environment(s)`);
+  if (mocks.length) what.push(`${mocks.length} mock server(s)`);
+  if (monitors.length) what.push(`${monitors.length} monitor(s)`);
   const choice = await dialog({
     title: 'Import collection',
     message: `The file contains ${strong(what.join(', '))}. Add them to your collection, or replace everything you have now?`,
@@ -1575,13 +1617,15 @@ async function importText(text) {
   });
   if (!choice) return;
   const replace = choice === 'replace';
-  if (replace && !await confirmDialog('Replace everything?', 'All current requests, folders and environments are deleted and replaced by the file. This cannot be undone.', { okLabel: 'Replace everything', danger: true })) return;
+  if (replace && !await confirmDialog('Replace everything?', 'All current requests, folders and environments (and mocks and monitors, when the file has them) are deleted and replaced by the file. This cannot be undone.', { okLabel: 'Replace everything', danger: true })) return;
   try {
-    const res = await api('/import', { method: 'POST', body: { requests, folders, environments, variables, replace } });
-    toast(`Imported ${res.imported} request(s)` + (res.folders ? `, ${res.folders} folder(s)` : '') + (res.environments ? `, ${res.environments} environment(s)` : ''), 'ok');
+    const res = await api('/import', { method: 'POST', body: { requests, folders, environments, variables, mocks, monitors, replace } });
+    toast(`Imported ${res.imported} request(s)` + (res.folders ? `, ${res.folders} folder(s)` : '') + (res.environments ? `, ${res.environments} environment(s)` : '')
+      + (res.mocks ? `, ${res.mocks} mock server(s)` : '') + (res.monitors ? `, ${res.monitors} monitor(s)` : ''), 'ok');
     state.selected = [];
     if (replace && state.current) { autosave.dirty = false; state.current = null; renderEditor(); }
-    await Promise.all([loadRequests(), loadEnvironments()]);
+    await Promise.all([loadRequests(), loadEnvironments(),
+      typeof loadMocks === 'function' ? loadMocks(false) : null, typeof loadMonitors === 'function' ? loadMonitors(false) : null]);
   } catch (e) { toast('Import failed: ' + e.message, 'error'); }
 }
 
@@ -1755,7 +1799,7 @@ function requestRow(r, depth) {
     `<input type="checkbox" ${isSelected(r.id) ? 'checked' : ''} title="Select for run">` +
     `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>` +
     `<div style="min-width:0"><div class="name">${esc(r.name)}${sendCount(r) > 1 ? `<span class="bcount" title="Checked bodies">×${sendCount(r)}</span>` : ''}</div><div class="sub">${tags}${esc(r.url)}</div></div>` +
-    '<button class="more" title="More actions" aria-haspopup="menu">⋯</button>';
+    '<button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button>';
   $('.more', li).addEventListener('click', (e) => { e.stopPropagation(); openReqMenu(r, e.currentTarget); });
   li.addEventListener('contextmenu', (e) => { e.preventDefault(); openReqMenu(r, li, { x: e.clientX, y: e.clientY }); });
   $('input', li).addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(r); });
@@ -1774,7 +1818,7 @@ function folderRow(f, depth, list, open) {
     `<input type="checkbox" title="Select every request in this folder" ${list.length ? '' : 'disabled'} ${list.length && nSel === list.length ? 'checked' : ''}>` +
     `<span class="fname"><span class="caret">▶</span><svg class="ficon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><span class="t">${esc(f.name)}</span></span>` +
     `<span class="fcount">${list.length}</span>` +
-    '<button class="more" title="Folder actions" aria-haspopup="menu">⋯</button>';
+    '<button class="more" title="Folder actions" aria-label="Folder actions" aria-haspopup="menu">⋯</button>';
   const cb = $('input', li);
   cb.indeterminate = nSel > 0 && nSel < list.length;
   cb.addEventListener('click', (e) => {
@@ -1846,7 +1890,7 @@ function openMenu(key, anchor, at, items) {
     m.appendChild(b);
   });
   document.body.appendChild(m);
-  const row = anchor.closest('.req-item, .folder-item, .h-item');
+  const row = anchor.closest('.req-item, .folder-item, .h-item, .body-item');
   if (row) row.classList.add('menu-open');
   const rect = anchor.getBoundingClientRect();
   let left = at ? at.x : rect.right - m.offsetWidth;
@@ -2207,8 +2251,8 @@ function renderEnvEditor() {
     <div class="env-edit-head">
       <input id="env-name" value="${esc(env.name)}" placeholder="Environment name" spellcheck="false">
       <button id="env-activate" class="${isActive ? '' : 'accent'}">${isActive ? '✓ Active' : 'Set active'}</button>
-      <button id="env-dup" class="icon-btn" title="Duplicate environment">⧉</button>
-      <button id="env-del" class="icon-btn danger" title="Delete environment">🗑</button>
+      <button id="env-dup" class="icon-btn" title="Duplicate environment" aria-label="Duplicate environment">⧉</button>
+      <button id="env-del" class="icon-btn danger" title="Delete environment" aria-label="Delete environment">🗑</button>
     </div>
     <p class="muted small env-note">These values override global variables with the same name while this environment is active. Unchecked rows are ignored. 🔒 marks a secret: masked on screen and in saved history and run files. <span id="env-save-state" class="save-state saved">Saved</span></p>
     <div id="kv-env" class="kv"></div>`;
@@ -2682,7 +2726,7 @@ function openSettings() {
   const certs = (s.certs || []).map((c) => ({ ...c }));
   const drawCerts = () => {
     const box = $('#set-certs');
-    box.innerHTML = certs.length ? certs.map((c, i) => `<div class="cert-row"><input class="mono" data-i="${i}" data-k="host" value="${esc(c.host || '')}" placeholder="api.example.com"><input class="mono" data-i="${i}" data-k="cert" value="${esc(c.cert || '')}" placeholder="C:\\certs\\client.pem"><input class="mono" data-i="${i}" data-k="key" value="${esc(c.key || '')}" placeholder="key file (optional)"><button class="kv-del" data-del="${i}" title="Remove">✕</button></div>`).join('') : '<div class="muted small">No client certificates.</div>';
+    box.innerHTML = certs.length ? certs.map((c, i) => `<div class="cert-row"><input class="mono" data-i="${i}" data-k="host" value="${esc(c.host || '')}" placeholder="api.example.com"><input class="mono" data-i="${i}" data-k="cert" value="${esc(c.cert || '')}" placeholder="C:\\certs\\client.pem"><input class="mono" data-i="${i}" data-k="key" value="${esc(c.key || '')}" placeholder="key file (optional)"><button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove">✕</button></div>`).join('') : '<div class="muted small">No client certificates.</div>';
     $$('input', box).forEach((inp) => inp.addEventListener('change', () => { certs[inp.dataset.i][inp.dataset.k] = inp.value.trim(); saveSettings({ certs }); }));
     $$('[data-del]', box).forEach((b) => b.addEventListener('click', () => { certs.splice(Number(b.dataset.del), 1); saveSettings({ certs }); drawCerts(); }));
   };
@@ -2790,7 +2834,7 @@ function init() {
   });
   $('#btn-body-add').addEventListener('click', () => addBody());
   $('#btn-body-dup').addEventListener('click', () => { flushBody(); if (activeBody()) addBody(activeBody()); });
-  $('#btn-body-del').addEventListener('click', deleteBody);
+  $('#btn-body-del').addEventListener('click', () => deleteBody());
   $('#btn-body-all').addEventListener('click', () => setAllBodies(true));
   $('#btn-body-none').addEventListener('click', () => setAllBodies(false));
 

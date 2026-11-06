@@ -1027,22 +1027,34 @@ def _status_group(code: Any, status: str) -> str:
     return f"{int(code) // 100}xx"
 
 
-def list_history(limit: int = 300, q: str = "", status: str = "") -> list[dict[str, Any]]:
+def list_history(limit: int = 300, q: str = "", status: str = "", before: float | None = None) -> list[dict[str, Any]]:
     """Newest first. `q`: words matched against method, URL, name and status code;
-    `status`: "2xx", "3xx", "4xx", "5xx" or "error" (no response)."""
+    `status`: "2xx", "3xx", "4xx", "5xx" or "error" (no response, or cancelled);
+    `before`: only entries older than this timestamp (paging). Filters run in SQL, so a
+    search covers the whole history and not just the newest rows."""
+    where: list[str] = []
+    params: list[Any] = []
+    if before is not None:
+        where.append("ts < ?")
+        params.append(float(before))
+    for tok in (q or "").strip().lower().split():
+        where.append("lower(method || ' ' || url || ' ' || request_name || ' ' || COALESCE(status_code, '')) LIKE ? ESCAPE '\\'")
+        params.append("%" + tok.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+    if status == "error":
+        where.append("(status_code IS NULL OR status = 'cancelled')")
+    elif status in ("2xx", "3xx", "4xx", "5xx"):
+        n = int(status[0]) * 100
+        where.append("status_code BETWEEN ? AND ? AND status != 'cancelled'")
+        params.extend([n, n + 99])
+    sql = ("SELECT id, ts, source, method, url, request_id, request_name, body_name, status, status_code, "
+           "duration_ms, error, environment FROM history")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY ts DESC LIMIT ?"
+    params.append(int(limit))
     with _lock:
-        rows = _c().execute(
-            """SELECT id, ts, source, method, url, request_id, request_name, body_name, status, status_code,
-               duration_ms, error, environment FROM history ORDER BY ts DESC LIMIT ?""", (limit,)
-        ).fetchall()
-    items = [dict(r) for r in rows]
-    q = (q or "").strip().lower()
-    if q:
-        toks = q.split()
-        items = [i for i in items if all(t in f"{i['method']} {i['url']} {i['request_name']} {i['status_code']}".lower() for t in toks)]
-    if status:
-        items = [i for i in items if _status_group(i["status_code"], i["status"]) == status]
-    return items
+        rows = _c().execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_history(hid: str) -> dict[str, Any] | None:
@@ -1132,11 +1144,14 @@ def _row_to_run(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
-def list_runs(limit: int = 200) -> list[dict[str, Any]]:
+def list_runs(limit: int = 200, before: float | None = None) -> list[dict[str, Any]]:
+    """Newest first; `before` (a started_at) pages further back."""
     with _lock:
-        rows = _c().execute(
-            "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if before is None:
+            rows = _c().execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+        else:
+            rows = _c().execute("SELECT * FROM runs WHERE started_at < ? ORDER BY started_at DESC LIMIT ?",
+                                (float(before), limit)).fetchall()
     return [_row_to_run(r) for r in rows]
 
 

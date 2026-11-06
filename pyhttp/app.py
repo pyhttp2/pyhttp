@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, console, curl, db, mock, monitors, oauth2, openapi, postman, projects,
+from . import (USER_AGENT, __version__, console, curl, db, docs, mock, monitors, oauth2, openapi, postman, projects,
                runner, templating, updater)
 from .templating import build_context, render
 
@@ -216,6 +216,8 @@ class ImportIn(BaseModel):
     environments: list[EnvIn] = Field(default_factory=list)
     requests: list[RequestIn] = Field(default_factory=list)
     variables: dict[str, str] = Field(default_factory=dict)
+    mocks: list[dict[str, Any]] = Field(default_factory=list)
+    monitors: list[dict[str, Any]] = Field(default_factory=list)
     replace: bool = False
 
 
@@ -318,8 +320,11 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 
 
 def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, Any]], environments: list[dict[str, Any]],
-                      variables: dict[str, str], replace: bool) -> dict[str, Any]:
-    """Create folders (parents first), requests and environments; optionally replace everything."""
+                      variables: dict[str, str], replace: bool, mocks: list[dict[str, Any]] | None = None,
+                      monitors: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Create folders (parents first), requests and environments; optionally replace everything.
+    A full export also carries mocks and monitors. Requests that come with their old ``id`` are
+    remapped, so monitors and "depends on" links between requests survive the round trip."""
     if replace:
         for r in db.list_requests():
             db.delete_request(r["id"])
@@ -328,6 +333,12 @@ def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, An
                 db.delete_folder(f["id"])
         for e in db.list_environments():
             db.delete_environment(e["id"])
+        if mocks:
+            for m in db.list_mocks(with_routes=False):
+                db.delete_mock(m["id"])
+        if monitors:
+            for m in db.list_monitors():
+                db.delete_monitor(m["id"])
     # folders: create parents before children, remapping ids
     id_map: dict[str, str] = {}
     pending = list(folders)
@@ -347,17 +358,45 @@ def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, An
                 id_map[f["id"]] = db.create_folder(f["name"])["id"]
             break
     created = []
+    req_map: dict[str, str] = {}   # id in the file -> id in this database
     for r in requests:
         data = dict(r)
         data["folder_id"] = id_map.get(r.get("folder_id") or "")
-        created.append(db.create_request(data))
+        new_r = db.create_request(data)
+        created.append(new_r)
+        if r.get("id"):
+            req_map[str(r["id"])] = new_r["id"]
+    # "send this request first" links point at ids from the file: point them at the new rows
+    for old_r, new_r in zip(requests, created):
+        dep = ((old_r.get("options") or {}).get("depends") or {}) if isinstance(old_r.get("options"), dict) else {}
+        target = req_map.get(str(dep.get("request_id") or ""))
+        if target:
+            opts = dict(new_r.get("options") or {})
+            opts["depends"] = {**dep, "request_id": target}
+            db.update_request(new_r["id"], {**new_r, "options": opts})
     for e in environments:
         db.create_environment(e["name"], e.get("variables") or [])
     if variables:
         merged = {} if replace else db.get_variables()
         merged.update(variables)
         db.set_variables(merged)
-    return {"imported": len(created), "folders": len(id_map), "environments": len(environments)}
+    n_mocks = 0
+    for m in mocks or []:
+        if isinstance(m, dict):
+            db.create_mock({k: v for k, v in m.items() if k not in ("id", "created_at", "hits")})
+            n_mocks += 1
+    n_monitors = 0
+    for m in monitors or []:
+        if not isinstance(m, dict):
+            continue
+        ids = [req_map.get(str(i), "") for i in (m.get("request_ids") or [])]
+        ids = [i for i in ids if i]
+        if ids:   # a monitor without requests to send is pointless
+            db.create_monitor({**{k: v for k, v in m.items() if k not in ("id", "created_at", "last_run_at", "last_status")},
+                               "request_ids": ids})
+            n_monitors += 1
+    return {"imported": len(created), "folders": len(id_map), "environments": len(environments),
+            "mocks": n_mocks, "monitors": n_monitors}
 
 
 def _own_origin(request: Request) -> str:
@@ -542,8 +581,16 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     # -------------------------------------------------------------- requests
     @app.get("/api/requests")
-    def list_requests(q: str = Query(""), tag: str = Query("")) -> list[dict[str, Any]]:
-        return db.list_requests(q, tag)
+    def list_requests(q: str = Query(""), tag: str = Query(""), fields: str = Query("")) -> list[dict[str, Any]]:
+        """``fields=list`` returns what the sidebar needs (no body text, scripts, headers…): a few
+        hundred requests with big bodies would otherwise be shipped on every autosave."""
+        items = db.list_requests(q, tag)
+        if fields != "list":
+            return items
+        return [{"id": r["id"], "name": r["name"], "method": r["method"], "url": r["url"], "tags": r["tags"],
+                 "folder_id": r.get("folder_id"), "position": r.get("position", 0), "body_type": r["body_type"],
+                 "bodies": [{"id": b["id"], "name": b["name"], "enabled": b["enabled"]} for b in r["bodies"]],
+                 "updated_at": r.get("updated_at")} for r in items]
 
     @app.post("/api/requests", status_code=201)
     def create_request(body: RequestIn) -> dict[str, Any]:
@@ -919,8 +966,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     # --------------------------------------------------------------- history
     @app.get("/api/history")
-    def history(q: str = Query(""), limit: int = Query(300), status: str = Query("")) -> list[dict[str, Any]]:
-        return db.list_history(limit=min(max(limit, 1), 1000), q=q, status=status)
+    def history(q: str = Query(""), limit: int = Query(300), status: str = Query(""),
+                before: float | None = Query(None)) -> list[dict[str, Any]]:
+        """Newest first. ``before`` (a timestamp from the last row shown) pages further back."""
+        return db.list_history(limit=min(max(limit, 1), 1000), q=q, status=status, before=before)
 
     @app.post("/api/history/{hid}/resend")
     async def history_resend(hid: str) -> dict[str, Any]:
@@ -1021,8 +1070,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         return sample_data_file(requests, "json" if format == "json" else "csv")
 
     @app.get("/api/runs")
-    def list_runs() -> list[dict[str, Any]]:
-        return db.list_runs()
+    def list_runs(limit: int = Query(200), before: float | None = Query(None)) -> list[dict[str, Any]]:
+        """Newest first; ``before`` (started_at of the last row shown) pages further back."""
+        return db.list_runs(limit=min(max(limit, 1), 1000), before=before)
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict[str, Any]:
@@ -1266,16 +1316,40 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     # --------------------------------------------------------- import/export
     def _export_payload() -> dict[str, Any]:
+        """Everything in the project: collection, environments, variables, mocks and monitors.
+        Request ids are kept so monitors and "depends on" links can be remapped on import."""
         reqs = []
         for r in db.list_requests():
-            reqs.append({k: v for k, v in r.items() if k not in ("id", "created_at", "updated_at")})
+            reqs.append({k: v for k, v in r.items() if k not in ("created_at", "updated_at")})
         envs = [{"name": e["name"], "variables": e["variables"]} for e in db.list_environments()]
-        return {"pyhttp_version": __version__, "folders": db.list_folders(), "environments": envs,
-                "requests": reqs, "variables": db.get_variables()}
+        mocks = []
+        for m in db.list_mocks():
+            routes = [{k: v for k, v in rt.items() if k not in ("id", "server_id", "hits", "position")} for rt in m.get("routes") or []]
+            mocks.append({**{k: v for k, v in m.items() if k not in ("id", "created_at", "hits", "routes")}, "routes": routes})
+        mons = [{k: v for k, v in m.items() if k not in ("id", "created_at", "last_run_at", "last_status")} for m in db.list_monitors()]
+        return {"pyhttp_version": __version__, "project": current_project()["name"], "folders": db.list_folders(),
+                "environments": envs, "requests": reqs, "variables": db.get_variables(), "mocks": mocks, "monitors": mons}
 
     @app.get("/api/export")
     def export_all() -> dict[str, Any]:
         return _export_payload()
+
+    @app.get("/api/export/docs")
+    def export_docs(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
+        """The collection (or one folder) as Markdown documentation."""
+        folders = db.list_folders()
+        requests = db.list_requests()
+        title = name or current_project()["name"] or "API"
+        if folder_id:
+            keep = db.folder_descendants(folder_id)
+            root = db.get_folder(folder_id)
+            title = name or (root["name"] if root else title)
+            folders = [{**f, "parent_id": None} if f.get("parent_id") == folder_id else f
+                       for f in folders if f["id"] in keep and f["id"] != folder_id]
+            requests = [{**r, "folder_id": None} if r.get("folder_id") == folder_id else r
+                        for r in requests if r.get("folder_id") in keep]
+        md = docs.to_markdown(title, folders, requests, db.get_variables(), db.list_environments())
+        return {"filename": re.sub(r"[^\w.-]+", "_", title).strip("_") + ".md", "markdown": md}
 
     @app.get("/api/export/postman")
     def export_postman(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
@@ -1298,7 +1372,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     @app.post("/api/import")
     def import_all(body: ImportIn) -> dict[str, Any]:
         return import_collection([f.model_dump() for f in body.folders], [r.model_dump() for r in body.requests],
-                          [e.model_dump() for e in body.environments], body.variables, body.replace)
+                                 [e.model_dump() for e in body.environments], body.variables, body.replace,
+                                 mocks=body.mocks, monitors=body.monitors)
 
     @app.post("/api/import/detect")
     def import_detect(body: dict[str, Any]) -> dict[str, Any]:
@@ -1321,7 +1396,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
                     "folders": len(conv["folders"]), "entries": len(data["log"]["entries"])}
         if isinstance(data, dict) and ("requests" in data or "folders" in data):
             return {"kind": "pyhttp", "requests": len(data.get("requests") or []), "folders": len(data.get("folders") or []),
-                    "environments": len(data.get("environments") or [])}
+                    "environments": len(data.get("environments") or []), "mocks": len(data.get("mocks") or []),
+                    "monitors": len(data.get("monitors") or []), "project": data.get("project") or ""}
         if isinstance(data, list):
             return {"kind": "pyhttp", "requests": len(data), "folders": 0, "environments": 0}
         return {"kind": "unknown"}
@@ -1401,13 +1477,20 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    index_cache: dict[str, Any] = {}
+
     @app.get("/", include_in_schema=False)
     def index() -> HTMLResponse:
-        # script/style URLs get ?v=<version> so every release loads fresh files
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        html = re.sub(r'((?:src|href)="/static/[^"?]+)"', rf'\1?v={__version__}"', html)
-        html = html.replace("<html lang=\"en\">", f"<html lang=\"en\" data-version=\"{__version__}\">", 1)
-        return HTMLResponse(html)
+        # script/style URLs get ?v=<version> so every release loads fresh files; the rewritten page is
+        # cached per file mtime (every reload hits this route, and the regex pass is not free)
+        src = STATIC_DIR / "index.html"
+        mtime = src.stat().st_mtime
+        if index_cache.get("mtime") != mtime:
+            html = src.read_text(encoding="utf-8")
+            html = re.sub(r'((?:src|href)="/static/[^"?]+)"', rf'\1?v={__version__}"', html)
+            html = html.replace("<html lang=\"en\">", f"<html lang=\"en\" data-version=\"{__version__}\">", 1)
+            index_cache.update({"mtime": mtime, "html": html})
+        return HTMLResponse(index_cache["html"])
 
     @app.exception_handler(ValueError)
     def value_error(_request: Any, exc: ValueError) -> JSONResponse:

@@ -23,7 +23,9 @@ only on `127.0.0.1`.
   (for example `valid user`, `missing email`). Search bodies by name or content,
   and tick the ones to send. **Send** hits the request once per checked body and
   saves every output to a run folder, with the body name in the file names. The
-  ➤ next to a body sends just that body, without touching the checkboxes.
+  ➤ next to a body sends just that body, without touching the checkboxes
+  (Ctrl/Cmd+Shift+Enter does the same for the body in the editor); its ⋯ menu
+  duplicates, reorders or deletes a body without opening it.
 - **Search** across name, description, URL, tags and body names; filter by tag chips.
 - **Monitors** (topbar → Monitors): picked requests are sent again every N
   minutes while the app is open. A check fails when a request errors, answers
@@ -143,7 +145,19 @@ switch, create, rename or delete one. Everything you had before projects existed
 *Default* project and stays where it was; each new project lives in its own folder under
 the data directory (`projects/<id>/pyhttp.db` and `projects/<id>/outputs`). App settings
 (theme, proxy, fonts…) are copied into a new project so it does not start bare. The CLI
-runner uses the active project, or `pyhttp run --project "Shop API" …` for another one.
+runner uses the active project, or `pyhttp run --project "Shop API" …` for another one;
+`pyhttp mcp --project …` serves one project to an MCP client.
+
+From a terminal: `pyhttp projects` lists them, `pyhttp projects create NAME [--use]`,
+`use NAME`, `rename OLD NEW` and `delete NAME` manage them. `pyhttp doctor` checks every
+project's database (integrity, row counts), reports run output sizes and orphan folders,
+and `pyhttp doctor --clean-outputs 30` deletes run folders older than 30 days.
+
+**Export ▾ → pyhttp JSON** writes the whole project (collection, environments, variables,
+mocks, monitors) to one file that imports into another project or machine; monitors and
+"send this request first" links are kept. **Export ▾ → Documentation** writes the
+collection as Markdown: folders, requests, parameters, headers (credential-looking values
+masked), auth, example bodies and tests.
 
 ## Mock servers
 
