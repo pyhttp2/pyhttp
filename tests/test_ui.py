@@ -1136,3 +1136,36 @@ def test_mocks_dialog(page, servers):
     page.wait_for_selector("#modal", state="hidden")
     # the 404 and 503 fetched on purpose above each log a console error; the rest must be clean
     page.errors[:] = [e for e in page.errors if "Failed to load resource" not in e]
+
+
+def test_send_one_body_button_keeps_checkboxes(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "One body")
+    page.select_option("#f-method", "POST")
+    page.click("#editor-tabs button[data-tab='body']")
+    for i in range(3):
+        page.click("#btn-body-add")
+        page.fill("#body-name", f"b{i}")
+        set_editor(page, "#f-body", '{"which": %d}' % i)
+        page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    page.locator("#body-list .body-item input").nth(0).uncheck()
+    page.locator("#body-list .body-item input").nth(1).uncheck()
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    assert page.locator("#btn-send").text_content() == "Send"   # one checked body
+    # the ➤ of an unchecked body sends just that body, without the "Send which body?" dialog
+    page.locator("#body-list .body-item .bsend").nth(0).click()
+    page.wait_for_selector("#response:not([hidden]) .jv")
+    assert page.locator(".dialog-backdrop").count() == 0
+    assert "200" in page.locator("#r-status").text_content()
+    body_line = page.locator("#r-body .jv-node[data-path='body'] .jv-s").text_content()
+    assert '\\"which\\": 0' in body_line
+    state = "Array.from(document.querySelectorAll('#body-list .body-item')).map(li => [li.querySelector('input').checked, li.classList.contains('active')]).join()"
+    assert page.evaluate(state) == "false,true,false,false,true,false"
+    # the checkboxes were not touched, so the main Send still sends the one checked body (b2) — after the dialog, since b0 is viewed
+    page.click("#btn-send")
+    page.click(".dialog-backdrop button:has-text('Send checked')")
+    page.wait_for_function("document.querySelectorAll('#resp-bodies .rb-tab').length === 2")
+    assert page.evaluate(state) == "false,true,false,false,true,false"
+    # with "No body" the per-body buttons are hidden
+    page.select_option("#f-body-type", "none")
+    assert page.locator("#body-list .body-item .bsend").nth(0).is_hidden()

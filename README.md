@@ -22,7 +22,8 @@ only on `127.0.0.1`.
 - **Named bodies**: a request can hold many bodies, each with its own name
   (for example `valid user`, `missing email`). Search bodies by name or content,
   and tick the ones to send. **Send** hits the request once per checked body and
-  saves every output to a run folder, with the body name in the file names.
+  saves every output to a run folder, with the body name in the file names. The
+  ➤ next to a body sends just that body, without touching the checkboxes.
 - **Search** across name, description, URL, tags and body names; filter by tag chips.
 - **Monitors** (topbar → Monitors): picked requests are sent again every N
   minutes while the app is open. A check fails when a request errors, answers

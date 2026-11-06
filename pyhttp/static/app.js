@@ -436,28 +436,37 @@ function bodyMatches(b, q) {
   const hay = `${b.name}\n${b.body}`.toLowerCase();
   return q.toLowerCase().split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
 }
+const SEND_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M2.5 3.3 22 12 2.5 20.7l2.9-7.2L15 12 5.4 10.5z"/></svg>';
 function renderBodies() {
   const ul = $('#body-list');
   const shown = state.bodies.filter((b) => bodyMatches(b, state.bodyQ));
+  const keepScroll = ul.scrollTop;   // rebuilding the list must not jump it back to the top
   ul.innerHTML = '';
   if (!state.bodies.length) ul.innerHTML = '<li class="none">No bodies yet.</li>';
   else if (!shown.length) ul.innerHTML = '<li class="none">No bodies match.</li>';
   shown.forEach((b) => {
     const li = document.createElement('li');
     li.className = 'body-item' + (b.id === state.activeBodyId ? ' active' : '') + (b.enabled ? '' : ' off');
+    li.dataset.id = b.id;
     const preview = (b.body || '').replace(/\s+/g, ' ').slice(0, 80) || 'empty';
     li.innerHTML =
-      `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Send this body">` +
-      `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>`;
+      `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Include this body when pressing Send">` +
+      `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>` +
+      `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)">${SEND_ICON}</button>`;
     $('input', li).addEventListener('click', (e) => {
       e.stopPropagation();
       b.enabled = e.target.checked;
       renderBodies();
       scheduleSave();   // checked bodies are remembered with the request, across tabs and restarts
     });
+    $('.bsend', li).addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendOneBody(b.id);
+    });
     li.addEventListener('click', () => selectBody(b.id));
     ul.appendChild(li);
   });
+  ul.scrollTop = keepScroll;
   const b = activeBody();
   $('#body-editor').hidden = !b;
   $('#body-editor-empty').hidden = !!b;
@@ -474,6 +483,7 @@ function updateBodyHints() {
   const on = state.bodies.filter((b) => b.enabled).length;
   $('#bodies-count').textContent = total ? `${on} of ${total} checked` : '';
   const type = $('#f-body-type').value;
+  $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body ➤ when bodies are not sent
   let hint = '';
   if (type === 'none' && total) hint = 'Body type is “No body”, so bodies are not sent.';
   else if (type !== 'none' && on > 1) hint = `Send will hit this request ${on} times, once per checked body, and save each output.`;
@@ -510,6 +520,7 @@ function renderSendButton() {
   const par = !!appSettings.parallel;
   btn.title = sending ? 'Stop the call(s) in flight' : n > 1 ? `Send the ${n} checked bodies ${par ? 'in parallel (at most ' + (appSettings.concurrency || 8) + ' at once)' : 'one after another'}. Use ▾ to change. Ctrl+Enter` : 'Ctrl+Enter';
   btn.textContent = sending ? (state.sending.kind === 'run' ? `Cancel (${state.sending.done || 0}/${state.sending.total})` : 'Cancel') : (n > 1 ? `Send ×${n}${par ? ' ∥' : ''}` : 'Send');
+  $('#body-list').classList.toggle('sending', !!sending);
   const mode = $('#btn-send-mode');
   mode.hidden = sending || n < 2;
   mode.title = `Sending ${par ? 'in parallel' : 'in order'}. Click to change how the checked bodies are sent.`;
@@ -678,6 +689,14 @@ async function sendStreaming(payload) {
 }
 function sendOrCancel() {
   if (state.sending && state.sending.key === responseKey()) cancelSending(); else sendCurrent();
+}
+// The ➤ button next to a body: send that one body right away, whatever is checked.
+function sendOneBody(id) {
+  if (!state.bodies.some((b) => b.id === id)) return;
+  if (state.sending && state.sending.key === responseKey()) { toast('A send is already in flight. Cancel it first.', 'error'); return; }
+  if ($('#f-body-type').value === 'none') { toast('Body type is “No body”. Pick a body type to send a body.', 'error'); return; }
+  selectBody(id);   // the editor and the response pane follow the body that is sent
+  sendCurrent({ onlyBodyId: id });
 }
 function selectBody(id) {
   flushBody();
@@ -870,14 +889,18 @@ async function duplicateRequestById(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function sendCurrent() {
+async function sendCurrent({ onlyBodyId = null } = {}) {
   if (!state.current) return;
   await saveNow();
   const data = readEditor();
   data.folder_id = state.current.folder_id || null;
+  if (onlyBodyId && data.body_type !== 'none') {
+    // this send only: just that body, the checkboxes stay as they are
+    data.bodies = data.bodies.map((b) => ({ ...b, enabled: b.id === onlyBodyId }));
+  }
   let enabled = data.body_type === 'none' ? [] : data.bodies.filter((b) => b.enabled);
   if (state.sending && state.sending.key === responseKey()) return;
-  const viewing = data.body_type === 'none' ? null : data.bodies.find((b) => b.id === state.activeBodyId);
+  const viewing = onlyBodyId || data.body_type === 'none' ? null : data.bodies.find((b) => b.id === state.activeBodyId);
   if (viewing && !viewing.enabled) {
     const what = enabled.length === 1 ? `the checked body ${strong(enabled[0].name)}`
       : enabled.length ? `the ${enabled.length} checked bodies` : 'no body (none is checked)';
@@ -1763,6 +1786,7 @@ function folderRow(f, depth, list, open) {
 
 function renderList() {
   const ul = $('#req-list');
+  const keepScroll = ul.scrollTop;   // autosave re-renders the list: it must not jump to the top
   ul.innerHTML = '';
   const filtering = !!(state.q || state.tag);
   const tree = buildTree();
@@ -1781,6 +1805,7 @@ function renderList() {
   if (!ul.children.length) {
     ul.innerHTML = `<li class="empty small">${filtering ? 'No requests match.' : 'No requests yet. Click “+ New”, or create a folder first.'}</li>`;
   }
+  ul.scrollTop = keepScroll;
   updateSelectionBar();
   renderCrumb();
   if (typeof renderReqTabs === 'function') renderReqTabs();
