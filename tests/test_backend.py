@@ -1436,3 +1436,19 @@ def test_tools_cli(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "integrity ok" in out and "orphans:  1" in out and "Deleted 1 folder" in out
     assert not old.exists()
+
+
+def test_update_repo_never_points_at_the_old_releases_repo(client, monkeypatch):
+    from pyhttp import app as app_mod
+
+    assert app_mod.github_repo() == "pyhttp2/pyhttp"
+    # a setting left over from before the move is ignored, a real override is honoured
+    client.put("/api/settings", json={"update_repo": "pyhttp2/pyhttp-releases"})
+    assert app_mod.github_repo() == "pyhttp2/pyhttp"
+    client.put("/api/settings", json={"update_repo": "someone/fork"})
+    assert app_mod.github_repo() == "someone/fork"
+    client.put("/api/settings", json={"update_repo": ""})
+    monkeypatch.setenv("PYHTTP_GITHUB_REPO", "PyHTTP2/pyhttp-releases/")
+    assert app_mod.github_repo() == "pyhttp2/pyhttp"
+    monkeypatch.setattr(app_mod, "_BUILT_REPO", "pyhttp2/pyhttp-releases")
+    assert app_mod.github_repo() == "pyhttp2/pyhttp"

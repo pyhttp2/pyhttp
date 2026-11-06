@@ -26,6 +26,7 @@ from .templating import build_context, render
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_RELEASE_REPO = "pyhttp2/pyhttp"  # public repo whose Releases page holds the .exe/.dmg builds
+LEGACY_RELEASE_REPOS = {"pyhttp2/pyhttp-releases"}  # old home of the releases: no longer updated, never used
 try:  # written by packaging/build.py so packaged apps know where their releases live
     from ._build import GITHUB_REPO as _BUILT_REPO
 except ImportError:  # pragma: no cover - source checkout
@@ -33,9 +34,14 @@ except ImportError:  # pragma: no cover - source checkout
 
 
 def github_repo() -> str:
-    """owner/repo used for update checks: Settings > env PYHTTP_GITHUB_REPO > baked at build > default."""
-    return (db.get_setting("update_repo") or os.environ.get("PYHTTP_GITHUB_REPO") or _BUILT_REPO
-            or DEFAULT_RELEASE_REPO).strip()
+    """owner/repo used for update checks: Settings > env PYHTTP_GITHUB_REPO > baked at build > default.
+    The repository the releases moved away from is skipped at every level, so installs that still
+    carry it (an old setting, an old build) update from the current one."""
+    for candidate in (db.get_setting("update_repo"), os.environ.get("PYHTTP_GITHUB_REPO"), _BUILT_REPO):
+        candidate = (candidate or "").strip().strip("/")
+        if candidate and candidate.lower() not in LEGACY_RELEASE_REPOS:
+            return candidate
+    return DEFAULT_RELEASE_REPO
 
 
 class KV(BaseModel):

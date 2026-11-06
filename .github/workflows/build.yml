@@ -14,15 +14,15 @@
 # the existing release.
 #
 # Releases are published on THIS repository's Releases page (GITHUB_TOKEN is enough)
-# and then, best effort: uploaded to PyPI as pyhttp-app, mirrored to the legacy
-# pyhttp-releases repository (so installs from before the move keep updating), and the
-# Homebrew tap(s) get the new cask and formula. Those extra steps warn and are skipped
-# when their secret is missing; they never fail the release itself.
+# and then, best effort: uploaded to PyPI as pyhttp-app, and the Homebrew tap gets the
+# new cask and formula. Those extra steps warn and are skipped when their secret is
+# missing; they never fail the release itself. (Releases used to live in
+# pyhttp2/pyhttp-releases; nothing is published there any more.)
 #
 # One-time setup in this repository (Settings > Secrets and variables > Actions):
 #   secret RELEASE_TOKEN: fine-grained PAT with Contents: read and write on
-#     pyhttp2/pyhttp-releases and pyhttp2/homebrew-pyhttp (GITHUB_TOKEN cannot write
-#     to other repositories). Used only for the mirror and the taps.
+#     pyhttp2/homebrew-pyhttp (GITHUB_TOKEN cannot write to other repositories).
+#     Used only for the tap.
 #   secret PYPI_API_TOKEN: a pypi.org API token for the pyhttp-app project.
 # Optional, removes the macOS "Apple could not verify" warning (needs an Apple
 # Developer Program membership):
@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish the build as a release in pyhttp2/pyhttp-releases"
+        description: "Publish the build as a release of this repository"
         type: boolean
         default: false
   push:
@@ -47,7 +47,6 @@ permissions:
   contents: write   # gh release on this repository
 
 env:
-  LEGACY_REPO: pyhttp2/pyhttp-releases   # old release home: mirrored so older installs see updates
   TAP_REPO: pyhttp2/homebrew-pyhttp      # Homebrew tap: brew install pyhttp2/pyhttp/<name>
 
 # One run per commit: a release pushes main and the tag at once, and the tag run (which
@@ -97,7 +96,7 @@ jobs:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          [ -n "$RELEASE_TOKEN" ] || echo "::warning::Secret RELEASE_TOKEN is not set: the release will publish here, but the legacy mirror and the Homebrew taps will be skipped."
+          [ -n "$RELEASE_TOKEN" ] || echo "::warning::Secret RELEASE_TOKEN is not set: the release will publish here, but the Homebrew tap will be skipped."
           [ -n "$PYPI_API_TOKEN" ] || echo "::warning::Secret PYPI_API_TOKEN is not set: the PyPI upload will be skipped."
 
       - name: Replace any release of this version with an empty draft
@@ -286,33 +285,16 @@ jobs:
           TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_API_TOKEN" python3 -m twine upload --non-interactive dist/*
           echo "uploaded https://pypi.org/project/pyhttp-app/${VERSION}/"
 
-      # Installs from before the releases moved here check pyhttp-releases for updates, and
-      # the old Homebrew tap lives there: mirror the release so they all keep updating.
-      # Best effort: a mirror problem must not fail the release that already published above.
-      - name: Mirror the release to the legacy repository
+      # The cask points at this repository's release assets; the formula at the sdist attached
+      # to the release. Pushed to the tap (homebrew-pyhttp). Best effort: a tap problem must
+      # not fail the release that already published above.
+      - name: Update the Homebrew tap (cask + formula)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::RELEASE_TOKEN is not set; skipping the legacy mirror (older installs will not see this update)."
-            exit 0
-          fi
-          { head -1 notes.md; echo; echo "> Releases now live at https://github.com/${GITHUB_REPOSITORY}/releases — this mirror exists so installs from before the move keep updating."; tail -n +2 notes.md; } > legacy-notes.md
-          gh release delete "v${VERSION}" --repo "$LEGACY_REPO" --yes --cleanup-tag || echo "no previous release"
-          gh release create "v${VERSION}" --repo "$LEGACY_REPO" --title "pyhttp ${VERSION}" --notes-file legacy-notes.md --latest \
-            artifacts/* LICENSE.md THIRD-PARTY-NOTICES.md
-
-      # The cask points at this repository's release assets; the formula at the PyPI sdist.
-      # Both are pushed to the canonical tap (homebrew-pyhttp) and to the legacy tap in
-      # pyhttp-releases, where existing brew installs look. Best effort, like the mirror.
-      - name: Update the Homebrew taps (cask + formula)
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::RELEASE_TOKEN is not set; skipping the Homebrew taps."
+            echo "::warning::RELEASE_TOKEN is not set; skipping the Homebrew tap."
             exit 0
           fi
           DMG=$(ls artifacts/pyhttp-*-macos-arm64.dmg | head -1)
@@ -339,7 +321,7 @@ jobs:
             SDIST_SHA=$(sha256sum "dist/pyhttp_app-${VERSION}.tar.gz" | cut -d' ' -f1)
             SDIST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/pyhttp_app-${VERSION}.tar.gz"
           fi
-          for REPO in "$TAP_REPO" "$LEGACY_REPO"; do
+          for REPO in "$TAP_REPO"; do
             rm -rf tap && git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" tap || { echo "::warning::cannot clone ${REPO}"; continue; }
             mkdir -p tap/Casks tap/Formula
             cp tap-files/pyhttp.rb tap/Casks/pyhttp.rb

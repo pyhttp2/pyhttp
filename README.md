@@ -388,12 +388,10 @@ python packaging/bump.py 0.1.2
 That sets `__version__`, commits, creates the tag `v0.1.2` and pushes both. The
 tag run publishes the installer, the portable `.exe`, the `.dmg`, `SHA256SUMS.txt`
 and the license files to this repository's Releases page, uploads `pyhttp-app` to
-PyPI (secret `PYPI_API_TOKEN`), updates the Homebrew tap
-([homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp): cask + formula)
-and mirrors everything to
-[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases) so installs from
-before the move keep updating (the mirror and taps need the `RELEASE_TOKEN`
-secret, a fine-grained PAT with Contents: write on those two repositories). The Windows runner installs Inno Setup with Chocolatey when
+PyPI (secret `PYPI_API_TOKEN`) and updates the Homebrew tap
+([homebrew-pyhttp](https://github.com/pyhttp2/homebrew-pyhttp): cask + formula;
+the tap needs the `RELEASE_TOKEN` secret, a fine-grained PAT with Contents: write
+on that repository). The Windows runner installs Inno Setup with Chocolatey when
 it is not already there. The in-app updater refuses a release without `SHA256SUMS.txt`,
 so keep that step in the workflow. A tag whose version differs from `__version__` is refused,
 because the release name, file names and the in-app update check all come from
@@ -456,9 +454,8 @@ published on PyPI as [`pyhttp-app`](https://pypi.org/project/pyhttp-app/)
 so it can be inspected and installed with pip; you may modify your own copy but
 not distribute the changes. The packaged installer, `.exe`, `.dmg` and `.deb`
 builds are published on this repository's
-[Releases](https://github.com/pyhttp2/pyhttp/releases) page and mirrored to
-[pyhttp-releases](https://github.com/pyhttp2/pyhttp-releases), the old home,
-so installs from before the move keep updating.
+[Releases](https://github.com/pyhttp2/pyhttp/releases) page (the old
+`pyhttp-releases` repository is no longer updated; every install checks here).
 Bundled open-source components are listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
