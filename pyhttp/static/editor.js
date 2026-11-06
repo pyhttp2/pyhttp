@@ -246,7 +246,11 @@ function cmTheme() {
     '.cm-foldPlaceholder': { backgroundColor: 'var(--bg-4)', border: '1px solid var(--border)', color: 'var(--muted)', padding: '0 6px', margin: '0 3px', borderRadius: '4px' },
     '.cm-lintRange-error': { backgroundImage: 'none', borderBottom: '2px solid var(--danger)' },
     '.cm-tooltip': { backgroundColor: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text)' },
-    '.cm-panels': { backgroundColor: 'var(--bg-2)', color: 'var(--text)', borderColor: 'var(--border)' },
+    // CodeMirror makes its panels sticky with z-index 300. Sticky attaches to the nearest scrolling
+    // ancestor, which in a narrow or short request pane is the pane itself, so the search bar floated
+    // over the body list; and 300 painted it over the app's modals (z-index 50). The editor has its own
+    // scroller, so a plain in-flow bar stays visible anyway.
+    '.cm-panels': { backgroundColor: 'var(--bg-2)', color: 'var(--text)', borderColor: 'var(--border)', position: 'relative', zIndex: '1' },
     // the search / replace panel: CodeMirror's defaults are a light gradient button with inherited (light)
     // text, i.e. unreadable on the dark theme; one wrapping row in the app's own controls instead
     '.cm-panel.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 6px', padding: '6px 30px 6px 8px', position: 'relative' },

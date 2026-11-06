@@ -202,6 +202,8 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 :root[data-theme="light"] { --cm-key: #1d4ed8; --cm-string: #15803d; --cm-number: #b45309; --cm-keyword: #7e22ce; --cm-func: #1d4ed8; }
 .code-editor { display: block; height: 320px; min-height: 120px; resize: vertical; overflow: hidden; }
 .code-editor .cm-editor { height: 100%; }
+/* nothing inside an editor (search bar, tooltips' anchors, gutters) may paint outside it or above the app's overlays */
+.code-editor { position: relative; isolation: isolate; overflow: hidden; }
 .scripts-grid .code-editor { height: 180px; }
 .gql .code-editor { height: 240px; }
 
