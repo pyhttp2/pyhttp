@@ -6,6 +6,20 @@ own desktop window. Everything stays on your machine: requests live in a SQLite
 file, every run writes its responses to plain files, and the backend listens
 only on `127.0.0.1`.
 
+> **macOS: "Update with Homebrew" fails on an older pyhttp?** Homebrew 7 must
+> trust the pyhttp tap once; pyhttp 2.0.7 and older only report
+> `brew upgrade --cask failed (exit code 1)`. Run this in a terminal, then update
+> again (from the app, or with the second line):
+>
+> ```sh
+> brew trust pyhttp2/pyhttp
+> brew update && brew upgrade --cask pyhttp2/pyhttp/pyhttp
+> ```
+>
+> Your data in `~/Library/Application Support/pyhttp` is kept. Installed from the
+> `.dmg` instead? Download the new one and drag pyhttp over the old app.
+> Details under [Updates](#updates).
+
 ## Features
 
 - Save requests with **name, description, tags**, method, URL, query params,
@@ -325,7 +339,7 @@ Packaged builds bundle Python and every dependency, so users just double-click.
 |---|---|---|
 | Windows 10/11 | `pyhttp-<version>-windows-x64-setup.exe`: installer (per user, no admin rights, into `%LOCALAPPDATA%\Programs\pyhttp`, Start menu entry, optional desktop icon, uninstaller in *Apps*) | `%APPDATA%\pyhttp` |
 | Windows 10/11 | `pyhttp-<version>-windows-x64.exe`: portable, one file, no install | `%APPDATA%\pyhttp` |
-| macOS 11+ | `brew install --cask pyhttp2/pyhttp/pyhttp`, or `pyhttp-<version>-macos-arm64.dmg` (drag pyhttp to Applications) | `~/Library/Application Support/pyhttp` |
+| macOS 11+ | `brew install --cask pyhttp2/pyhttp/pyhttp`, or `pyhttp-<version>-macos-arm64.dmg` (drag pyhttp to Applications). Update from an older pyhttp fails? `brew trust pyhttp2/pyhttp` once, see [Updates](#updates) | `~/Library/Application Support/pyhttp` |
 | Ubuntu 22.04+, Debian 12+ | `sudo apt install ./pyhttp-<version>-linux-amd64.deb`: installs to `/usr/lib/pyhttp`, adds `pyhttp` to the PATH and an app-menu entry; uses the distro's GTK and WebKitGTK (pulled in as dependencies) | `~/.local/share/pyhttp` |
 
 Running from source keeps using `./data`. In the packaged app, output that would
@@ -346,6 +360,22 @@ exists. What the button does depends on how pyhttp was installed:
 | macOS `.dmg` | Download of the new `.dmg`, plus the Homebrew commands to switch (after that, updates install themselves). |
 | Linux `.deb` | Download of the new `.deb` plus the `sudo apt install ./pyhttp-<version>-linux-amd64.deb` command to run. |
 | From source | Download links and `git pull`. |
+
+**"Update with Homebrew" failed (exit code 1) on pyhttp 2.0.7 or older.** Homebrew 7
+loads nothing from a third-party tap until it was trusted once. Macs that
+installed pyhttp before the move to `github.com/pyhttp2/pyhttp` trusted the tap
+under its old address; once pyhttp points the tap at its new home that trust no
+longer applies, and `brew upgrade` stops with *Refusing to load cask
+pyhttp2/pyhttp/pyhttp from untrusted tap*. Trust the tap once, then update again
+(from the app, or with the second line):
+
+```sh
+brew trust pyhttp2/pyhttp
+brew update && brew upgrade --cask pyhttp2/pyhttp/pyhttp
+```
+
+From 2.0.8 on pyhttp runs the trust step itself and shows Homebrew's own error
+line with the fix when something else goes wrong.
 
 Requests, settings and history are kept: they live in the data folder, which no
 update touches. The backend is `pyhttp/updater.py` (`POST /api/update/install`,
