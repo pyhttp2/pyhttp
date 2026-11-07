@@ -462,7 +462,7 @@ class Updater:
             if not chunk:
                 break
             buf += chunk
-            *lines, buf = re.split(rb"[\r\n]", buf)
+            *lines, buf = re.split(rb"\r\n|\r|\n", buf)   # CRLF is one line break
             for line in lines:
                 emit(line)
         if buf:
