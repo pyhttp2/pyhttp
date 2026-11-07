@@ -1476,22 +1476,23 @@ def test_updater_reads_the_cask_version_and_waits_for_it(monkeypatch):
     u = updater.Updater(Path(tempfile.mkdtemp()))
     monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
     monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (Path("/taps/pyhttp"), updater.TAP_URL))
-    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: next(offered))
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env, log=None: next(offered))
     monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
     monkeypatch.setattr(updater, "BREW_WAIT_SECONDS", 0)
     monkeypatch.setattr(updater, "_quit_later", lambda *a, **k: None)
     monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: type("P", (), {"wait": lambda self: 0})())
     monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(u, "_run_logged", lambda cmd, env: calls.append(cmd[1:3]))
+    monkeypatch.setattr(u, "_run_logged", lambda cmd, env, check=True: calls.append(cmd[1:]))
     u._run_brew("2.0.5")
-    assert calls == [["update"], ["update"], ["update"], ["upgrade", "--cask"]]
+    # the tap is trusted first (Homebrew 7), the cask is addressed by its tap-qualified token
+    assert calls == [["trust", updater.TAP], ["update"], ["update"], ["update"], ["upgrade", "--cask", updater.QUALIFIED_CASK]]
     # still lagging after every round: a clear error, no upgrade attempt
     calls.clear()
-    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: "2.0.4")
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env, log=None: "2.0.4")
     monkeypatch.setattr(updater, "BREW_WAIT_ROUNDS", 1)
     with pytest.raises(RuntimeError, match="still offers 2.0.4"):
         u._run_brew("2.0.5")
-    assert ["upgrade", "--cask"] not in calls
+    assert not any(c[0] == "upgrade" for c in calls)
 
 
 def test_updater_repoints_a_tap_that_still_fetches_the_old_repository(monkeypatch):
@@ -1506,17 +1507,59 @@ def test_updater_repoints_a_tap_that_still_fetches_the_old_repository(monkeypatc
     monkeypatch.setattr(updater, "brew_path", lambda: "/usr/bin/true")
     tap_dir = Path(tempfile.gettempdir()) / "taps" / "pyhttp"   # a real-looking path on every OS
     monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (tap_dir, "https://github.com/pyhttp2/pyhttp-releases"))
-    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env: "2.0.6")
+    monkeypatch.setattr(updater, "local_cask_version", lambda brew, env, log=None: "2.0.6")
     monkeypatch.setattr(updater, "brew_caskroom", lambda: None)
     monkeypatch.setattr(updater, "_quit_later", lambda *a, **k: None)
     monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: type("P", (), {"wait": lambda self: 0})())
     monkeypatch.setattr(updater.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(u, "_run_logged", lambda cmd, env: calls.append(cmd))
+    monkeypatch.setattr(u, "_run_logged", lambda cmd, env, check=True: calls.append(cmd))
     u._run_brew("2.0.6")
     assert calls[0] == ["git", "-C", str(tap_dir), "remote", "set-url", "origin", updater.TAP_URL]
-    assert calls[1][1] == "update" and calls[-1][1:3] == ["upgrade", "--cask"]
+    # re-pointing the remote drops the trust Homebrew recorded for the old URL: trust again, then update
+    assert calls[1][1:] == ["trust", updater.TAP]
+    assert calls[2][1] == "update" and calls[-1][1:] == ["upgrade", "--cask", updater.QUALIFIED_CASK]
     # not tapped at all: tap it first
     calls.clear()
     monkeypatch.setattr(updater, "tap_remote", lambda brew, env: (None, ""))
     u._run_brew("2.0.6")
     assert calls[0][1:] == ["tap", updater.TAP, updater.TAP_URL]
+
+
+def test_updater_explains_brew_failures(tmp_path):
+    """A failed brew command reports brew's own Error line plus the fix, not just "see the output"."""
+    import sys
+
+    from pyhttp import updater
+
+    untrusted = ("Error: Refusing to load cask pyhttp2/pyhttp/pyhttp from untrusted tap pyhttp2/pyhttp.\n"
+                 "Run `brew trust --cask pyhttp2/pyhttp/pyhttp` or `brew trust pyhttp2/pyhttp` to trust it.")
+    assert "brew trust pyhttp2/pyhttp" in updater.brew_failure_hint(untrusted)
+    assert "brew trust pyhttp2/pyhttp" in updater.brew_failure_hint("\x1b[31mError:\x1b[0m Refusing ... untrusted tap x")
+    assert "two taps" in updater.brew_failure_hint("Error: Cask pyhttp exists in multiple taps: a/b/pyhttp, c/d/pyhttp")
+    assert "checksum" in updater.brew_failure_hint("Error: SHA256 mismatch\nExpected: a\nActual: b")
+    assert "Trash" in updater.brew_failure_hint("Error: It seems there is already an App at '/Applications/pyhttp.app'.")
+    assert updater.brew_failure_hint("Error: something else") is None
+    assert updater.brew_failure_hint("") is None
+    # the Error line (and its continuation) is what goes into the message
+    lines = ["==> Upgrading 1 outdated package:", "pyhttp2/pyhttp/pyhttp 2.0.6 -> 2.0.7", "",
+             "\x1b[31mError:\x1b[0m Refusing to load cask from untrusted tap pyhttp2/pyhttp.", "Run `brew trust pyhttp2/pyhttp` to trust it."]
+    assert updater.failure_detail(lines) == ("Error: Refusing to load cask from untrusted tap pyhttp2/pyhttp. "
+                                             "Run `brew trust pyhttp2/pyhttp` to trust it.")
+    assert updater.failure_detail(["==> step", "last line"]) == "==> step / last line"
+    assert updater.failure_detail([]) == "no output"
+    # end to end through _run_logged with a real failing process
+    u = updater.Updater(tmp_path)
+    cmd = [sys.executable, "-c", "import sys; print('==> Upgrading'); print('Error: Refusing to load cask x from untrusted tap pyhttp2/pyhttp.'); sys.exit(1)"]
+    with pytest.raises(RuntimeError) as err:
+        u._run_logged(cmd, dict(os.environ))
+    msg = str(err.value)
+    assert "exit code 1" in msg and "untrusted tap pyhttp2/pyhttp" in msg and "brew trust pyhttp2/pyhttp" in msg
+    assert any("==> Upgrading" in line for line in u.status()["log"])
+    # check=False: the exit code and output come back, nothing is raised (used for `brew trust`)
+    rc, out = u._run_logged(cmd, dict(os.environ), check=False)
+    assert rc == 1 and any("Error:" in line for line in out)
+    rc, out = u._run_logged([sys.executable, "-c", "print('ok')"], dict(os.environ))
+    assert rc == 0 and out == ["ok"]
+    # the terminal fallback for a brew install trusts the tap first and uses the qualified token
+    cmds = updater._commands("brew")[2]
+    assert cmds[0] == f"brew trust {updater.TAP}" and f"brew upgrade --cask {updater.QUALIFIED_CASK}" in cmds

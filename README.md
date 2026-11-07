@@ -342,7 +342,7 @@ exists. What the button does depends on how pyhttp was installed:
 |---|---|
 | Windows installer | **Install and restart**: downloads the new installer, verifies it against `SHA256SUMS.txt`, runs it quietly (`/VERYSILENT`) after pyhttp has closed, and the installer starts pyhttp again. |
 | Windows portable `.exe` | **Install and restart**: downloads and verifies the new `.exe`, then a small helper (`updates/apply-update.cmd` in the data folder) waits for pyhttp to exit, swaps the file in place (same name, same folder) and starts it again. |
-| macOS, installed with Homebrew | **Update with Homebrew**: runs `brew update` and `brew upgrade --cask pyhttp` with the output shown in the dialog, removes the quarantine flag and restarts pyhttp. |
+| macOS, installed with Homebrew | **Update with Homebrew**: points a tap made before the move at the current repository, runs `brew trust pyhttp2/pyhttp` (Homebrew 7 loads nothing from a third-party tap until it was trusted once), `brew update` and `brew upgrade --cask pyhttp2/pyhttp/pyhttp` with the output shown in the dialog, removes the quarantine flag and restarts pyhttp. When brew fails, the dialog shows brew's own error line and the command that fixes it. |
 | macOS `.dmg` | Download of the new `.dmg`, plus the Homebrew commands to switch (after that, updates install themselves). |
 | Linux `.deb` | Download of the new `.deb` plus the `sudo apt install ./pyhttp-<version>-linux-amd64.deb` command to run. |
 | From source | Download links and `git pull`. |

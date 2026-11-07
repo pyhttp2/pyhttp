@@ -6,9 +6,10 @@ Windows (installer or portable .exe): download the new release asset, verify it 
 the release's SHA256SUMS.txt, then hand over to a small .cmd helper that waits for pyhttp
 to exit, installs (quietly) or swaps the .exe, and starts pyhttp again.
 
-macOS (installed with Homebrew): run `brew update` and `brew upgrade --cask pyhttp` with
-live output, then restart the app. Other installs (plain .dmg, no Homebrew, running from
-source) get the commands to run instead; see `info()`.
+macOS (installed with Homebrew): make sure the tap points at its current repository and is
+trusted (Homebrew 7 refuses casks from taps that were not trusted once), run `brew update` and
+`brew upgrade --cask pyhttp2/pyhttp/pyhttp` with live output, then restart the app. Other
+installs (plain .dmg, no Homebrew, running from source) get the commands to run instead; see `info()`.
 """
 from __future__ import annotations
 
@@ -36,6 +37,8 @@ TAP_CASK_RAW = "https://raw.githubusercontent.com/pyhttp2/homebrew-pyhttp/main/C
 LEGACY_TAP_REPO = "pyhttp2/pyhttp-releases"   # where the tap lived before the move; some Macs still fetch it from there
 BREW_WAIT_ROUNDS = 4      # the cask is pushed a minute or two after a release: how often to retry `brew update`
 BREW_WAIT_SECONDS = 15
+QUALIFIED_CASK = f"{TAP}/{CASK}"   # the tap-qualified token: unambiguous even when an old pyhttp tap is still around
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SUMS_FILE = "SHA256SUMS.txt"
 SELF_UPDATE_KINDS = ("installer", "portable", "brew")
 
@@ -116,18 +119,56 @@ def tap_needs_repointing(url: str) -> bool:
     return bool(u) and LEGACY_TAP_REPO in u and "homebrew-pyhttp" not in u
 
 
-def local_cask_version(brew: str, env: dict[str, str]) -> str | None:
-    """The version of the cask as Homebrew on this machine sees it (after `brew update`)."""
+def local_cask_version(brew: str, env: dict[str, str], log: Callable[[str], None] | None = None) -> str | None:
+    """The version of the cask as Homebrew on this machine sees it (after `brew update`); None when
+    Homebrew cannot load the cask (its error goes to `log`, so the reason is visible)."""
     try:
-        out = subprocess.run([brew, "info", "--cask", "--json=v2", CASK], env=env, capture_output=True, text=True,
+        out = subprocess.run([brew, "info", "--cask", "--json=v2", QUALIFIED_CASK], env=env, capture_output=True, text=True,
                              timeout=60, stdin=subprocess.DEVNULL)
         if out.returncode != 0:
+            if log:
+                for line in ANSI.sub("", out.stderr or out.stdout or "").splitlines():
+                    log(line)
             return None
         import json
         casks = json.loads(out.stdout).get("casks") or []
         return str(casks[0].get("version")) if casks else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def brew_failure_hint(output: str) -> str | None:
+    """What a failed brew command's output means and the one command that fixes it; None when
+    the output matches nothing known."""
+    o = ANSI.sub("", output or "").lower()
+    if "untrusted tap" in o or "brew trust" in o:
+        return (f"Homebrew refuses the pyhttp tap until it is trusted once (Homebrew 7 asks this for every "
+                f"third-party tap). Run in a terminal: brew trust {TAP}  and update again.")
+    if "multiple taps" in o:
+        return f"the cask exists in two taps on this Mac; run: brew upgrade --cask {QUALIFIED_CASK}"
+    if "sha256 mismatch" in o or "checksum" in o:
+        return "the downloaded file did not match the release's checksum; try again in a few minutes."
+    if "already an app at" in o:
+        return (f"a pyhttp.app that Homebrew did not install sits in /Applications: quit pyhttp, move it to the "
+                f"Trash, then run: brew install --cask {QUALIFIED_CASK}")
+    if "is not installed" in o:
+        return f"Homebrew has no record of the cask; run: brew install --cask {QUALIFIED_CASK}"
+    return None
+
+
+def failure_detail(lines: list[str]) -> str:
+    """The `Error:` line of a brew run (with its continuation), else its last lines, for the message."""
+    clean = [ANSI.sub("", ln).strip() for ln in lines]
+    clean = [ln for ln in clean if ln]
+    for i in range(len(clean) - 1, -1, -1):
+        if clean[i].lower().startswith("error:"):
+            tail = [clean[i]]
+            for nxt in clean[i + 1:i + 3]:
+                if nxt.startswith(("==>", "$ ", "Warning:")):
+                    break
+                tail.append(nxt)
+            return " ".join(tail)
+    return " / ".join(clean[-2:]) if clean else "no output"
 
 
 def app_bundle() -> Path | None:
@@ -163,7 +204,8 @@ def _commands(kind: str, latest: str | None = None) -> tuple[str, str, list[str]
     app = str(app_bundle() or "/Applications/pyhttp.app")
     unquarantine = f"xattr -dr com.apple.quarantine {app}"
     if kind == "brew":
-        return ("Or update from the terminal", "", ["brew update", f"brew upgrade --cask {CASK}", unquarantine])
+        return ("Or update from the terminal", "",
+                [f"brew trust {TAP}", "brew update", f"brew upgrade --cask {QUALIFIED_CASK}", unquarantine])
     if kind == "app":
         tap = [f"brew tap {TAP} {TAP_URL}", f"brew install --cask {TAP}/{CASK}", unquarantine]
         if brew_path():
@@ -401,11 +443,20 @@ class Updater:
         _quit_later()
 
     # ---- macOS: Homebrew
-    def _run_logged(self, cmd: list[str], env: dict[str, str]) -> None:
+    def _run_logged(self, cmd: list[str], env: dict[str, str], check: bool = True) -> tuple[int, list[str]]:
+        """Run `cmd` with its output streamed into the log; (exit code, output lines). With `check`,
+        a failure raises with brew's own `Error:` line and what to do about it in the message."""
         self._log("$ " + " ".join(cmd))
         proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         buf = b""
+        out: list[str] = []
         assert proc.stdout is not None
+
+        def emit(raw: bytes) -> None:
+            line = ANSI.sub("", raw.decode("utf-8", errors="replace"))
+            out.append(line)
+            self._log(line)
+
         while True:
             chunk = proc.stdout.read(512)
             if not chunk:
@@ -413,12 +464,15 @@ class Updater:
             buf += chunk
             *lines, buf = re.split(rb"[\r\n]", buf)
             for line in lines:
-                self._log(line.decode("utf-8", errors="replace"))
+                emit(line)
         if buf:
-            self._log(buf.decode("utf-8", errors="replace"))
+            emit(buf)
         rc = proc.wait()
-        if rc != 0:
-            raise RuntimeError(f"{' '.join(cmd[:3])} failed (exit code {rc}); see the output above")
+        if rc != 0 and check:
+            hint = brew_failure_hint("\n".join(out))
+            raise RuntimeError(f"{' '.join(cmd[:3])} failed (exit code {rc}): {failure_detail(out)}"
+                               + (f" — {hint}" if hint else ""))
+        return rc, out
 
     def _run_brew(self, latest: str) -> None:
         brew = brew_path()
@@ -426,7 +480,7 @@ class Updater:
             raise RuntimeError("Homebrew (brew) was not found")
         env = {**os.environ, "PATH": f"{Path(brew).parent}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                "HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_INSTALL_CLEANUP": "1",
-               "HOMEBREW_COLOR": "0", "NO_COLOR": "1", "NONINTERACTIVE": "1"}
+               "HOMEBREW_NO_COLOR": "1", "NO_COLOR": "1", "NONINTERACTIVE": "1"}
         # Taps made before the move still fetch the cask from the old repository, which stopped
         # getting new versions: point them at the current tap first, then update as usual.
         tap_dir, origin = tap_remote(brew, env)
@@ -436,29 +490,34 @@ class Updater:
         elif not tap_dir:
             self._set("updating", None, "Adding the Homebrew tap…")
             self._run_logged([brew, "tap", TAP, TAP_URL], env)
+        # Homebrew 7 loads nothing from a third-party tap until it was trusted once; a trust given
+        # to the old remote does not carry over to the new one. `brew trust` is idempotent, and on
+        # an older Homebrew (no such command) the failure is only logged.
+        self._set("updating", None, "Making sure Homebrew trusts the pyhttp tap…")
+        self._run_logged([brew, "trust", TAP], env, check=False)
         self._set("updating", None, "Updating Homebrew…")
         self._run_logged([brew, "update"], env)
         # The cask lands in the tap a minute or two after the release is published. Rather than
         # failing in that window, wait for it a little (re-running `brew update` each time).
         if latest:
             for attempt in range(BREW_WAIT_ROUNDS + 1):
-                offered = local_cask_version(brew, env)
+                offered = local_cask_version(brew, env, self._log)
                 if offered is None or version_tuple(offered) >= version_tuple(latest):
                     break
                 if attempt == BREW_WAIT_ROUNDS:
                     raise RuntimeError(
                         f"The release {latest} is out, but Homebrew's cask still offers {offered}; the cask is updated "
-                        f"within minutes of a release. Try again shortly (or run: brew update && brew upgrade --cask {CASK}).")
+                        f"within minutes of a release. Try again shortly (or run: brew update && brew upgrade --cask {QUALIFIED_CASK}).")
                 self._set("updating", None, f"Homebrew still offers {offered}; waiting for the {latest} cask… ({attempt + 1}/{BREW_WAIT_ROUNDS})")
                 self._log(f"cask offers {offered}, waiting {BREW_WAIT_SECONDS}s for {latest}")
                 time.sleep(BREW_WAIT_SECONDS)
                 self._run_logged([brew, "update"], env)
         self._set("upgrading", None, f"Upgrading {CASK}…")
-        self._run_logged([brew, "upgrade", "--cask", CASK], env)
+        self._run_logged([brew, "upgrade", "--cask", QUALIFIED_CASK], env)
         room = brew_caskroom()
         if latest and room and not (room / latest).is_dir():
             raise RuntimeError(f"Homebrew did not install {latest} (the Caskroom has no {latest} folder); "
-                               f"run: brew update && brew upgrade --cask {CASK}")
+                               f"run: brew update && brew upgrade --cask {QUALIFIED_CASK}")
         app = app_bundle() or Path("/Applications/pyhttp.app")
         subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(app)], env=env, check=False,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
