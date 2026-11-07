@@ -14,9 +14,12 @@ only on `127.0.0.1`.
 > ```sh
 > brew trust pyhttp2/pyhttp
 > brew update && brew upgrade --cask pyhttp2/pyhttp/pyhttp
+> xattr -dr com.apple.quarantine /Applications/pyhttp.app
 > ```
 >
-> Your data in `~/Library/Application Support/pyhttp` is kept. Installed from the
+> The last line stops the "Apple could not verify pyhttp" popup that follows a
+> Terminal upgrade (the build is not notarized; the in-app updater clears the flag
+> itself). Your data in `~/Library/Application Support/pyhttp` is kept. Installed from the
 > `.dmg` instead? Download the new one and drag pyhttp over the old app.
 > Details under [Updates](#updates).
 
@@ -372,9 +375,12 @@ pyhttp2/pyhttp/pyhttp from untrusted tap*. Trust the tap once, then update again
 ```sh
 brew trust pyhttp2/pyhttp
 brew update && brew upgrade --cask pyhttp2/pyhttp/pyhttp
+xattr -dr com.apple.quarantine /Applications/pyhttp.app
 ```
 
-From 2.0.8 on pyhttp runs the trust step itself and shows Homebrew's own error
+The third line clears the quarantine flag that a Terminal upgrade leaves on the
+new app; without it the next launch shows "Apple could not verify pyhttp is free
+of malware" (see *First launch* below). From 2.0.8 on pyhttp runs the trust step itself and shows Homebrew's own error
 line with the fix when something else goes wrong.
 
 Requests, settings and history are kept: they live in the data folder, which no
@@ -433,9 +439,12 @@ because the release name, file names and the in-app update check all come from
 The builds are not code-signed, so the operating system warns the first time:
 
 - **Windows** shows "Windows protected your PC" (SmartScreen): click **More info → Run anyway**.
-- **macOS** says the app is from an unidentified developer: right-click pyhttp in
-  Applications → **Open** → **Open**, or allow it in System Settings → Privacy & Security.
-  If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/pyhttp.app`.
+- **macOS** shows "Apple could not verify pyhttp is free of malware": click **Done**,
+  open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**
+  next to pyhttp (right-click → Open no longer works on macOS 15). Or clear the
+  quarantine flag once, which also fixes "the app is damaged":
+  `xattr -dr com.apple.quarantine /Applications/pyhttp.app`. The in-app updater
+  clears it itself after a Homebrew update; a `brew upgrade` run in Terminal does not.
 
 Removing these warnings needs a Windows code-signing certificate and an Apple
 Developer ID (with notarization).
