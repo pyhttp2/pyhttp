@@ -150,7 +150,8 @@ only on `127.0.0.1`.
   certificates per host, default timeout, User-Agent (default `pyhttp/<version>`), editor font size, response
   below or beside the request, and in-app updates (the Windows builds and Homebrew installs update themselves, see *Updates* below).
 - **Git sync** (topbar → Git): the project's requests, environments, mocks and monitors as
-  JSON files in a Git repository, committed and pushed automatically on every change. See
+  JSON files in a Git repository, committed and pushed automatically on every change, and
+  pulled back in when a teammate pushes — share a collection without a cloud account. See
   *Git sync* below.
 - Native desktop window using the OS webview (WebView2 / WKWebView / WebKitGTK),
   with native save/open dialogs for export and import.
@@ -184,7 +185,9 @@ masked), auth, example bodies and tests.
 Click **Git** in the top bar, choose a folder and press *Turn on Git sync*. From then on the
 project's definitions live in a Git repository as well: every request, folder, environment,
 mock and monitor is one JSON file, and a change is **committed and pushed by itself** a few
-seconds after you stop editing, with the names of what changed as the commit message.
+seconds after you stop editing, with the names of what changed as the commit message. It
+works the other way too: what a teammate pushes is **pulled, merged and read into the
+project**, so a team can share one collection through an ordinary Git repository.
 
 ```
 pyhttp.json                      marks the folder as written by pyhttp
@@ -217,6 +220,13 @@ mocks/shop.json
   replaces yours under the same id, new ones appear, deleted ones go, and the window reloads
   to show it. Commits you make by hand in the folder are read back the same way. Edits to
   the files that are *not committed* are overwritten by the next sync.
+- **When a pull happens:** with your next edit, when the app starts, or when you press *Sync
+  now*. The remote is not checked on a timer, so a teammate's push does not show up while
+  the app sits idle.
+- **What a pull keeps:** request and folder ids (history and "send this request first" links
+  still point at the right request), and the local value of every 🔒 variable whose value
+  was left out of the file. A mock server whose route list changed gets the new list as a
+  whole, so the hit counts of its routes start again.
 - **Joining a repository:** give a new, empty project the remote URL and an empty folder; it
   starts from what the remote has. If the project already has content and the folder holds a
   different pyhttp project, nothing is replaced until you choose *Load the folder into this
@@ -512,6 +522,7 @@ pyhttp/
   db.py           SQLite access (requests, folders, environments, cookies, history, runs)
   runner.py       httpx execution (auth, cookies, redirects, proxy, body types), RunManager, file output
   mock.py         mock servers: route matching and templated answers under /mock/<name>/
+  gitsync.py      Git sync: definitions as JSON files, commit / pull / push, reading changes back
   templating.py   {{variable}}, {{prev.*}}, {{data.*}} and {{$dynamic}} substitution
   jsonc.py        strips // and /* */ comments from JSON bodies
   assertions.py   code-free tests and value extraction
