@@ -109,6 +109,32 @@ def editor_cursor(page, selector: str, anchor: int, head: int | None = None):
     page.evaluate("([sel, a, h]) => document.querySelector(sel)._enhanced.setCursor(a, h)", [selector, anchor, head])
 
 
+def test_editor_comment_toggle_covers_folded_block(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url)
+    page.click("#editor-tabs button[data-tab='body']")
+    page.click("#btn-body-add")
+    page.fill("#body-name", "folded")
+    ta = page.locator("#f-body")
+    text = '{\n  "a": {\n    "x": 1,\n    "y": 2\n  },\n  "b": 2\n}'
+    set_editor(page, "#f-body", text)
+    # fold the "a" object (second fold arrow), then Ctrl+/ with the cursor on its visible line
+    page.wait_for_function("document.querySelectorAll('#body-text-wrap .cm-foldGutter span[title=\"Fold line\"]').length >= 2")
+    page.click("#body-text-wrap .cm-foldGutter span[title=\"Fold line\"] >> nth=1")
+    page.wait_for_selector("#body-text-wrap .cm-foldPlaceholder")
+    editor_cursor(page, "#f-body", 4)
+    page.keyboard.press("Control+/")
+    assert ta.input_value() == '{\n  // "a": {\n  //   "x": 1,\n  //   "y": 2\n  // },\n  "b": 2\n}'
+    assert page.locator("#body-text-wrap .cm-foldPlaceholder").count() == 1  # still folded
+    # toggling again uncomments the whole block; the unfolded "b" line is untouched throughout
+    page.keyboard.press("Control+/")
+    assert ta.input_value() == text
+    # a line that is not folded still toggles on its own
+    editor_cursor(page, "#f-body", text.index('"b"'))
+    page.keyboard.press("Control+/")
+    assert ta.input_value() == text.replace('  "b": 2', '  // "b": 2')
+
+
 def test_editor_comment_toggle_and_json_status(page, servers):
     app_url, echo_url = servers
     new_request(page, echo_url)

@@ -213,6 +213,48 @@ function cmLanguage(name) {
     default: return [];
   }
 }
+// The folded ranges of a state as [{from, to}]. The bundle doesn't export the fold field, so ask
+// unfoldAll what it would unfold: it reports one effect per folded range to the dispatch it is given.
+function cmFoldedRanges(state) {
+  const out = [];
+  try {
+    window.CM.unfoldAll({ state, dispatch: (spec) => { for (const e of [].concat(spec.effects || [])) if (e && e.value && typeof e.value.from === 'number') out.push(e.value); } });
+  } catch (e) { /* no fold state: nothing is folded */ }
+  return out;
+}
+// Comment toggling that treats a folded block as one unit: a folded block is a single visible line,
+// but CodeMirror only comments the document lines the selection touches (the first one). Grow each
+// selection range over every fold on its lines, run the command on that, and keep the user's selection.
+function cmToggleCommentFolded(view, command) {
+  const state = view.state;
+  const folds = cmFoldedRanges(state);
+  if (!folds.length) return command(view);
+  let grew = false;
+  const spans = state.selection.ranges.map((r) => {
+    let from = state.doc.lineAt(r.from).from;
+    let to = state.doc.lineAt(r.to).to;
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const f of folds) {
+        if (f.from > to || f.to < from) continue;
+        const a = state.doc.lineAt(f.from).from;
+        const b = state.doc.lineAt(f.to).to;
+        if (a < from) { from = a; changed = true; }
+        if (b > to) { to = b; changed = true; }
+      }
+    }
+    if (from <state.doc.lineAt(r.from).from || to > state.doc.lineAt(r.to).to) grew = true;
+    return { from, to };
+  });
+  if (!grew) return command(view);
+  const Sel = state.selection.constructor; // EditorSelection (not exported by the bundle)
+  const expanded = state.update({ selection: Sel.create(spans.map((s) => Sel.range(s.from, s.to)), state.selection.mainIndex) }).state;
+  return command({
+    state: expanded,
+    dispatch: (tr) => view.dispatch({ changes: tr.changes, scrollIntoView: true, userEvent: 'input' }),
+  });
+}
+
 let cmThemeCache = null;
 function cmTheme() {
   const C = window.CM;
@@ -291,8 +333,8 @@ function enhanceTextarea(ta, opts = {}) {
   const keys = [
     { key: 'Mod-Enter', run: () => { if (typeof sendCurrent === 'function' && typeof state !== 'undefined' && state.current) sendCurrent(); return true; } },
     { key: 'Mod-b', run: () => { format(); return true; } },
-    { key: 'Mod-/', run: C.toggleComment },
-    { key: 'Shift-Alt-a', run: C.toggleBlockComment },
+    { key: 'Mod-/', run: (v) => cmToggleCommentFolded(v, C.toggleComment) },
+    { key: 'Shift-Alt-a', run: (v) => cmToggleCommentFolded(v, C.toggleBlockComment) },
     C.indentWithTab,
   ];
   // macOS: Mod- means Cmd, but the UI hints say Ctrl — accept both (elsewhere the extra binding is a no-op duplicate)
