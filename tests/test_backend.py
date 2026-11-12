@@ -1796,7 +1796,8 @@ def test_git_sync_reads_remote_changes_back(client, tmp_path):
     f2 = work / "collection" / "Mine.json"
     data = json.loads(f2.read_text(encoding="utf-8"))
     f2.write_text(json.dumps({**data, "name": "Renamed by hand"}, indent=2) + "\n", encoding="utf-8")
-    _git(work, "commit", "-q", "-am", "hand edit")
+    # with an identity of its own: a CI runner has no global user.name / user.email, and git refuses to commit without
+    _git(work, "-c", "user.name=Hand", "-c", "user.email=hand@example.com", "commit", "-q", "-am", "hand edit")
     st = client.post("/api/git/sync").json()
     assert st["state"] == "ok", st
     assert client.get(f"/api/requests/{mine['id']}").json()["name"] == "Renamed by hand"
