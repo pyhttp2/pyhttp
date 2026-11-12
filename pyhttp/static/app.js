@@ -21,6 +21,8 @@ async function api(path, { method = 'GET', body } = {}) {
     const detail = data && data.detail;
     throw new Error(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : res.statusText);
   }
+  // an edit schedules a Git commit on the server: show that on the Git button now, not at the next poll
+  if (method !== 'GET' && typeof gitNudge === 'function') gitNudge(path);
   return data;
 }
 

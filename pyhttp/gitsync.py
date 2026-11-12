@@ -419,7 +419,10 @@ class Syncer:
     def flush(self) -> None:
         """Sync now if a change is still waiting (before the project is switched or the app closes)."""
         if self._cancel():
-            self.sync()
+            try:
+                self.sync()
+            except Exception:  # noqa: BLE001 - the database is already closed (shutdown order): nothing left to sync
+                pass
 
     def reset(self) -> None:
         """Forget everything about the previous project (after a project switch)."""

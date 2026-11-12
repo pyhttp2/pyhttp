@@ -2920,6 +2920,16 @@ function gitChanged(redraw = false) {
   }
 }
 
+// Called after every call that changes something. With Git sync on, the server commits a few
+// seconds after an edit; the status is polled every 4 seconds, which could miss that short
+// "waiting to be committed" state altogether. Ask again right after the edit instead.
+const GIT_QUIET = /^\/(git|send|ws|resolve|views|history|runs|console|oauth|cookies|open-path|update|import\/(detect|parse))/;
+function gitNudge(path) {
+  if (!gitSync.info || gitSync.info.state === 'off' || GIT_QUIET.test(path || '')) return;
+  clearTimeout(gitSync.nudge);
+  gitSync.nudge = setTimeout(loadGit, 300);
+}
+
 async function loadGit() {
   try { gitSync.info = await api('/git'); } catch { return; }
   gitChanged();
