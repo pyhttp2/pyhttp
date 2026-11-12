@@ -1892,6 +1892,7 @@ function initFeatures() {
   setTimeout(() => checkForUpdate(false), 2500);
   initMonitors();
   initMocks();
+  initGit();
 }
 
 // ============================================================== monitors
@@ -2430,6 +2431,142 @@ function initMocks() {
   $('#btn-mocks').addEventListener('click', openMocksModal);
   loadMocks(false);
   mocks.timer = setInterval(() => loadMocks(true), 30000);   // renders only while the dialog is open
+}
+
+// ============================================================== git sync
+// The project's definitions as files in a Git repository. The server writes, commits and pushes
+// a few seconds after every change; here is only the top bar button (state at a glance) and the
+// Git tab of Settings (folder, remote, the automatic switches).
+const gitSync = { info: null, timer: null };
+
+function gitSummary(g) {
+  if (!g || g.state === 'off') return 'Git sync is off.';
+  if (g.state === 'syncing') return 'Syncing…';
+  if (g.state === 'pending') return 'Changes are waiting to be committed…';
+  if (g.state === 'error') return g.error;
+  if (!g.synced_at) return 'Not synced yet.';
+  const parts = [g.commit ? `Last commit ${g.commit.hash} “${g.commit.subject}”, ${agoText(g.commit.at)}` : 'Nothing committed yet'];
+  if (g.dirty) parts.push('changes not committed (automatic commit is off)');
+  if (!g.remote_name) parts.push('no remote, so commits stay on this computer');
+  else if (g.unpushed) parts.push(`not pushed to ${g.remote_name} yet`);
+  else if (g.commit) parts.push(`pushed to ${g.remote_name}`);
+  return parts.join(' · ');
+}
+
+function renderGitButton() {
+  const g = gitSync.info;
+  const on = !!g && g.state !== 'off';
+  const kind = !on ? '' : g.state === 'error' ? 'err' : g.state === 'ok' && !g.dirty && !g.unpushed ? 'ok' : 'busy';
+  const dot = $('#git-dot');
+  dot.hidden = !on;
+  dot.className = 'git-dot ' + kind;
+  $('#btn-git').dataset.state = on ? g.state : 'off';
+  $('#btn-git').title = on ? `Git sync: ${gitSummary(g)}\n${g.dir}`
+    : 'Git sync: keep this project\'s requests, environments and mocks in a Git repository, committed and pushed on every change. Click to set it up';
+}
+
+function renderGitStatus() {
+  const el = $('#git-status');
+  const g = gitSync.info;
+  if (!el || !g) return;
+  el.classList.toggle('err', g.state === 'error');
+  const where = g.state !== 'off' && g.repo ? `Repository ${g.repo}${g.branch ? `, branch ${g.branch}` : ''}` : '';
+  el.innerHTML = `<div>${esc(gitSummary(g))}</div>${where ? `<div class="muted">${esc(where)}</div>` : ''}`;
+}
+
+async function loadGit() {
+  try { gitSync.info = await api('/git'); } catch { return; }
+  renderGitButton();
+  renderGitStatus();
+  // the server commits on its own a few seconds after an edit: keep the button honest while it is on
+  const on = gitSync.info.state !== 'off';
+  if (on && !gitSync.timer) gitSync.timer = setInterval(() => { if (!document.hidden) loadGit(); }, 4000);
+  if (!on && gitSync.timer) { clearInterval(gitSync.timer); gitSync.timer = null; }
+}
+
+// The Git tab of Settings. Folder and remote take effect with the button (they create a
+// repository and push); the switches save at once.
+function renderGitPanel(box) {
+  if (!box) return;
+  const g = gitSync.info || { state: 'off', dir: '', remote: '', auto_commit: true, auto_push: true, secrets: false, git: true, suggested_dir: '' };
+  const on = g.state !== 'off';
+  const sw = (id, label, desc, checked) => `<label class="switch-row"><span class="txt"><b>${label}</b><span class="muted small">${desc}</span></span><span class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span></span></span></label>`;
+  box.innerHTML = `
+    <div class="set-section">
+      <h4>Git sync</h4>
+      <p class="muted small set-intro">Keeps this project's definitions in a Git repository: every request, folder, environment, mock and monitor is a JSON file,
+        and a change is committed and pushed a few seconds after you make it. History, run outputs and cookies are not included. Each project has its own folder.</p>
+      ${g.git ? '' : '<div class="ssl-warn">⚠ Git was not found on this computer. Install it from git-scm.com and restart pyhttp.</div>'}
+      <div class="set-grid">
+        <div class="set-field wide"><span class="set-label">Folder</span>
+          <span class="git-dir-row"><input id="git-dir" class="mono" value="${esc(g.dir || '')}" placeholder="${esc(g.suggested_dir || '')}" spellcheck="false"><button id="git-browse" hidden>Browse…</button></span>
+          <span class="set-hint muted small">A Git repository, or a folder inside one (to keep the requests next to the code they test). Any other folder becomes a new repository. Only the files pyhttp writes are committed.${on ? '' : ' Leave it empty to use the folder shown.'}</span></div>
+        <div class="set-field wide"><span class="set-label">Remote URL</span>
+          <input id="git-remote" class="mono" value="${esc(g.remote || '')}" placeholder="https://github.com/you/api-requests.git" spellcheck="false">
+          <span class="set-hint muted small">Where to push; it becomes the <code>origin</code> remote. Leave it empty to use the remote the repository already has. Without a remote, commits stay on this computer.</span></div>
+      </div>
+      <div class="set-actions">
+        <button id="git-apply" class="primary">${on ? 'Apply' : 'Turn on Git sync'}</button>
+        ${on ? '<button id="git-sync" title="Write the files, commit and push now, whatever the switches below say">Sync now</button><button id="git-open" class="link small">Open folder</button><span class="grow"></span><button id="git-off" class="link small">Turn off</button>' : ''}
+      </div>
+      <div id="git-status" class="git-status small"></div>
+    </div>
+    <div class="set-section">
+      <h4>When something changes</h4>
+      <div class="switch-list">
+        ${sw('git-auto-commit', 'Commit automatically', 'A few seconds after the last edit, with the names of what changed as the message. Off: the files are still written, and “Sync now” commits them.', g.auto_commit)}
+        ${sw('git-auto-push', 'Push automatically', 'After every commit. A push that fails (offline, no access) is tried again with the next change. Off: “Sync now” pushes.', g.auto_push)}
+        ${sw('git-secrets', 'Include secret values', 'Off: the values of variables marked 🔒 are written empty, so they never reach the repository. Tokens and passwords typed straight into a request are always written.', g.secrets)}
+      </div>
+    </div>`;
+  renderGitStatus();
+  const done = (info, msg) => {
+    gitSync.info = info;
+    renderGitButton();
+    renderGitPanel(box);
+    if (info.state === 'error') toast('Git: ' + info.error, 'error');
+    else if (msg) toast(msg, 'ok');
+    loadGit();   // starts or stops the polling
+  };
+  const busy = async (btn, label, work) => {
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = label;
+    try { await work(); } catch (e) { toast(e.message, 'error'); btn.disabled = false; btn.textContent = old; }
+  };
+  const pick = native() && native().pick_folder;
+  $('#git-browse').hidden = !pick;
+  $('#git-browse').addEventListener('click', async () => {
+    const path = await native().pick_folder();
+    if (path) $('#git-dir').value = path;
+  });
+  $('#git-apply').addEventListener('click', (e) => busy(e.currentTarget, 'Working…', async () => {
+    const dir = $('#git-dir').value.trim() || (on ? '' : g.suggested_dir);
+    if (!dir) throw new Error('Choose a folder (or use “Turn off” to stop syncing)');
+    const info = await api('/git', { method: 'PUT', body: {
+      dir, remote: $('#git-remote').value.trim(), auto_commit: $('#git-auto-commit').checked,
+      auto_push: $('#git-auto-push').checked, secrets: $('#git-secrets').checked } });
+    done(info, on ? 'Git settings saved' : 'Git sync is on');
+  }));
+  [['git-auto-commit', 'auto_commit'], ['git-auto-push', 'auto_push'], ['git-secrets', 'secrets']].forEach(([id, key]) => {
+    $('#' + id).addEventListener('change', async (e) => {
+      if (!on) return;   // not on yet: the switches are sent along with “Turn on”
+      try { done(await api('/git', { method: 'PUT', body: { [key]: e.target.checked } })); } catch (err) { toast(err.message, 'error'); }
+    });
+  });
+  if (!on) return;
+  $('#git-sync').addEventListener('click', (e) => busy(e.currentTarget, 'Syncing…', async () => {
+    done(await api('/git/sync', { method: 'POST' }), 'Synced');
+  }));
+  $('#git-open').addEventListener('click', () => api('/open-path', { method: 'POST', body: { path: g.dir } }).catch((e) => toast(e.message, 'error')));
+  $('#git-off').addEventListener('click', async () => {
+    try { done(await api('/git', { method: 'PUT', body: { dir: '' } }), 'Git sync is off. The folder and its history are kept'); } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+function initGit() {
+  $('#btn-git').addEventListener('click', () => openSettings('git'));
+  loadGit();
 }
 
 document.addEventListener('DOMContentLoaded', initFeatures);

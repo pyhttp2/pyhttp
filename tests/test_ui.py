@@ -109,6 +109,26 @@ def editor_cursor(page, selector: str, anchor: int, head: int | None = None):
     page.evaluate("([sel, a, h]) => document.querySelector(sel)._enhanced.setCursor(a, h)", [selector, anchor, head])
 
 
+def test_sidebar_ignores_a_late_answer_to_an_older_search(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "race alpha")
+    new_request(page, echo_url, "race beta")
+    total = page.locator("#req-list .req-item").count()
+    assert total >= 2
+
+    # the filtered query answers slowly, so it arrives after the unfiltered one that follows it
+    def slow(route):
+        time.sleep(0.8)
+        route.continue_()
+    page.route("**/api/requests?q=race+alpha*", slow)
+    page.fill("#search", "race alpha")
+    page.wait_for_timeout(250)          # past the search debounce: the filtered request is out
+    page.fill("#search", "")
+    page.wait_for_timeout(1500)         # both answers are in
+    page.unroute("**/api/requests?q=race+alpha*")
+    assert page.locator("#req-list .req-item").count() == total
+
+
 def test_editor_comment_toggle_covers_folded_block(page, servers):
     app_url, echo_url = servers
     new_request(page, echo_url)
@@ -1205,6 +1225,45 @@ def test_send_one_body_button_keeps_checkboxes(page, servers):
     # with "No body" the per-body buttons are hidden
     page.select_option("#f-body-type", "none")
     assert page.locator("#body-list .body-item .bsend").nth(0).is_hidden()
+
+
+def test_git_sync_from_topbar(page, servers, tmp_path):
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    app_url, echo_url = servers
+    new_request(page, echo_url, "git ui one")
+    # the top bar button opens Settings on its Git tab; off until a folder is chosen
+    assert page.locator("#git-dot").is_hidden()
+    page.click("#btn-git")
+    page.wait_for_selector("#git-dir")
+    assert page.locator("#git-apply").inner_text() == "Turn on Git sync"
+    assert page.is_checked("#git-auto-commit") and page.is_checked("#git-auto-push") and not page.is_checked("#git-secrets")
+    work = tmp_path / "defs"
+    page.fill("#git-dir", str(work))
+    page.click("#git-apply")
+    page.wait_for_selector("#git-sync")                       # the panel redraws once it is on
+    page.wait_for_selector("#git-dot.ok")
+    assert "Last commit" in page.locator("#git-status").inner_text()
+    assert "no remote" in page.locator("#git-status").inner_text()
+    assert (work / "collection" / "git ui one.json").exists()
+    page.click("#modal-close")
+    # an edit in the app is committed without touching anything
+    new_request(page, echo_url, "git ui two")
+    page.wait_for_function("document.querySelector('#git-dot').classList.contains('busy')", timeout=8000)
+    page.wait_for_selector("#git-dot.ok", timeout=15000)
+    log = subprocess.run(["git", "-C", str(work), "log", "--format=%s"], capture_output=True, text=True, check=True).stdout
+    assert "git ui two" in log
+    assert (work / "collection" / "git ui two.json").exists()
+    # turn it off again (the server is shared with the other tests)
+    page.click("#btn-git")
+    page.click("#git-off")
+    page.wait_for_selector("#git-sync", state="detached")
+    assert page.locator("#git-apply").inner_text() == "Turn on Git sync"
+    assert page.locator("#git-dot").is_hidden()
+    page.click("#modal-close")
 
 
 def test_project_switch_from_topbar(page, servers):

@@ -20,8 +20,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, console, curl, db, docs, mock, monitors, oauth2, openapi, postman, projects,
-               runner, templating, updater)
+from . import (USER_AGENT, __version__, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman,
+               projects, runner, templating, updater)
 from .templating import build_context, render
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -248,6 +248,12 @@ class DataFileIn(BaseModel):
     filename: str = ""
 
 
+# Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
+# schedule a sync. Variables a script sets while sending go out with the next edit.
+_GIT_QUIET = ("/api/git", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+              "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
+
+
 def _open_in_file_manager(path: Path) -> None:
     if sys.platform.startswith("win"):
         os.startfile(str(path))  # type: ignore[attr-defined]
@@ -453,14 +459,18 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     update_cache: dict[str, Any] = {}
     self_updater = updater.Updater(data_dir)
     current = {"id": project_id}   # the project this app instance has open
+    git_payload: dict[str, Any] = {}   # "fn": the export function, defined further down
+    git = gitsync.Syncer(lambda: git_payload["fn"]())
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         scheduler.start()
+        git.touch()   # catch up on anything that was not committed or pushed last time
         try:
             yield
         finally:
             scheduler.stop()
+            await asyncio.to_thread(git.flush)
 
     app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 
@@ -471,11 +481,14 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         """Switch this app to another project's database and output folder."""
         new_db, new_out = registry.paths(pid)
         new_out.mkdir(parents=True, exist_ok=True)
+        git.flush()       # a change still waiting to be committed belongs to the project being left
         db.switch(new_db)
         db.mark_interrupted_runs()
         manager.output_root = new_out
         oauth2.forget()   # tokens belong to the project they were fetched in
         current["id"] = pid
+        git.reset()
+        git.touch()
 
     # ------------------------------------------------------------------ meta
     @app.get("/api/meta")
@@ -1340,6 +1353,35 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     def export_all() -> dict[str, Any]:
         return _export_payload()
 
+    # ------------------------------------------------------------------- git
+    # The project's definitions as files in a Git repository, committed and pushed a few seconds
+    # after every change (see gitsync.py). Off until a folder is chosen.
+    git_payload["fn"] = _export_payload
+
+    def _git_status() -> dict[str, Any]:
+        name = re.sub(r"[^\w.-]+", "-", current_project()["name"]).strip("-") or "project"
+        return {**git.status(), "suggested_dir": str(Path.home() / "pyhttp-git" / name)}
+
+    @app.get("/api/git")
+    def git_status() -> dict[str, Any]:
+        return _git_status()
+
+    @app.put("/api/git")
+    def git_configure(body: dict[str, Any]) -> dict[str, Any]:
+        """Change the Git settings (dir, remote, auto_commit, auto_push, secrets) and sync at once,
+        so a wrong folder or remote shows its error right away. An empty ``dir`` turns it off."""
+        git.set_config(body)   # a bad folder is a ValueError: answered 400 by the handler below
+        git.sync(interactive=True)
+        return _git_status()
+
+    @app.post("/api/git/sync")
+    def git_sync() -> dict[str, Any]:
+        """Write, commit and push now, whatever the automatic switches say."""
+        if not git.config()["dir"]:
+            raise HTTPException(400, "Git sync is off: choose a folder first")
+        git.sync(force=True, interactive=True)
+        return _git_status()
+
     @app.get("/api/export/docs")
     def export_docs(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
         """The collection (or one folder) as Markdown documentation."""
@@ -1477,6 +1519,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         templating.BUILTINS["mock_url"] = f"{_own_origin(request)}/mock"
         response = await call_next(request)
         path = request.url.path
+        if (request.method in ("POST", "PUT", "PATCH", "DELETE") and response.status_code < 400
+                and path.startswith("/api/") and not path.startswith(_GIT_QUIET)):
+            git.touch()   # something was edited: Git sync commits it once the edits stop
         if path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         elif path == "/":

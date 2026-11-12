@@ -180,6 +180,16 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 .set-hint { line-height: 1.4; }
 .set-intro { margin: 0 0 10px; }
 .set-actions { display: flex; align-items: center; gap: 10px; margin: 16px 0 8px; }
+/* Git sync: the top bar button with its state dot, and the Git tab of Settings */
+.git-btn { display: inline-flex; align-items: center; gap: 6px; }
+.git-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.git-dot.ok { background: var(--ok); }
+.git-dot.err { background: var(--danger); }
+.git-dot.busy { background: var(--warn); }
+.git-dir-row { display: flex; gap: 8px; }
+.git-dir-row input { flex: 1; }
+.git-status { line-height: 1.5; min-height: 18px; user-select: text; overflow-wrap: anywhere; }
+.git-status.err { color: var(--danger); }
 .cert-head { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 28px; gap: 6px; margin-bottom: 4px; padding: 0 2px; }
 #set-certs .cert-row { margin-bottom: 6px; }
 .md { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }

@@ -149,6 +149,9 @@ only on `127.0.0.1`.
 - **Settings**: follow redirects, max redirects, proxy with bypass list, client
   certificates per host, default timeout, User-Agent (default `pyhttp/<version>`), editor font size, response
   below or beside the request, and in-app updates (the Windows builds and Homebrew installs update themselves, see *Updates* below).
+- **Git sync** (topbar → Git): the project's requests, environments, mocks and monitors as
+  JSON files in a Git repository, committed and pushed automatically on every change. See
+  *Git sync* below.
 - Native desktop window using the OS webview (WebView2 / WKWebView / WebKitGTK),
   with native save/open dialogs for export and import.
 - No Node, no Electron, no build step to run it. Python 3.10+ only (the editor is a
@@ -175,6 +178,42 @@ mocks, monitors) to one file that imports into another project or machine; monit
 "send this request first" links are kept. **Export ▾ → Documentation** writes the
 collection as Markdown: folders, requests, parameters, headers (credential-looking values
 masked), auth, example bodies and tests.
+
+## Git sync
+
+Click **Git** in the top bar, choose a folder and press *Turn on Git sync*. From then on the
+project's definitions live in a Git repository as well: every request, folder, environment,
+mock and monitor is one JSON file, and a change is **committed and pushed by itself** a few
+seconds after you stop editing, with the names of what changed as the commit message.
+
+```
+pyhttp.json                      marks the folder as written by pyhttp
+variables.json                   global variables
+monitors.json
+collection/Users/_folder.json    a folder's own settings
+collection/Users/Login.json      one request
+environments/Prod.json
+mocks/shop.json
+```
+
+- **The folder** can be a repository, a folder inside one (keep the requests next to the code
+  they test), or neither — then a repository is created in it. Only the paths above are
+  staged, committed or deleted; other files and uncommitted work in the same repository are
+  left alone.
+- **The remote** is optional. Give a URL and it becomes `origin`; leave it empty and the
+  remote the repository already has is used. Without any remote, commits stay local. Pushing
+  uses your own Git credentials (credential manager or SSH key). A push that fails is tried
+  again with the next change, and the dot on the Git button turns red with the reason in its
+  tooltip.
+- **Settings → Git** has the switches: *Commit automatically* and *Push automatically* (both
+  on by default; with them off, *Sync now* commits and pushes), and *Include secret values*
+  (off by default: values of variables marked 🔒 are written empty). Tokens and passwords
+  typed straight into a request are part of that request and are always written — use a 🔒
+  variable for anything that must not reach the repository.
+- History, run outputs and cookies are never written. Each project has its own Git folder.
+  Sending a request does not commit by itself; variables a script sets go out with the next edit.
+- The database stays the source of truth: the files are written from it, and edits made to
+  the files (or pulled from the remote) are not read back.
 
 ## Mock servers
 

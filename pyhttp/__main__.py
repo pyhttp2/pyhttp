@@ -143,6 +143,15 @@ class NativeApi:
             return None
         return result if isinstance(result, str) else result[0]
 
+    def pick_folder(self) -> str | None:
+        """Choose a folder and return its path (the Git sync folder)."""
+        import webview
+
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        if not result:
+            return None
+        return result if isinstance(result, str) else result[0]
+
     def open_url(self, url: str) -> bool:
         if not url.startswith(("http://", "https://")):
             return False

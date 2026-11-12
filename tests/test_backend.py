@@ -1563,3 +1563,123 @@ def test_updater_explains_brew_failures(tmp_path):
     # the terminal fallback for a brew install trusts the tap first and uses the qualified token
     cmds = updater._commands("brew")[2]
     assert cmds[0] == f"brew trust {updater.TAP}" and f"brew upgrade --cask {updater.QUALIFIED_CASK}" in cmds
+
+
+# ------------------------------------------------------------------ git sync
+def _git(cwd, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
+
+
+needs_git = pytest.mark.skipif(not __import__("shutil").which("git"), reason="git is not installed")
+
+
+def test_git_tree_layout_and_secrets():
+    from pyhttp import gitsync
+
+    payload = {
+        "project": "Shop", "variables": {"base": "http://x"},
+        "folders": [{"id": "f1", "name": "Users", "parent_id": None, "variables": [{"key": "k", "value": "s3", "secret": True}]},
+                    {"id": "f2", "name": "Admin: v2?", "parent_id": "f1", "variables": []}],
+        "requests": [{"id": "a1", "name": "List", "folder_id": "f1"}, {"id": "a2", "name": "list", "folder_id": "f1"},
+                     {"id": "a3", "name": "CON", "folder_id": "f2"}, {"id": "a4", "name": "_folder", "folder_id": None}],
+        "environments": [{"name": "Prod", "variables": [{"key": "token", "value": "hunter2", "secret": True},
+                                                        {"key": "host", "value": "prod", "secret": False}]}],
+        "mocks": [{"name": "Fake", "slug": "fake", "routes": []}], "monitors": [],
+    }
+    files = gitsync.build_tree(payload)
+    assert set(files) == {
+        "pyhttp.json", "variables.json", "monitors.json", "environments/Prod.json", "mocks/fake.json",
+        "collection/Users/_folder.json", "collection/Users/List.json", "collection/Users/list (a2).json",
+        "collection/Users/Admin v2/_folder.json", "collection/Users/Admin v2/CON_.json", "collection/_folder (a4).json"}
+    prod = json.loads(files["environments/Prod.json"])
+    assert [v["value"] for v in prod["variables"]] == ["", "prod"]          # secret values stay out by default
+    assert json.loads(files["collection/Users/_folder.json"])["variables"][0]["value"] == ""
+    assert "hunter2" in gitsync.build_tree(payload, secrets=True)["environments/Prod.json"]
+
+
+@needs_git
+def test_git_sync_commits_and_pushes_on_change(client, tmp_path):
+    from pyhttp import gitsync
+
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    work = tmp_path / "work"
+    assert client.get("/api/git").json()["state"] == "off"
+    folder = client.post("/api/folders", json={"name": "Users"}).json()
+    r = client.post("/api/requests", json={"name": "Login", "url": "http://x/login", "folder_id": folder["id"]}).json()
+
+    # turning it on writes everything, commits and pushes at once (the defaults are automatic)
+    st = client.put("/api/git", json={"dir": str(work), "remote": str(remote)}).json()
+    assert st["state"] == "ok" and st["error"] == "", st
+    assert st["auto_commit"] and st["auto_push"] and not st["secrets"]
+    assert st["commit"] and not st["unpushed"] and not st["dirty"] and st["remote_name"] == "origin"
+    assert json.loads((work / "collection" / "Users" / "Login.json").read_text(encoding="utf-8"))["url"] == "http://x/login"
+    assert _git(remote, "log", "--oneline").count("\n") == 0   # one commit arrived
+
+    # an edit schedules a sync by itself; the commit names what changed and reaches the remote
+    gitsync.Syncer.DELAY, old_delay = 0.2, gitsync.Syncer.DELAY
+    try:
+        client.put(f"/api/requests/{r['id']}", json={**r, "url": "http://x/v2/login"})
+        assert client.get("/api/git").json()["state"] in ("pending", "syncing")
+        for _ in range(100):
+            if "v2" in _git(remote, "show", "HEAD:collection/Users/Login.json"):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("the edit was not pushed")
+        assert _git(remote, "log", "-1", "--format=%s") == "pyhttp: update Login"
+        # sending a request is not an edit: nothing is scheduled
+        client.post("/api/send", json={"name": "x", "url": "http://127.0.0.1:9/none", "timeout": 1})
+        assert client.get("/api/git").json()["state"] == "ok"
+    finally:
+        gitsync.Syncer.DELAY = old_delay
+
+    # renaming moves the file, deleting removes it; nothing stale is left behind
+    client.put(f"/api/requests/{r['id']}", json={**r, "name": "Sign in"})
+    st = client.post("/api/git/sync").json()
+    assert (work / "collection" / "Users" / "Sign in.json").exists() and not (work / "collection" / "Users" / "Login.json").exists()
+    client.delete(f"/api/folders/{folder['id']}")
+    st = client.post("/api/git/sync").json()
+    assert st["state"] == "ok" and not (work / "collection" / "Users").exists()
+    assert "collection/Users" not in _git(remote, "ls-tree", "-r", "--name-only", "HEAD")
+
+    # with the switches off nothing is committed until "Sync now"
+    st = client.put("/api/git", json={"auto_commit": False, "auto_push": False}).json()
+    client.post("/api/requests", json={"name": "Later", "url": "http://x/later"})
+    before = _git(work, "rev-parse", "HEAD")
+    st = client.put("/api/git", json={}).json()   # a plain sync: files written, no commit
+    assert st["dirty"] and (work / "collection" / "Later.json").exists() and _git(work, "rev-parse", "HEAD") == before
+    st = client.post("/api/git/sync").json()
+    assert not st["dirty"] and not st["unpushed"] and _git(remote, "rev-parse", "HEAD") == _git(work, "rev-parse", "HEAD")
+
+    # off: an empty folder setting; the repository stays
+    assert client.put("/api/git", json={"dir": ""}).json()["state"] == "off"
+    assert client.post("/api/git/sync").status_code == 400
+    assert (work / ".git").exists()
+
+
+@needs_git
+def test_git_sync_inside_an_existing_repository_leaves_other_work_alone(client, tmp_path):
+    repo = tmp_path / "app"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "main.py").write_text("print('wip')\n", encoding="utf-8")       # the user's own uncommitted work
+    client.post("/api/requests", json={"name": "Ping", "url": "http://x/ping"})
+    st = client.put("/api/git", json={"dir": str(repo / "api requests")}).json()
+    assert st["state"] == "ok", st
+    assert not st["remote_name"] and not st["unpushed"]                      # no remote: commits stay local, no error
+    assert Path(st["repo"]).resolve() == repo.resolve()
+    assert _git(repo, "ls-tree", "-r", "--name-only", "HEAD").splitlines() == [
+        "api requests/collection/Ping.json", "api requests/monitors.json", "api requests/pyhttp.json", "api requests/variables.json"]
+    assert "?? main.py" in _git(repo, "status", "--porcelain")
+
+    # a folder that already holds a "collection" pyhttp did not write is refused, not overwritten
+    other = tmp_path / "other"
+    (other / "collection").mkdir(parents=True)
+    (other / "collection" / "mine.json").write_text("{}", encoding="utf-8")
+    st = client.put("/api/git", json={"dir": str(other)}).json()
+    assert st["state"] == "error" and "did not write" in st["error"]
+    assert (other / "collection" / "mine.json").exists()
+    assert client.put("/api/git", json={"dir": "relative/path"}).status_code == 400

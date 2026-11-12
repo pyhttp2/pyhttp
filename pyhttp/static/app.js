@@ -276,11 +276,16 @@ const state = {
 const isSelected = (id) => state.selected.some((s) => s.id === id);
 
 // --------------------------------------------------------------- collection
+let loadRequestsSeq = 0;
 async function loadRequests() {
+  const seq = ++loadRequestsSeq;
   const qs = new URLSearchParams({ q: state.q, tag: state.tag, fields: 'list' });   // sidebar rows only, never body text
   const [requests, tags, folders] = await Promise.all([
     api('/requests?' + qs.toString()), api('/tags'), api('/folders'),
   ]);
+  // Calls overlap (typing in the search box, autosave): only the newest may fill the list, or a slow
+  // answer to an older, filtered query would land last and leave a few rows under an empty search box.
+  if (seq !== loadRequestsSeq) return;
   state.requests = requests.filter((r) => !pendingDeletes.has(r.id));
   state.tags = tags;
   state.folders = folders;
@@ -2583,7 +2588,7 @@ async function saveSettings(patch) {
     applyAppSettings();
   } catch (e) { toast('Could not save settings: ' + e.message, 'error'); }
 }
-function openSettings() {
+function openSettings(tab) {   // tab: the one to show ('git', 'network'…); also used as a click handler
   const themes = [['dark', '☾', 'Dark'], ['light', '☀', 'Light'], ['system', '◐', 'System']];
   const s = appSettings;
   const sw = (id, label, desc, on) => `<label class="switch-row"><span class="txt"><b>${label}</b><span class="muted small">${desc}</span></span><span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></span></label>`;
@@ -2591,7 +2596,7 @@ function openSettings() {
   const fld = (label, control, hint = '', cls = '') => `<div class="set-field ${cls}"><span class="set-label">${label}</span>${control}${hint ? `<span class="set-hint muted small">${hint}</span>` : ''}</div>`;
   openModal('Settings', `
     <div class="set-tabs tabs small" id="set-tabs">
-      <button data-tab="general" class="active">General</button><button data-tab="network" >Network</button><button data-tab="certs">Certificates</button><button data-tab="ai">AI (MCP)</button><button data-tab="about">About</button>
+      <button data-tab="general" class="active">General</button><button data-tab="network" >Network</button><button data-tab="certs">Certificates</button><button data-tab="git">Git</button><button data-tab="ai">AI (MCP)</button><button data-tab="about">About</button>
     </div>
     <div class="tab-panels" id="set-panels">
     <div class="tab-panel" data-panel="general">
@@ -2641,6 +2646,7 @@ function openSettings() {
         <button class="link" id="set-cert-add">+ Add certificate</button>
       </div>
     </div>
+    <div class="tab-panel" data-panel="git" hidden><div id="set-git"></div></div>
     <div class="tab-panel" data-panel="ai" hidden>
       <div class="set-section">
         <h4>MCP server</h4>
@@ -2694,6 +2700,8 @@ function openSettings() {
     </div>
   `, [{ label: 'Done', cls: 'primary', onClick: closeModal }]);
   bindTabs($('#set-tabs'), $('#set-panels'));
+  renderGitPanel($('#set-git'));
+  if (typeof tab === 'string') showTab($('#set-tabs'), tab);
   $$('#set-theme button').forEach((b) => b.addEventListener('click', async () => {
     $$('#set-theme button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
     await saveSettings({ theme: b.dataset.theme });

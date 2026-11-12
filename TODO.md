@@ -3,6 +3,16 @@
 Status: `[x]` done · `[~]` in progress · `[ ]` open. Newest decisions at the top of each
 section. Keep this file honest: when an item ships, tick it and say where (file or release).
 
+## Shipped on 2026-11-12
+
+- [x] **Git sync.** Top bar → Git: the project's definitions (requests, folders, environments,
+  variables, mocks, monitors) as one JSON file each in a Git repository, committed and pushed
+  a few seconds after every change. Automatic commit and push are the default and can be
+  switched off in Settings → Git; secret variable values stay out unless asked for.
+  → `pyhttp/gitsync.py`, `/api/git*`, `renderGitPanel()` in `features.js`.
+- [ ] Git sync, the other direction: read the files back (pull a teammate's changes into the
+  database). Today the database is the only source; a rejected push is reported, not merged.
+
 ## Shipped on 2026-11-06 (second pass)
 
 - [x] **Light sidebar endpoint.** `GET /api/requests?fields=list` returns only what the tree
