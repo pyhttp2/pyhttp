@@ -205,15 +205,29 @@ mocks/shop.json
   uses your own Git credentials (credential manager or SSH key). A push that fails is tried
   again with the next change, and the dot on the Git button turns red with the reason in its
   tooltip.
-- **Settings → Git** has the switches: *Commit automatically* and *Push automatically* (both
-  on by default; with them off, *Sync now* commits and pushes), and *Include secret values*
+- **Settings → Git** has the switches: *Commit automatically*, *Push automatically* and *Pull
+  automatically* (all on by default; with them off, *Sync now* does it), and *Include secret values*
   (off by default: values of variables marked 🔒 are written empty). Tokens and passwords
   typed straight into a request are part of that request and are always written — use a 🔒
   variable for anything that must not reach the repository.
 - History, run outputs and cookies are never written. Each project has its own Git folder.
   Sending a request does not commit by itself; variables a script sets go out with the next edit.
-- The database stays the source of truth: the files are written from it, and edits made to
-  the files (or pulled from the remote) are not read back.
+- **It works both ways.** With every sync (and when the app starts) the remote is fetched and
+  merged, and what changed there is read into the project: a teammate's edited request
+  replaces yours under the same id, new ones appear, deleted ones go, and the window reloads
+  to show it. Commits you make by hand in the folder are read back the same way. Edits to
+  the files that are *not committed* are overwritten by the next sync.
+- **Joining a repository:** give a new, empty project the remote URL and an empty folder; it
+  starts from what the remote has. If the project already has content and the folder holds a
+  different pyhttp project, nothing is replaced until you choose *Load the folder into this
+  project* or *Overwrite the folder with this project*.
+- **Conflicts:** when you and the remote changed the same request, the merge is undone and
+  the Git tab asks: *Take the remote version* or *Keep my version*. Changes to different
+  requests merge by themselves. If a pull arrives while you are typing in a request, the
+  window does not reload under you (a toast offers *Reload*), and what you save afterwards
+  wins for that request.
+- In a repository shared with code, *Pull automatically* merges the remote branch into the
+  branch that is checked out, code included. Turn it off there if you would rather pull yourself.
 
 ## Mock servers
 
@@ -453,8 +467,9 @@ bundle, like `dpkg-shlibdeps`). Build on the oldest release you want to support:
 ### Build both on GitHub (no Mac needed)
 
 `.github/workflows/build.yml` builds the Windows `.exe` and the macOS `.dmg` on
-GitHub's machines. Every push to `main` tests and builds (files appear under the
-run's *Artifacts*); nothing is published. To release:
+GitHub's machines. Every push to `main` only runs the tests (Windows, macOS, Linux).
+For a test build without releasing, run the workflow by hand from the Actions tab
+(files appear under the run's *Artifacts* for a day). To release:
 
 ```sh
 python packaging/bump.py 0.1.2

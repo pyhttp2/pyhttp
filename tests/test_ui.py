@@ -1241,6 +1241,7 @@ def test_git_sync_from_topbar(page, servers, tmp_path):
     page.wait_for_selector("#git-dir")
     assert page.locator("#git-apply").inner_text() == "Turn on Git sync"
     assert page.is_checked("#git-auto-commit") and page.is_checked("#git-auto-push") and not page.is_checked("#git-secrets")
+    assert page.is_checked("#git-auto-pull")
     work = tmp_path / "defs"
     page.fill("#git-dir", str(work))
     page.click("#git-apply")
@@ -1257,6 +1258,19 @@ def test_git_sync_from_topbar(page, servers, tmp_path):
     log = subprocess.run(["git", "-C", str(work), "log", "--format=%s"], capture_output=True, text=True, check=True).stdout
     assert "git ui two" in log
     assert (work / "collection" / "git ui two.json").exists()
+    # a commit from outside the app is read back: the window reloads and shows the new name
+    f = work / "collection" / "git ui two.json"
+    data = json.loads(f.read_text(encoding="utf-8"))
+    f.write_text(json.dumps({**data, "name": "git ui renamed"}, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "-c", "user.name=t", "-c", "user.email=t@e.c", "commit", "-qam", "outside"], check=True)
+    page.click("#btn-git")
+    # leaving the URL field autosaves once more; an autosave of the open request during the
+    # sync would put its old name back (last write wins), so let it finish first
+    page.wait_for_function("!autosave.dirty && !autosave.inFlight")
+    page.click("#git-sync")
+    page.wait_for_selector("#req-list .req-item:has-text('git ui renamed')", timeout=15000)
+    page.wait_for_selector("#git-dot.ok")
+    assert page.locator("#modal").is_hidden()                 # reloaded: the dialog is gone
     # turn it off again (the server is shared with the other tests)
     page.click("#btn-git")
     page.click("#git-off")

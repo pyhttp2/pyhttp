@@ -190,6 +190,7 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 .git-dir-row input { flex: 1; }
 .git-status { line-height: 1.5; min-height: 18px; user-select: text; overflow-wrap: anywhere; }
 .git-status.err { color: var(--danger); }
+.git-conflict { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .cert-head { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 28px; gap: 6px; margin-bottom: 4px; padding: 0 2px; }
 #set-certs .cert-row { margin-bottom: 6px; }
 .md { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }

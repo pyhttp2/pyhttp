@@ -1382,6 +1382,15 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         git.sync(force=True, interactive=True)
         return _git_status()
 
+    @app.post("/api/git/resolve")
+    def git_resolve(body: dict[str, Any]) -> dict[str, Any]:
+        """Settle a reported conflict: ``use`` is "mine" (this project wins) or "theirs" (the
+        folder, or the remote, wins)."""
+        if body.get("use") not in ("mine", "theirs"):
+            raise HTTPException(400, "use must be mine or theirs")
+        git.sync(force=True, interactive=True, prefer=body["use"])
+        return _git_status()
+
     @app.get("/api/export/docs")
     def export_docs(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
         """The collection (or one folder) as Markdown documentation."""

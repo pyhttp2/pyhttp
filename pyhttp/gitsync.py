@@ -1,6 +1,6 @@
-"""Git sync: the project's definitions as files in a Git repository, committed and pushed on change.
+"""Git sync: the project's definitions as files in a Git repository, kept in step both ways.
 
-The database stays the source of truth. A sync writes the definitions (requests, folders,
+A sync writes the definitions (requests, folders,
 environments, variables, mocks, monitors — no history, run outputs or cookies) as one JSON file
 each into the configured folder, commits what changed and pushes it:
 
@@ -14,6 +14,14 @@ each into the configured folder, commits what changed and pushes it:
 The folder may be a repository, a folder inside one (the definitions next to the code they
 test), or neither — then a repository is created in it. Only the paths above are ever staged,
 committed or deleted, so other work in the same repository is left alone.
+
+It also reads back. Commits that reach the folder from elsewhere — pulled from the remote, or
+made by hand — are folded into the project: the files they changed replace what the project has,
+everything else stays as it is in the app. ``git_applied`` remembers the commit the project is
+level with, so "what changed elsewhere" is always a plain ``git diff`` from there to HEAD. Two
+situations need a person and are reported as a conflict instead of guessed at: turning sync on
+for a folder that already holds a different pyhttp project, and a merge where both sides changed
+the same thing.
 
 Settings live with the project (``git_*`` keys), so every project syncs to its own folder.
 """
@@ -35,12 +43,21 @@ MANIFEST = "pyhttp.json"
 MANAGED_DIRS = ("collection", "environments", "mocks")
 MANAGED = (MANIFEST, "variables.json", "monitors.json", *MANAGED_DIRS)
 FOLDER_FILE = "_folder"
-_BOOLS = {"auto_commit": True, "auto_push": True, "secrets": False}   # name -> default
+_BOOLS = {"auto_commit": True, "auto_push": True, "auto_pull": True, "secrets": False}   # name -> default
 _RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 
 
 class GitError(Exception):
     pass
+
+
+class Conflict(GitError):
+    """Something only the user can decide: ``kind`` is "adopt" (the folder already holds another
+    pyhttp project) or "merge" (the remote and this project changed the same thing)."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 # ------------------------------------------------------------------- files
@@ -72,7 +89,7 @@ def _mask(rows: Any, secrets: bool) -> Any:
 def build_tree(payload: dict[str, Any], secrets: bool = False) -> dict[str, str]:
     """``{relative path: file text}`` for a whole-project export (see ``/api/export``).
     Unless ``secrets`` is set, the values of variables marked secret are written empty."""
-    files: dict[str, str] = {MANIFEST: _dump({"format": 1, "project": payload.get("project") or ""}),
+    files: dict[str, str] = {MANIFEST: _dump({"format": 1}),
                              "variables.json": _dump(payload.get("variables") or {}),
                              "monitors.json": _dump(payload.get("monitors") or [])}
     used: dict[str, set[str]] = {}   # folder path -> names taken in it
@@ -142,6 +159,45 @@ def write_tree(root: Path, files: dict[str, str]) -> int:
             elif path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
     return changed
+
+
+def read_tree(root: Path) -> dict[str, str]:
+    """The managed files in ``root`` as ``{relative path: text}`` — what ``build_tree`` would give
+    for the project they were written from."""
+    files: dict[str, str] = {}
+    for name in MANAGED:
+        path = root / name
+        found = [path] if path.is_file() else sorted(path.rglob("*.json")) if path.is_dir() else []
+        for f in found:
+            files[f.relative_to(root).as_posix()] = f.read_text(encoding="utf-8")
+    return files
+
+
+def parse_tree(files: dict[str, str]) -> dict[str, Any]:
+    """The reverse of ``build_tree``: files back to a whole-project payload. Where a thing sits is
+    taken from its content (``folder_id``, ``parent_id``), not from the path of its file."""
+    payload: dict[str, Any] = {"folders": [], "requests": [], "environments": [], "mocks": [], "variables": {}, "monitors": []}
+    for rel in sorted(files):
+        try:
+            data = json.loads(files[rel])
+        except ValueError as exc:
+            raise GitError(f"{rel} is not valid JSON ({exc}). Fix or restore the file, then sync again.") from exc
+        top, name = rel.split("/", 1)[0], Path(rel).stem
+        if rel == "variables.json" and isinstance(data, dict):
+            payload["variables"] = data
+        elif rel == "monitors.json" and isinstance(data, list):
+            payload["monitors"] = data
+        elif not isinstance(data, dict) or rel == MANIFEST:
+            continue
+        elif top == "collection":
+            payload["folders" if name == FOLDER_FILE else "requests"].append(data)
+        elif top in ("environments", "mocks"):
+            payload[top].append(data)
+    return payload
+
+
+def _is_empty(payload: dict[str, Any]) -> bool:
+    return not any(payload.get(k) for k in ("folders", "requests", "environments", "mocks", "monitors", "variables"))
 
 
 # --------------------------------------------------------------------- git
@@ -225,6 +281,7 @@ class Syncer:
         self._tlock = threading.Lock()        # the timer only: touch() must never wait for a push
         self._timer: threading.Timer | None = None
         self._state: dict[str, Any] = {}
+        self._pulled = False                  # the running sync changed the project
 
     # ------------------------------------------------------------- settings
     def config(self) -> dict[str, Any]:
@@ -251,6 +308,7 @@ class Syncer:
                 raw = str(path)
             if raw != (db.get_setting("git_dir") or ""):
                 self._state = {}   # another folder: the old status says nothing about it
+                db.set_setting("git_applied", None)
             db.set_setting("git_dir", raw)
         if patch.get("remote") is not None:
             db.set_setting("git_remote", str(patch["remote"]).strip())
@@ -300,67 +358,161 @@ class Syncer:
             self._state = {}
 
     # ----------------------------------------------------------------- sync
-    def sync(self, force: bool = False, interactive: bool = False) -> dict[str, Any]:
-        """Write the files, commit and push. ``force`` commits and pushes even when the automatic
-        switches are off (the “Sync now” button); ``interactive`` lets Git ask for credentials."""
+    def sync(self, force: bool = False, interactive: bool = False, prefer: str = "") -> dict[str, Any]:
+        """Bring the folder, the repository, the remote and the project level with each other.
+        ``force`` commits, pulls and pushes even when the automatic switches are off (the “Sync
+        now” button); ``interactive`` lets Git ask for credentials; ``prefer`` ("mine" or
+        "theirs") settles a reported conflict."""
         with self._lock:
             self._cancel()   # this sync covers whatever was waiting; later changes schedule their own
             cfg = self.config()
             if not cfg["dir"]:
                 return self.status()
             self._state["syncing"] = True
+            self._pulled = False
             try:
-                self._state.update(self._sync(Path(cfg["dir"]), cfg, force, interactive), error="")
+                self._state.update(self._sync(Path(cfg["dir"]), cfg, force, interactive, prefer), error="", conflict="")
+            except Conflict as exc:
+                self._state.update(error=str(exc), conflict=exc.kind)
             except GitError as exc:
-                self._state["error"] = str(exc)
+                self._state.update(error=str(exc), conflict="")
             except Exception as exc:  # noqa: BLE001 - shown in the UI instead of lost in a thread
-                self._state["error"] = f"{type(exc).__name__}: {exc}"
+                self._state.update(error=f"{type(exc).__name__}: {exc}", conflict="")
             finally:
                 self._state["syncing"] = False
                 self._state["synced_at"] = time.time()
+                if self._pulled:   # the project itself changed: the UI reloads when this moves
+                    self._state["pulled_at"] = time.time()
             return self.status()
 
-    def _sync(self, root: Path, cfg: dict[str, Any], force: bool, interactive: bool) -> dict[str, Any]:
+    def _sync(self, root: Path, cfg: dict[str, Any], force: bool, interactive: bool, prefer: str) -> dict[str, Any]:
         root.mkdir(parents=True, exist_ok=True)
-        write_tree(root, build_tree(self._payload(), cfg["secrets"]))
-        if _run(root, "rev-parse", "--is-inside-work-tree", check=False)[0] != 0:
+        fresh = _run(root, "rev-parse", "--is-inside-work-tree", check=False)[0] != 0
+        if fresh:
             _run(root, "init")
-        out: dict[str, Any] = {"repo": _run(root, "rev-parse", "--show-toplevel")[1],
-                               "branch": _run(root, "branch", "--show-current", check=False)[1]}
         if cfg["remote"]:
             code, url = _run(root, "remote", "get-url", "origin", check=False)
             if code != 0:
                 _run(root, "remote", "add", "origin", cfg["remote"])
             elif url != cfg["remote"]:
                 _run(root, "remote", "set-url", "origin", cfg["remote"])
-        # only what pyhttp wrote: the repository may hold other work
-        changed = _changed_paths(_run(root, "status", "--porcelain", "-z", "--untracked-files=all", "--", *MANAGED)[1])
-        out["dirty"] = bool(changed)
-        if changed and (cfg["auto_commit"] or force):
-            paths = _present(_run(root, "rev-parse", "--show-prefix")[1], changed)
-            _run(root, "add", "-A", "--", *paths)
-            ident = [] if _run(root, "config", "user.email", check=False)[1] else \
-                ["-c", "user.name=pyhttp", "-c", "user.email=pyhttp@localhost"]
-            _run(root, *ident, "commit", "-m", _message(changed), "--", *paths)
-            out["dirty"] = False
-        has_commit = _run(root, "rev-parse", "--verify", "-q", "HEAD", check=False)[0] == 0
-        out["commit"] = None
-        if has_commit:
+        remotes = _run(root, "remote")[1].split()
+        remote = "origin" if "origin" in remotes else (remotes[0] if remotes else "")
+        if fresh and remote:
+            self._start_from_remote(root, remote, interactive)
+        ident = [] if _run(root, "config", "user.email", check=False)[1] else \
+            ["-c", "user.name=pyhttp", "-c", "user.email=pyhttp@localhost"]
+        self._adopt(root, cfg, prefer)
+        self._catch_up(root, cfg)
+        dirty = self._commit(root, cfg, force, ident)
+        if remote and (cfg["auto_pull"] or force) and _head(root):
+            _run(root, "fetch", remote, interactive=interactive, timeout=90)
+            up = _upstream(root, remote)
+            if up and _run(root, "rev-list", "--count", f"HEAD..{up}")[1] != "0":
+                self._merge(root, up, ident, prefer)
+                if self._catch_up(root, cfg):
+                    dirty = self._commit(root, cfg, force, ident)   # only if reading it back changed a file
+        out: dict[str, Any] = {"repo": _run(root, "rev-parse", "--show-toplevel")[1],
+                               "branch": _run(root, "branch", "--show-current", check=False)[1],
+                               "dirty": dirty, "remote_name": remote, "commit": None, "unpushed": False}
+        if _head(root):
             line = _run(root, "log", "-1", "--format=%h%x1f%s%x1f%ct")[1].split("\x1f")
             if len(line) == 3:
                 out["commit"] = {"hash": line[0], "subject": line[1], "at": float(line[2] or 0)}
-        remotes = _run(root, "remote")[1].split()
-        remote = "origin" if "origin" in remotes else (remotes[0] if remotes else "")
-        out["remote_name"] = remote
-        out["unpushed"] = False
-        if remote and has_commit:
-            code, ahead = _run(root, "rev-list", "--count", "@{u}..HEAD", check=False)
-            out["unpushed"] = code != 0 or ahead != "0"   # no upstream yet counts as unpushed
-            if out["unpushed"] and (cfg["auto_push"] or force):
-                _run(root, "push", "-u", remote, "HEAD", interactive=interactive, timeout=90)
-                out["unpushed"] = False
-                out["pushed_at"] = time.time()
+            if remote:
+                up = _upstream(root, remote)
+                out["unpushed"] = not up or _run(root, "rev-list", "--count", f"{up}..HEAD")[1] != "0"
+                if out["unpushed"] and (cfg["auto_push"] or force):
+                    _run(root, "push", "-u", remote, "HEAD", interactive=interactive, timeout=90)
+                    out["unpushed"] = False
+                    out["pushed_at"] = time.time()
         return out
+
+    def _start_from_remote(self, root: Path, remote: str, interactive: bool) -> None:
+        """A repository that was just created here, with a remote that may already have commits:
+        start from the remote's default branch, like a clone would."""
+        _run(root, "fetch", remote, interactive=interactive, timeout=90)
+        found = re.search(r"ref: refs/heads/(\S+)\s+HEAD", _run(root, "ls-remote", "--symref", remote, "HEAD",
+                                                                 check=False, interactive=interactive, timeout=90)[1])
+        if found and _run(root, "rev-parse", "--verify", "-q", f"refs/remotes/{remote}/{found.group(1)}", check=False)[0] == 0:
+            _run(root, "checkout", "-B", found.group(1), f"{remote}/{found.group(1)}")
+
+    def _adopt(self, root: Path, cfg: dict[str, Any], prefer: str) -> None:
+        """First sync with this folder. If it already holds a pyhttp project, an empty project
+        loads it; a project with content of its own must be told which side wins."""
+        if db.get_setting("git_applied"):
+            return
+        if (root / MANIFEST).exists():
+            there = read_tree(root)
+            mine = self._payload()
+            if there != build_tree(mine, cfg["secrets"]):
+                if not prefer and not _is_empty(mine):
+                    n = sum(1 for rel in there if rel.startswith("collection/") and Path(rel).stem != FOLDER_FILE)
+                    raise Conflict("adopt", f"This folder already holds a pyhttp project ({n} request{'' if n == 1 else 's'}) "
+                                            "that differs from this one. Choose which one to keep.")
+                if prefer != "mine":
+                    db.apply_definitions(parse_tree(there), keep_secrets=not cfg["secrets"])
+                    self._pulled = True
+        db.set_setting("git_applied", _head(root) or "none")
+
+    def _catch_up(self, root: Path, cfg: dict[str, Any]) -> bool:
+        """Fold commits that reached the folder from elsewhere into the project: the files changed
+        between the commit the project is level with and HEAD replace what the project has (edits
+        made here since and not yet committed stay). True when the project changed."""
+        applied, head = db.get_setting("git_applied"), _head(root)
+        if not head or applied == head:
+            return False
+        code, diff = (1, "") if not applied or applied == "none" else _run(
+            root, "diff", "--name-status", "--no-renames", "--relative", "-z", applied, head, "--", *MANAGED, check=False)
+        parts = diff.split("\0") if code == 0 else []
+        changes = list(zip(parts[0::2], parts[1::2]))
+        if changes:
+            files = build_tree(self._payload(), secrets=True)
+            for status, rel in changes:
+                if status == "D":
+                    files.pop(rel, None)
+                else:
+                    files[rel] = _run(root, "show", f"{head}:./{rel}")[1] + "\n"
+            db.apply_definitions(parse_tree(files), keep_secrets=not cfg["secrets"])
+            self._pulled = True
+        db.set_setting("git_applied", head)
+        return bool(changes)
+
+    def _commit(self, root: Path, cfg: dict[str, Any], force: bool, ident: list[str]) -> bool:
+        """Write the project to the folder and commit what changed. True when changes are left
+        uncommitted (automatic commit is off)."""
+        write_tree(root, build_tree(self._payload(), cfg["secrets"]))
+        # only what pyhttp wrote: the repository may hold other work
+        changed = _changed_paths(_run(root, "status", "--porcelain", "-z", "--untracked-files=all", "--", *MANAGED)[1])
+        if not changed or not (cfg["auto_commit"] or force):
+            return bool(changed)
+        level = db.get_setting("git_applied") in (_head(root), "none")
+        paths = _present(_run(root, "rev-parse", "--show-prefix")[1], changed)
+        _run(root, "add", "-A", "--", *paths)
+        # a file that differs only in line endings (a checkout with autocrlf) shows as changed
+        # until it is staged: commit only when something really is
+        if _run(root, "diff", "--cached", "--quiet", "--", *paths, check=False)[0] != 0:
+            _run(root, *ident, "commit", "-m", _message(changed), "--", *paths)
+        if level:   # the project was level with HEAD and still is; otherwise _catch_up has work to do
+            db.set_setting("git_applied", _head(root))
+        return False
+
+    def _merge(self, root: Path, up: str, ident: list[str], prefer: str) -> None:
+        """Merge what the remote has. A clean merge needs nobody; when both sides changed the same
+        thing the merge is undone and reported, and ``prefer`` repeats it taking one side."""
+        side = {"mine": ["-X", "ours"], "theirs": ["-X", "theirs"]}.get(prefer, [])
+        if _run(root, *ident, "merge", "--no-edit", *side, up, check=False)[0] == 0:
+            return
+        both = _run(root, "diff", "--name-only", "--diff-filter=U", "--relative", "-z", check=False)[1].split("\0")
+        names = [Path(p).parent.name if Path(p).stem == FOLDER_FILE else Path(p).stem for p in both if p]
+        _run(root, "merge", "--abort", check=False)
+        if not names:   # not a content conflict: unrelated histories, local changes in the way…
+            raise GitError(f"Could not merge the changes from {up}. Run “git merge {up}” in the folder to see why, "
+                           "fix it there and sync again.")
+        what = ", ".join(names[:5]) + (f" (+{len(names) - 5} more)" if len(names) > 5 else "")
+        if side:
+            raise GitError(f"The changes to {what} could not be merged automatically. Resolve them with Git in the folder, then sync again.")
+        raise Conflict("merge", f"The remote and this project both changed {what}. Choose which version to keep.")
 
     # --------------------------------------------------------------- status
     def status(self) -> dict[str, Any]:
@@ -379,4 +531,23 @@ class Syncer:
         return {**cfg, "state": state, "git": bool(shutil.which("git")), "error": st.get("error") or "",
                 "synced_at": st.get("synced_at"), "pushed_at": st.get("pushed_at"), "commit": st.get("commit"),
                 "dirty": bool(st.get("dirty")), "unpushed": bool(st.get("unpushed")),
-                "remote_name": st.get("remote_name") or "", "repo": st.get("repo") or "", "branch": st.get("branch") or ""}
+                "remote_name": st.get("remote_name") or "", "repo": st.get("repo") or "", "branch": st.get("branch") or "",
+                "conflict": st.get("conflict") or "", "pulled_at": st.get("pulled_at")}
+
+
+def _head(root: Path) -> str:
+    """The commit HEAD points at, or "" in a repository without commits."""
+    code, out = _run(root, "rev-parse", "--verify", "-q", "HEAD", check=False)
+    return out.strip() if code == 0 else ""
+
+
+def _upstream(root: Path, remote: str) -> str:
+    """The remote branch this one follows: its configured upstream, else the branch of the same
+    name on ``remote``; "" when the remote does not have it yet."""
+    code, out = _run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", check=False)
+    if code == 0 and out.strip():
+        return out.strip()
+    branch = _run(root, "branch", "--show-current", check=False)[1].strip()
+    if branch and _run(root, "rev-parse", "--verify", "-q", f"refs/remotes/{remote}/{branch}", check=False)[0] == 0:
+        return f"{remote}/{branch}"
+    return ""

@@ -1095,6 +1095,125 @@ def set_variables(values: dict[str, str]) -> dict[str, str]:
     return get_variables()
 
 
+# ------------------------------------------------- apply a whole definition set
+
+
+def _keep_secrets(rows: Any, old: Any) -> list[dict[str, Any]]:
+    """Variables from a file whose secret values were left out: keep the values this project has."""
+    have = {r.get("key"): r.get("value", "") for r in old or [] if isinstance(r, dict) and r.get("secret")}
+    return [{**r, "value": have[r.get("key")]} if r.get("secret") and not r.get("value") and r.get("key") in have else r
+            for r in _kv_rows(rows)]
+
+
+def apply_definitions(data: dict[str, Any], keep_secrets: bool = False) -> None:
+    """Make the project's definitions equal ``data`` (the shape of the whole-project export):
+    folders and requests are matched by id, environments and monitors by name, mocks by slug.
+    What is in both is updated in place (ids, history links and open tabs survive), what is only
+    in ``data`` is created with the id it brings, the rest is deleted. With ``keep_secrets``, an
+    empty value of a secret variable means "not in the file" and the local value stays.
+    Used by Git sync to read a repository back; history, runs and cookies are not touched."""
+    def rows_of(key: str) -> list[dict[str, Any]]:
+        return [x for x in data.get(key) or [] if isinstance(x, dict)]
+
+    with _lock:
+        c = _c()
+        # folders
+        want_f = {str(f["id"]): f for f in rows_of("folders") if f.get("id")}
+        old_f = {f["id"]: f for f in list_folders()}
+        for fid in set(old_f) - set(want_f):
+            c.execute("DELETE FROM folders WHERE id = ?", (fid,))
+        for fid, f in want_f.items():
+            parent = str(f.get("parent_id") or "")
+            parent_id = parent if parent in want_f and parent != fid else None
+            variables = _keep_secrets(f.get("variables"), old_f.get(fid, {}).get("variables")) if keep_secrets \
+                else _kv_rows(f.get("variables"))
+            if fid not in old_f:
+                c.execute("INSERT INTO folders (id, name, created_at) VALUES (?,?,?)", (fid, "folder", time.time()))
+            c.execute("""UPDATE folders SET name = ?, parent_id = ?, description = ?, auth = ?, headers = ?,
+                         variables = ?, position = ? WHERE id = ?""",
+                      (str(f.get("name") or "").strip() or "New folder", parent_id, str(f.get("description") or ""),
+                       json.dumps(normalize_auth(f.get("auth"))), json.dumps(_kv_rows(f.get("headers"))),
+                       json.dumps(variables), int(f.get("position") or 0), fid))
+        # requests
+        want_r = {str(r["id"]): r for r in rows_of("requests") if r.get("id")}
+        old_r = {row[0] for row in c.execute("SELECT id FROM requests").fetchall()}
+        for rid in old_r - set(want_r):
+            c.execute("DELETE FROM requests WHERE id = ?", (rid,))
+        now = time.time()
+        for rid, r in want_r.items():
+            d = normalize_request(r)
+            folder_id = str(r.get("folder_id") or "")
+            if rid not in old_r:
+                c.execute("INSERT INTO requests (id, name, created_at, updated_at) VALUES (?,?,?,?)", (rid, d["name"], now, now))
+            c.execute(
+                """UPDATE requests SET name=?, description=?, tags=?, method=?, url=?, params=?, headers=?,
+                   body_type=?, body=?, bodies=?, timeout=?, verify_ssl=?, updated_at=?, auth=?, tests=?, extract=?,
+                   pre_vars=?, options=?, folder_id=?, position=? WHERE id=?""",
+                (d["name"], d["description"], json.dumps(d["tags"]), d["method"], d["url"], json.dumps(d["params"]),
+                 json.dumps(d["headers"]), d["body_type"], d["body"], json.dumps(d["bodies"]), d["timeout"],
+                 int(d["verify_ssl"]), now, json.dumps(d["auth"]), json.dumps(d["tests"]), json.dumps(d["extract"]),
+                 json.dumps(d["pre_vars"]), json.dumps(d["options"]), folder_id if folder_id in want_f else None,
+                 int(r.get("position") or 0), rid))
+        c.commit()
+        set_variables({str(k): str(v) for k, v in (data.get("variables") or {}).items()})
+
+        def by_key(items: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
+            out: dict[str, list[dict[str, Any]]] = {}
+            for item in items:
+                out.setdefault(str(item.get(key) or ""), []).append(item)
+            return out
+
+        # environments, by name
+        old_e = by_key(list_environments(), "name")
+        for e in rows_of("environments"):
+            match = old_e.get(str(e.get("name") or ""))
+            if match:
+                env = match.pop(0)
+                variables = _keep_secrets(e.get("variables"), env["variables"]) if keep_secrets else e.get("variables")
+                if _kv_rows(variables) != env["variables"]:
+                    update_environment(env["id"], variables=variables)
+            else:
+                create_environment(str(e.get("name") or ""), e.get("variables"))
+        for left in old_e.values():
+            for env in left:
+                delete_environment(env["id"])
+        # monitors, by name
+        old_m = by_key(list_monitors(), "name")
+        for m in rows_of("monitors"):
+            fields = {"request_ids": list(m.get("request_ids") or []), "interval_s": int(m.get("interval_s") or 300),
+                      "enabled": bool(m.get("enabled", True)), "webhook_url": str(m.get("webhook_url") or "")}
+            match = old_m.get(str(m.get("name") or ""))
+            if match:
+                update_monitor(match.pop(0)["id"], **fields)
+            else:
+                create_monitor({**fields, "name": m.get("name")})
+        for left in old_m.values():
+            for mon in left:
+                delete_monitor(mon["id"])
+        # mock servers, by slug; routes carry no id, so a changed route list is replaced as a whole
+        route_keys = ("name", "method", "path", "status_code", "headers", "content_type", "body", "delay_ms",
+                      "match_query", "enabled")
+        old_k = by_key(list_mocks(), "slug")
+        for m in rows_of("mocks"):
+            match = old_k.get(str(m.get("slug") or ""))
+            if not match:
+                create_mock(m)
+                continue
+            cur = match.pop(0)
+            update_mock(cur["id"], name=str(m.get("name") or cur["name"]), description=str(m.get("description") or ""),
+                        enabled=bool(m.get("enabled", True)), delay_ms=float(m.get("delay_ms") or 0),
+                        cors=bool(m.get("cors", True)), log_calls=bool(m.get("log_calls", True)))
+            routes = [r for r in m.get("routes") or [] if isinstance(r, dict)]
+            if [{k: r.get(k) for k in route_keys} for r in routes] != [{k: r.get(k) for k in route_keys} for r in cur["routes"]]:
+                for r in cur["routes"]:
+                    delete_mock_route(r["id"])
+                for r in routes:
+                    create_mock_route(cur["id"], r)
+        for left in old_k.values():
+            for mk in left:
+                delete_mock(mk["id"])
+
+
 # --------------------------------------------------------------------- runs
 
 

@@ -5,10 +5,13 @@
 #   Linux   -> pyhttp-<version>-linux-amd64.deb          (Ubuntu 22.04+ / Debian 12+, built on 22.04 for glibc compatibility)
 # The release also gets SHA256SUMS.txt, which the in-app updater uses to verify downloads.
 #
-# Every push to main runs the tests and builds (files appear under the run's
-# Artifacts for one day). Nothing is published automatically. Releases do not use
+# Every push to main only runs the tests, on all three systems. The installers are built
+# for a release (a version tag, see below) or when the workflow is run by hand from the
+# Actions tab: without "publish" that is a test build whose files appear under the run's
+# Artifacts for one day (do this after touching packaging/ or the requirements, since a
+# plain push no longer proves that packaging still works). Releases do not use
 # artifacts: each build uploads straight to a draft release, which is published at the end.
-# To publish a release, either push a tag (git tag v0.2.0 && git push origin v0.2.0)
+# To publish a release, either push a tag (deploy.bat / packaging/bump.py do this)
 # or run the workflow by hand from the Actions tab and tick "publish". The release is
 # tagged v<version> from pyhttp/__init__.py; publishing the same version again replaces
 # the existing release.
@@ -119,10 +122,34 @@ jobs:
           gh release delete "v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes || echo "no previous draft"
           gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft --title "pyhttp ${VERSION}" --notes "Building…"
 
+  # Plain pushes to main: the tests on every system, no installers.
+  test:
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]   # the same systems the build job packages on
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Test
+        run: python -m pytest tests/test_backend.py -q
+
   build:
     needs: prepare
-    # also runs for plain pushes to main, where prepare is skipped
-    if: ${{ !cancelled() && needs.prepare.result != 'failure' }}
+    # releases (prepare ran) and manual runs (a test build when "publish" is not ticked, where
+    # prepare is skipped); plain pushes to main only run the test job above
+    if: ${{ !cancelled() && needs.prepare.result != 'failure' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -220,7 +247,7 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: gh release upload "v${VERSION}" ${{ matrix.files }} --repo "$GITHUB_REPOSITORY" --clobber
 
-      # Test builds (pushes to main) keep their files for a day. A full storage quota must not
+      # Test builds (manual runs without "publish") keep their files for a day. A full storage quota must not
       # fail the build, so this step may fail without failing the job.
       - uses: actions/upload-artifact@v4
         if: needs.prepare.result != 'success'

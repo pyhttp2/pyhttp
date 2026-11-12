@@ -10,8 +10,13 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   a few seconds after every change. Automatic commit and push are the default and can be
   switched off in Settings → Git; secret variable values stay out unless asked for.
   → `pyhttp/gitsync.py`, `/api/git*`, `renderGitPanel()` in `features.js`.
-- [ ] Git sync, the other direction: read the files back (pull a teammate's changes into the
-  database). Today the database is the only source; a rejected push is reported, not merged.
+- [x] **Git sync, both ways.** Every sync fetches and merges the remote and folds what changed
+  (also commits made by hand in the folder) back into the project, keeping ids; an empty
+  project pointed at an existing repository loads it; the two cases that need a person (the
+  folder holds another project, both sides changed the same request) are asked in the Git tab.
+  → `gitsync.Syncer._catch_up/_adopt/_merge`, `db.apply_definitions()`, `/api/git/resolve`.
+- [ ] Git sync: look at the remote on a timer too. Today a teammate's push arrives with the
+  next edit, at app start or with “Sync now”.
 
 ## Shipped on 2026-11-06 (second pass)
 

@@ -1683,3 +1683,125 @@ def test_git_sync_inside_an_existing_repository_leaves_other_work_alone(client, 
     assert st["state"] == "error" and "did not write" in st["error"]
     assert (other / "collection" / "mine.json").exists()
     assert client.put("/api/git", json={"dir": "relative/path"}).status_code == 400
+
+
+def _mate(tmp_path, remote):
+    """A teammate's clone of the remote, to commit and push from outside the app."""
+    mate = tmp_path / "mate"
+    if not mate.exists():
+        _git(tmp_path, "clone", "-q", str(remote), str(mate))
+        _git(mate, "config", "user.email", "mate@example.com")
+        _git(mate, "config", "user.name", "Mate")
+    else:
+        _git(mate, "pull", "-q")
+    return mate
+
+
+def _mate_push(mate, message: str) -> str:
+    _git(mate, "add", "-A")
+    _git(mate, "commit", "-q", "-m", message)
+    _git(mate, "push", "-q")
+    return _git(mate, "rev-parse", "HEAD")
+
+
+@needs_git
+def test_git_sync_reads_remote_changes_back(client, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    work = tmp_path / "work"
+    folder = client.post("/api/folders", json={"name": "Users"}).json()
+    login = client.post("/api/requests", json={"name": "Login", "url": "http://x/login", "folder_id": folder["id"]}).json()
+    gone = client.post("/api/requests", json={"name": "Old", "url": "http://x/old"}).json()
+    env = client.post("/api/environments", json={"name": "Prod", "variables": [
+        {"key": "token", "value": "hunter2", "secret": True}, {"key": "host", "value": "prod"}]}).json()
+    st = client.put("/api/git", json={"dir": str(work), "remote": str(remote)}).json()
+    assert st["state"] == "ok" and st["auto_pull"] and not st["pulled_at"], st
+
+    # a teammate edits a request, adds one, deletes one and changes an environment, then pushes
+    mate = _mate(tmp_path, remote)
+    f = mate / "collection" / "Users" / "Login.json"
+    data = json.loads(f.read_text(encoding="utf-8"))
+    f.write_text(json.dumps({**data, "url": "http://x/v2/login", "method": "POST"}, indent=2) + "\n", encoding="utf-8")
+    (mate / "collection" / "Users" / "Logout.json").write_text(json.dumps(
+        {"id": "mate0001", "name": "Logout", "url": "http://x/logout", "folder_id": folder["id"], "position": 9}), encoding="utf-8")
+    (mate / "collection" / "Old.json").unlink()
+    e = mate / "environments" / "Prod.json"
+    prod = json.loads(e.read_text(encoding="utf-8"))
+    assert prod["variables"][0]["value"] == ""                      # the secret never left this machine
+    prod["variables"][1]["value"] = "prod-2"
+    e.write_text(json.dumps(prod, indent=2) + "\n", encoding="utf-8")
+    theirs = _mate_push(mate, "mate: rework login")
+
+    # meanwhile something else is edited here; the next sync merges both ways
+    mine = client.post("/api/requests", json={"name": "Mine", "url": "http://x/mine"}).json()
+    st = client.post("/api/git/sync").json()
+    assert st["state"] == "ok" and st["pulled_at"] and not st["unpushed"], st
+    got = client.get(f"/api/requests/{login['id']}").json()          # same id, new content
+    assert got["url"] == "http://x/v2/login" and got["method"] == "POST" and got["folder_id"] == folder["id"]
+    assert client.get("/api/requests/mate0001").json()["name"] == "Logout"
+    assert client.get(f"/api/requests/{gone['id']}").status_code == 404
+    assert client.get(f"/api/requests/{mine['id']}").status_code == 200
+    envs = client.get("/api/environments").json()["environments"]
+    assert [e["id"] for e in envs] == [env["id"]]
+    assert {v["key"]: v["value"] for v in envs[0]["variables"]} == {"token": "hunter2", "host": "prod-2"}
+    assert theirs in _git(remote, "log", "--format=%H")               # their commit and ours are both there
+    assert "Mine.json" in _git(remote, "ls-tree", "-r", "--name-only", "HEAD")
+
+    # a quiet sync after that changes nothing: no commit ping-pong between two machines
+    head = _git(remote, "rev-parse", "HEAD")
+    st = client.post("/api/git/sync").json()
+    assert st["state"] == "ok" and _git(remote, "rev-parse", "HEAD") == head and _git(work, "status", "--porcelain") == ""
+
+    # both sides change the same request: reported, nothing lost, and the user picks a side
+    mate = _mate(tmp_path, remote)
+    data = json.loads(f.read_text(encoding="utf-8"))
+    f.write_text(json.dumps({**data, "url": "http://x/THEIRS"}, indent=2) + "\n", encoding="utf-8")
+    _mate_push(mate, "mate: url")
+    client.put(f"/api/requests/{login['id']}", json={**got, "url": "http://x/MINE"})
+    st = client.post("/api/git/sync").json()
+    assert st["state"] == "error" and st["conflict"] == "merge" and "Login" in st["error"], st
+    assert client.get(f"/api/requests/{login['id']}").json()["url"] == "http://x/MINE"
+    assert _git(work, "status", "--porcelain") == ""                  # the failed merge was undone
+    assert client.post("/api/git/resolve", json={"use": "nobody"}).status_code == 400
+    st = client.post("/api/git/resolve", json={"use": "theirs"}).json()
+    assert st["state"] == "ok" and st["conflict"] == "" and not st["unpushed"], st
+    assert client.get(f"/api/requests/{login['id']}").json()["url"] == "http://x/THEIRS"
+
+    # a commit made by hand in the folder is read back too
+    f2 = work / "collection" / "Mine.json"
+    data = json.loads(f2.read_text(encoding="utf-8"))
+    f2.write_text(json.dumps({**data, "name": "Renamed by hand"}, indent=2) + "\n", encoding="utf-8")
+    _git(work, "commit", "-q", "-am", "hand edit")
+    st = client.post("/api/git/sync").json()
+    assert st["state"] == "ok", st
+    assert client.get(f"/api/requests/{mine['id']}").json()["name"] == "Renamed by hand"
+    assert (work / "collection" / "Renamed by hand.json").exists() and not f2.exists()
+
+
+@needs_git
+def test_git_sync_joining_an_existing_repository(client, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    r = client.post("/api/requests", json={"name": "Shared", "url": "http://x/shared"}).json()
+    assert client.put("/api/git", json={"dir": str(tmp_path / "one"), "remote": str(remote)}).json()["state"] == "ok"
+
+    # a new, empty project pointed at the same remote starts from what is there (same ids)
+    client.post("/api/projects", json={"name": "Second"})
+    assert client.get("/api/requests").json() == [] and client.get("/api/git").json()["state"] == "off"
+    two = tmp_path / "two"
+    st = client.put("/api/git", json={"dir": str(two), "remote": str(remote)}).json()
+    assert st["state"] == "ok" and st["pulled_at"] and not st["unpushed"] and not st["dirty"], st
+    assert [(x["id"], x["name"]) for x in client.get("/api/requests").json()] == [(r["id"], "Shared")]
+    assert _git(remote, "rev-list", "--count", "HEAD") == "1"         # joining pushed nothing
+
+    # a project with content of its own does not silently replace, or get replaced by, the folder
+    client.post("/api/projects", json={"name": "Third"})
+    client.post("/api/requests", json={"name": "Local only", "url": "http://x/local"})
+    st = client.put("/api/git", json={"dir": str(two)}).json()
+    assert st["state"] == "error" and st["conflict"] == "adopt" and "1 request" in st["error"], st
+    assert [x["name"] for x in client.get("/api/requests").json()] == ["Local only"]
+    assert (two / "collection" / "Shared.json").exists()
+    st = client.post("/api/git/resolve", json={"use": "mine"}).json()
+    assert st["state"] == "ok", st
+    assert (two / "collection" / "Local only.json").exists() and not (two / "collection" / "Shared.json").exists()
+    assert [x["name"] for x in client.get("/api/requests").json()] == ["Local only"]

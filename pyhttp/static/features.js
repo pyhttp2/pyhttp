@@ -2437,7 +2437,7 @@ function initMocks() {
 // The project's definitions as files in a Git repository. The server writes, commits and pushes
 // a few seconds after every change; here is only the top bar button (state at a glance) and the
 // Git tab of Settings (folder, remote, the automatic switches).
-const gitSync = { info: null, timer: null };
+const gitSync = { info: null, timer: null, pulledAt: undefined };
 
 function gitSummary(g) {
   if (!g || g.state === 'off') return 'Git sync is off.';
@@ -2471,13 +2471,45 @@ function renderGitStatus() {
   if (!el || !g) return;
   el.classList.toggle('err', g.state === 'error');
   const where = g.state !== 'off' && g.repo ? `Repository ${g.repo}${g.branch ? `, branch ${g.branch}` : ''}` : '';
-  el.innerHTML = `<div>${esc(gitSummary(g))}</div>${where ? `<div class="muted">${esc(where)}</div>` : ''}`;
+  // a conflict is the one thing sync will not decide by itself
+  const sides = g.conflict === 'adopt' ? ['Load the folder into this project', 'Overwrite the folder with this project']
+    : g.conflict === 'merge' ? ['Take the remote version', 'Keep my version'] : null;
+  const pick = sides ? `<div class="git-conflict"><button data-use="theirs">${sides[0]}</button><button data-use="mine">${sides[1]}</button></div>` : '';
+  el.innerHTML = `<div>${esc(gitSummary(g))}</div>${pick}${where ? `<div class="muted">${esc(where)}</div>` : ''}`;
+  $$('[data-use]', el).forEach((b) => b.addEventListener('click', async () => {
+    $$('[data-use]', el).forEach((x) => { x.disabled = true; });
+    try {
+      gitSync.info = await api('/git/resolve', { method: 'POST', body: { use: b.dataset.use } });
+      if (gitSync.info.state === 'error') toast('Git: ' + gitSync.info.error, 'error'); else toast('Synced', 'ok');
+    } catch (e) { toast(e.message, 'error'); }
+    gitChanged(true);
+  }));
+}
+
+// New status from the server: redraw, and when a sync changed the project itself (a pull, or
+// loading a folder) show the new content. The page reloads unless an edit is still unsaved.
+function gitChanged(redraw = false) {
+  const g = gitSync.info;
+  renderGitButton();
+  // the status block holds the conflict buttons: leave it alone while it says the same thing
+  const key = [g.state, g.error, g.conflict, g.commit && g.commit.hash, g.dirty, g.unpushed, g.synced_at].join('|');
+  if (redraw || key !== gitSync.key || ($('#git-status') && !$('#git-status').innerHTML)) renderGitStatus();
+  gitSync.key = key;
+  const first = gitSync.pulledAt === undefined;
+  const moved = !first && g.pulled_at && g.pulled_at !== gitSync.pulledAt;
+  gitSync.pulledAt = g.pulled_at || null;
+  if (!moved) return;
+  if (typeof autosave !== 'undefined' && (autosave.dirty || autosave.inFlight)) {
+    toast('Git: changes were pulled into this project', 'ok', { label: 'Reload', onClick: () => location.reload() });
+  } else {
+    try { sessionStorage.setItem('pyhttp.gitPulled', '1'); } catch { /* ignore */ }
+    location.reload();
+  }
 }
 
 async function loadGit() {
   try { gitSync.info = await api('/git'); } catch { return; }
-  renderGitButton();
-  renderGitStatus();
+  gitChanged();
   // the server commits on its own a few seconds after an edit: keep the button honest while it is on
   const on = gitSync.info.state !== 'off';
   if (on && !gitSync.timer) gitSync.timer = setInterval(() => { if (!document.hidden) loadGit(); }, 4000);
@@ -2488,7 +2520,7 @@ async function loadGit() {
 // repository and push); the switches save at once.
 function renderGitPanel(box) {
   if (!box) return;
-  const g = gitSync.info || { state: 'off', dir: '', remote: '', auto_commit: true, auto_push: true, secrets: false, git: true, suggested_dir: '' };
+  const g = gitSync.info || { state: 'off', dir: '', remote: '', auto_commit: true, auto_push: true, auto_pull: true, secrets: false, git: true, suggested_dir: '' };
   const on = g.state !== 'off';
   const sw = (id, label, desc, checked) => `<label class="switch-row"><span class="txt"><b>${label}</b><span class="muted small">${desc}</span></span><span class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span></span></span></label>`;
   box.innerHTML = `
@@ -2516,14 +2548,15 @@ function renderGitPanel(box) {
       <div class="switch-list">
         ${sw('git-auto-commit', 'Commit automatically', 'A few seconds after the last edit, with the names of what changed as the message. Off: the files are still written, and “Sync now” commits them.', g.auto_commit)}
         ${sw('git-auto-push', 'Push automatically', 'After every commit. A push that fails (offline, no access) is tried again with the next change. Off: “Sync now” pushes.', g.auto_push)}
+        ${sw('git-auto-pull', 'Pull automatically', 'With every sync and when the app starts: changes from the remote are merged and read into this project. In a repository shared with code, that merges the remote branch into the one checked out. Off: “Sync now” pulls.', g.auto_pull)}
         ${sw('git-secrets', 'Include secret values', 'Off: the values of variables marked 🔒 are written empty, so they never reach the repository. Tokens and passwords typed straight into a request are always written.', g.secrets)}
       </div>
     </div>`;
   renderGitStatus();
   const done = (info, msg) => {
     gitSync.info = info;
-    renderGitButton();
     renderGitPanel(box);
+    gitChanged(true);
     if (info.state === 'error') toast('Git: ' + info.error, 'error');
     else if (msg) toast(msg, 'ok');
     loadGit();   // starts or stops the polling
@@ -2545,10 +2578,10 @@ function renderGitPanel(box) {
     if (!dir) throw new Error('Choose a folder (or use “Turn off” to stop syncing)');
     const info = await api('/git', { method: 'PUT', body: {
       dir, remote: $('#git-remote').value.trim(), auto_commit: $('#git-auto-commit').checked,
-      auto_push: $('#git-auto-push').checked, secrets: $('#git-secrets').checked } });
+      auto_push: $('#git-auto-push').checked, auto_pull: $('#git-auto-pull').checked, secrets: $('#git-secrets').checked } });
     done(info, on ? 'Git settings saved' : 'Git sync is on');
   }));
-  [['git-auto-commit', 'auto_commit'], ['git-auto-push', 'auto_push'], ['git-secrets', 'secrets']].forEach(([id, key]) => {
+  [['git-auto-commit', 'auto_commit'], ['git-auto-push', 'auto_push'], ['git-auto-pull', 'auto_pull'], ['git-secrets', 'secrets']].forEach(([id, key]) => {
     $('#' + id).addEventListener('change', async (e) => {
       if (!on) return;   // not on yet: the switches are sent along with “Turn on”
       try { done(await api('/git', { method: 'PUT', body: { [key]: e.target.checked } })); } catch (err) { toast(err.message, 'error'); }
@@ -2566,6 +2599,12 @@ function renderGitPanel(box) {
 
 function initGit() {
   $('#btn-git').addEventListener('click', () => openSettings('git'));
+  try {
+    if (sessionStorage.getItem('pyhttp.gitPulled')) {
+      sessionStorage.removeItem('pyhttp.gitPulled');
+      setTimeout(() => toast('Git: changes were pulled into this project', 'ok'), 400);
+    }
+  } catch { /* ignore */ }
   loadGit();
 }
 
