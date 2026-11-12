@@ -1230,8 +1230,23 @@ def test_send_one_body_button_keeps_checkboxes(page, servers):
 def test_response_views_tab_and_history(page, servers, tmp_path):
     app_url, echo_url = servers
     new_request(page, echo_url, "views demo")
+    # before anything is sent, the request's own Views tab is where views are set
+    page.click("#editor-tabs button[data-tab=views]")
+    assert "No views on this request yet" in page.locator("#views-panel").inner_text()
+    assert page.locator("#vwp-edit").inner_text() == "Choose HTML files…"
     page.click("#btn-send")
     page.wait_for_selector("#r-status.ok")
+    # a call of a request without views still shows where they go, and leads to adding one
+    page.click("#sb-runs") if page.locator("#runs-panel").is_hidden() else None
+    page.click("#runs-tabs button[data-tab=requests]")
+    page.wait_for_function("(document.querySelector('#history-list .h-item') || {textContent: ''}).textContent.includes('views demo')")
+    page.locator("#history-list .h-item").first.click()
+    page.wait_for_selector("#hd-tabs")
+    assert page.locator("#hd-panels .tab-panel[data-panel=body]").is_visible()
+    page.click("#hd-tabs button[data-tab=views]")
+    page.click("#h-add-views")
+    page.wait_for_selector("#vw-rows")                                     # the views dialog of that request
+    page.click("#modal-close")
     # the View tab explains itself and makes a working view in one click
     page.click("#resp-tabs button[data-tab=view]")
     page.wait_for_selector("#r-view .vw-empty")
@@ -1257,16 +1272,20 @@ def test_response_views_tab_and_history(page, servers, tmp_path):
     assert page.frame_locator("#r-view iframe").locator("#x").inner_text(timeout=10000) == "method GET"
     page.click("#r-view .vw-chip[data-v=all]")
     assert page.locator("#r-view iframe").count() == 2
+    assert page.locator("#n-views").inner_text() == "2"
+    assert "Mine" in page.locator("#views-panel .vwp-list").inner_text()
+    assert page.locator("#vwp-edit").inner_text() == "Edit views…"
     page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
     # the next response lands in the views that are showing
     page.click("#btn-send")
     page.wait_for_function("document.querySelectorAll('#r-view iframe').length === 2")
     assert not page.locator("#r-view").is_hidden()
-    # a history entry shows the same views with the response it holds
-    page.click("#sb-runs") if page.locator("#runs-panel").is_hidden() else None
+    # a history entry opens straight in the same views, with the response it holds
     page.click("#runs-tabs button[data-tab=requests]")
     page.locator("#history-list .h-item").first.click()
     page.wait_for_selector("#h-views .vw-chip[data-v=all]")
+    assert page.locator("#hd-panels .tab-panel[data-panel=views]").is_visible()
+    assert page.locator("#hd-n-views").inner_text() == "2"
     page.click("#h-views .vw-chip:has-text('Mine')")
     assert page.frame_locator("#h-views iframe").locator("#x").inner_text(timeout=10000) == "method GET"
     page.click("#modal-close")

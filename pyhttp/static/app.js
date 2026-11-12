@@ -78,6 +78,7 @@ function formatRequest(req) {
 
 // -------------------------------------------------------------------- modal
 function openModal(title, bodyHtml, footButtons = []) {
+  $('#modal .modal').className = 'modal';   // a dialog that wants another size adds its class after opening
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = bodyHtml;
   const foot = $('#modal-foot');
@@ -398,6 +399,7 @@ function renderEditor() {
   renderAuthPanel(r);
   renderTestsPanel(r);
   renderRequestSettings(r);
+  updateViewTab();
   renderPathVars();
   renderInheritedHeaders();
   updateTabCounts();
@@ -995,7 +997,7 @@ async function sendCurrent({ onlyBodyId = null } = {}) {
       const key = enabled.length === 1 ? enabled[0].id : NO_BODY;
       const result = data.options && data.options.stream
         ? await sendStreaming({ ...data, id: state.current.id })
-        : await api('/send', { method: 'POST', body: { ...data, send_id: state.sending.id } });
+        : await api('/send', { method: 'POST', body: { ...data, id: state.current.id, send_id: state.sending.id } });
       if (result) {
         if (key === NO_BODY) rs.byKey = {};   // sent without a body: old body responses no longer apply
         else delete rs.byKey[NO_BODY];        // sent with a body: drop the old no-body response

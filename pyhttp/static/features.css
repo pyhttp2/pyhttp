@@ -218,6 +218,29 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 .vw-row input { min-width: 0; padding: 5px 8px; }
 .vw-row .kv-del { grid-column: 4; }
 .vw-how { margin-top: 14px; } .vw-how summary { cursor: pointer; color: var(--muted); font-size: 12px; } .vw-how pre { margin-top: 8px; }
+/* the Views tab of the request editor */
+.vwp { max-width: 760px; }
+.vwp-list { list-style: none; margin: 10px 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
+.vwp-list li { display: grid; grid-template-columns: 170px 1fr; gap: 12px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+.vwp-list li:last-child { border-bottom: 0; }
+.vwp-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vwp-list .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vwp-none { margin: 12px 0; }
+.vwp .vw-actions { justify-content: flex-start; }
+/* a history entry: summary line, then tabs over one panel that keeps its height */
+.modal.wide { width: min(1080px, 95vw); }
+.hd-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.hd-sum > * { white-space: nowrap; }
+.hd-url { margin: 6px 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-error { max-height: 90px; margin: 0 0 10px; }
+.hd-tabs { margin-bottom: 12px; }
+.hd-panels > .tab-panel { height: 58vh; overflow: auto; }
+.hd-panels > .tab-panel.vw-host { overflow: auto; }
+.hd-panels .vw-frame iframe { height: calc(58vh - 52px); min-height: 0; }
+.hd-panels .vw-grid.many .vw-frame iframe { height: 340px; }
+.hd-pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.modal-foot .hd-close { margin-left: auto; }
+.modal.wide .modal-foot { justify-content: flex-start; flex-wrap: wrap; }
 .cert-head { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 28px; gap: 6px; margin-bottom: 4px; padding: 0 2px; }
 #set-certs .cert-row { margin-bottom: 6px; }
 .md { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }

@@ -853,7 +853,8 @@ async function loadHistoryList(before = null) {
 function openHistoryMenu(hid, anchor, at) {
   openMenu('h:' + hid, anchor, at, [
     { act: 'view', icon: '👁', label: 'View response', run: () => openHistoryEntry(hid) },
-    { act: 'views', icon: '◧', label: 'Open its views in the browser', run: () => openHistoryViews(hid) },
+    { act: 'views', icon: '◧', label: 'Show in its views', run: () => openHistoryEntry(hid, 'views') },
+    { act: 'views-out', icon: '↗', label: 'Open its views in the browser', run: () => openHistoryViews(hid) },
     { act: 'resend', icon: '↻', label: 'Send again', run: () => resendHistory(hid) },
     { act: 'compare', icon: '⇄', label: 'Compare with…', run: () => pickCompare(hid) },
     { act: 'restore', icon: '↩', label: 'Open as new request', run: () => restoreHistory(hid) },
@@ -875,7 +876,7 @@ async function resendHistory(hid, btn = null) {
 }
 async function gotoHistoryRequest(hid) {
   const h = await api('/history/' + hid);
-  if (h.request_id && state.requests.some((r) => r.id === h.request_id)) openRequest(h.request_id);
+  if (historyRequestId(h)) openRequest(historyRequestId(h));
   else { toast('That request no longer exists; opening a copy', 'error'); restoreHistory(hid, h); }
 }
 async function restoreHistory(hid, h = null) {
@@ -887,36 +888,67 @@ async function restoreHistory(hid, h = null) {
   await openRequest(created.id);
   toast('Opened a copy from history', 'ok');
 }
-async function openHistoryEntry(hid) {
+async function openHistoryEntry(hid, tab = '') {
   const h = await api('/history/' + hid);
   const d = h.detail || {};
+  const resp = d.response || null;
+  const tests = d.tests || [];
+  const failed = tests.filter((t) => !t.passed).length;
+  const headers = (resp && resp.headers) || [];
+  const bits = [fmtMs(h.duration_ms), resp ? fmtBytes(resp.size) : '', fmtDate(h.ts), h.source + (h.environment ? ' · ' + h.environment : ''), h.body_name ? 'body “' + h.body_name + '”' : ''].filter(Boolean);
   openModal(`${h.method} ${h.request_name || h.url}`, `
-    <div class="row"><span class="status ${codeClass(h.status_code)}">${h.status_code == null ? 'Error' : `${h.status_code} ${esc(d.reason || '')}`}</span>
-      <span class="muted small">${fmtMs(h.duration_ms)}</span><span class="muted small">${d.response ? fmtBytes(d.response.size) : ''}</span>
-      <span class="muted small">${esc(fmtDate(h.ts))}</span><span class="muted small">${esc(h.source)}${h.environment ? ' · ' + esc(h.environment) : ''}</span>
-      <span class="grow"></span>
-      <button id="h-resend" class="small" title="Send this request again and compare the new response with this one">↻ Send again &amp; compare</button>
-      <button id="h-compare" class="small" title="Pick another history entry to compare with">⇄ Compare with…</button>
-      <button id="h-restore" class="small">Open as new request</button></div>
-    ${h.error ? `<pre class="mono">${esc(h.error)}</pre>` : ''}
-    <div class="detail-section" id="h-views-sec" hidden><h4>Views</h4><div id="h-views" class="vw-host"></div></div>
-    <div class="detail-section"><h4>Response body</h4><div id="h-viewer"></div></div>
-    ${(d.tests || []).length ? `<div class="detail-section"><h4>Tests</h4><ul class="test-results">${d.tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul></div>` : ''}
-    <div class="detail-section"><h4>Response headers</h4><pre class="mono">${esc(((d.response || {}).headers || []).map(([k, v]) => `${k}: ${v}`).join('\n'))}</pre></div>
-    <div class="detail-section"><h4>Request as sent</h4><pre class="mono">${esc(formatRequest(d.request))}</pre></div>
-  `, [{ label: 'Close', onClick: closeModal }]);
-  if (d.response) mountViewer($('#h-viewer'), d.response); else $('#h-viewer').innerHTML = '<div class="muted small">No response</div>';
-  if (d.response) historyViews(h).then((views) => {
-    if (!views.length || !$('#h-views')) return;
-    $('#h-views-sec').hidden = false;
-    mountViews($('#h-views'), { result: historyResult(h), views, name: h.request_name || 'response' });
-  });
-  $('#h-restore').addEventListener('click', () => { closeModal(); restoreHistory(hid, h); });
-  $('#h-compare').addEventListener('click', () => { closeModal(); pickCompare(hid); });
-  $('#h-resend').addEventListener('click', async (e) => {
-    const r = await resendHistory(hid, e.currentTarget);
-    if (r && r.id) { closeModal(); openCompare(hid, r.id); }
-  });
+    <div class="hd-sum"><span class="status ${codeClass(h.status_code)}">${h.status_code == null ? 'Error' : esc(`${h.status_code} ${d.reason || ''}`.trim())}</span>${bits.map((b) => `<span class="muted small">${esc(b)}</span>`).join('')}</div>
+    <div class="hd-url mono small muted" title="${esc(h.url)}">${esc(h.url)}</div>
+    ${h.error ? `<pre class="mono hd-error">${esc(h.error)}</pre>` : ''}
+    <div class="tabs hd-tabs" id="hd-tabs">
+      <button data-tab="body" class="active">Body</button>
+      <button data-tab="views" title="This response in the request's own HTML pages">Views<span class="tab-n" id="hd-n-views"></span></button>
+      <button data-tab="headers">Headers<span class="tab-n">${headers.length || ''}</span></button>
+      <button data-tab="tests">Tests<span class="tab-n ${tests.length ? (failed ? 'fail' : 'pass') : ''}">${tests.length ? `${tests.length - failed}/${tests.length}` : ''}</span></button>
+      <button data-tab="request">Request</button>
+    </div>
+    <div class="tab-panels hd-panels" id="hd-panels">
+      <div class="tab-panel" data-panel="body"><div id="h-viewer"></div></div>
+      <div class="tab-panel vw-host" data-panel="views" hidden><div id="h-views" class="vw-host"><div class="muted small">Loading…</div></div></div>
+      <div class="tab-panel" data-panel="headers" hidden>${headers.length ? `<table class="htable"><tbody>${headers.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</tbody></table>` : '<div class="muted small">No headers</div>'}</div>
+      <div class="tab-panel" data-panel="tests" hidden>${tests.length ? `<ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul>` : '<div class="muted small">This call ran no tests.</div>'}</div>
+      <div class="tab-panel" data-panel="request" hidden><pre class="mono hd-pre">${esc(formatRequest(d.request))}</pre></div>
+    </div>
+  `, [
+    { label: '↻ Send again & compare', onClick: async (e) => { const r = await resendHistory(hid, e.currentTarget); if (r && r.id) { closeModal(); openCompare(hid, r.id); } } },
+    { label: '⇄ Compare with…', onClick: () => { closeModal(); pickCompare(hid); } },
+    { label: 'Open as new request', onClick: () => { closeModal(); restoreHistory(hid, h); } },
+    { label: 'Close', cls: 'primary hd-close', onClick: closeModal },
+  ]);
+  $('#modal .modal').classList.add('wide');
+  const [bResend, bCompare, bRestore] = $$('#modal-foot button');
+  bResend.id = 'h-resend'; bCompare.id = 'h-compare'; bRestore.id = 'h-restore';
+  bResend.title = 'Send this request again and compare the new response with this one';
+  bCompare.title = 'Pick another history entry to compare with';
+  bindTabs($('#hd-tabs'), $('#hd-panels'));
+  if (resp) mountViewer($('#h-viewer'), resp); else $('#h-viewer').innerHTML = '<div class="muted small">No response</div>';
+  // the request's views, drawn with the response this entry holds
+  const views = await historyViews(h);
+  const box = $('#h-views');
+  if (!box || !box.isConnected) return;   // closed meanwhile
+  $('#hd-n-views').textContent = views.length ? String(views.length) : '';
+  if (views.length && resp) {
+    mountViews(box, { result: historyResult(h), views, name: h.request_name || 'response' });
+  } else {
+    const saved = historyRequestId(h);
+    box.innerHTML = `<div class="vw-empty">${VIEW_ICON}
+      <h4>${views.length ? 'This call has no response to show' : 'No views on this request yet'}</h4>
+      ${views.length ? '' : `<p>A view is an HTML page of your own that draws the response: a chart, a table, a dashboard. Add one to the request and every call in the history, this one included, opens in it.</p>
+      ${saved ? '<div class="vw-actions"><button class="primary" id="h-add-views">Add views to this request</button></div>' : '<p class="muted small">The saved request of this call no longer exists. “Open as new request” brings it back.</p>'}`}</div>`;
+    const add = $('#h-add-views');
+    if (add) add.addEventListener('click', async () => {
+      closeModal();
+      await openRequest(saved);
+      showTab($('#editor-tabs'), 'views');
+      openViewsDialog();
+    });
+  }
+  if (tab === 'views' || (!tab && views.length && resp)) showTab($('#hd-tabs'), 'views');
 }
 
 // ---- compare two history entries
@@ -2552,6 +2584,23 @@ function setViews(views, viewFirst) {
 function updateViewTab() {
   const n = viewsOf(state.current).length;
   $('#n-r-view').textContent = n ? String(n) : '';
+  $('#n-views').textContent = n ? String(n) : '';
+  renderViewsPanel();
+}
+// the Views tab of the request editor: what is attached, before anything is sent
+function renderViewsPanel() {
+  const box = $('#views-panel');
+  if (!box || !state.current) return;
+  const views = viewsOf(state.current);
+  box.innerHTML = `<div class="vwp">
+    <p class="muted small">HTML pages of your own that draw this request's response: a chart, a table, a dashboard. After you send,
+      they show in the <b>View</b> tab of the response, and for every past call in <b>Request history</b>.</p>
+    ${views.length ? `<ul class="vwp-list">${views.map((v) => `<li><span class="vwp-name">${esc(v.name)}</span><span class="mono muted small" title="${esc(v.file)}">${esc(v.file)}</span></li>`).join('')}</ul>`
+      : '<div class="vwp-none muted small">No views on this request yet.</div>'}
+    <div class="vw-actions"><button id="vwp-edit" class="${views.length ? '' : 'primary'}">${views.length ? 'Edit views…' : 'Choose HTML files…'}</button><button id="vwp-starter" title="Writes a working page (chart, table, raw data) you can edit">Create a starter view</button></div>
+    <p class="muted small">A page finds the response in its own address: <code>new URLSearchParams(location.search).get('api')</code>, then <code>fetch(api)</code>.</p></div>`;
+  $('#vwp-edit').addEventListener('click', openViewsDialog);
+  $('#vwp-starter').addEventListener('click', () => addStarterView());
 }
 async function addStarterView() {
   try {
@@ -2625,10 +2674,19 @@ function historyResult(h) {
   return { status: h.status, status_code: h.status_code, reason: d.reason, duration_ms: h.duration_ms, error: h.error,
     body_name: h.body_name, ts: h.ts, request: d.request, response: d.response };
 }
+// The saved request a history entry belongs to. Older entries did not record the id: those
+// are matched by name and method.
+function historyRequestId(h) {
+  if (h.request_id && state.requests.some((r) => r.id === h.request_id)) return h.request_id;
+  const same = state.requests.filter((r) => r.name === h.request_name && r.method === h.method);
+  return same.length === 1 ? same[0].id : null;
+}
+// Views as the request has them now (so a view added later also shows older calls); the ones
+// the call was sent with when the request is gone.
 async function historyViews(h) {
-  let views = viewsOf(h.snapshot);
-  if (!views.length && h.request_id) views = viewsOf(await api('/requests/' + h.request_id).catch(() => null));
-  return views;
+  const rid = historyRequestId(h);
+  const views = rid ? viewsOf(await api('/requests/' + rid).catch(() => null)) : [];
+  return views.length ? views : viewsOf(h.snapshot);
 }
 async function openHistoryViews(hid) {
   const h = await api('/history/' + hid).catch(() => null);

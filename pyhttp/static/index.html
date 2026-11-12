@@ -141,6 +141,7 @@
         <button data-tab="headers">Headers<span class="tab-n" id="n-headers"></span></button>
         <button data-tab="body">Body<span class="tab-n" id="n-body"></span></button>
         <button data-tab="tests" title="Pre-request variables and script; tests, extractions and the test script that run on the response">Scripts<span class="tab-n" id="n-tests"></span></button>
+        <button data-tab="views" title="Your own HTML pages that draw this request's response: a chart, a table, a dashboard…">Views<span class="tab-n" id="n-views"></span></button>
         <button data-tab="settings">Settings</button>
       </div>
       <div class="tab-panels" id="editor-panels">
@@ -218,6 +219,7 @@
           </div>
         </div>
         <div class="tab-panel" data-panel="tests" hidden><div id="tests-panel"></div></div>
+        <div class="tab-panel" data-panel="views" hidden><div id="views-panel"></div></div>
         <div class="tab-panel" data-panel="settings" hidden>
           <label class="field">Timeout (seconds) <input id="f-timeout" type="number" min="1" step="1" value="30"></label>
           <label class="field">Follow redirects

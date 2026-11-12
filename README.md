@@ -247,7 +247,8 @@ mocks/shop.json
 JSON is not always the best way to look at an answer. A request can carry **views**: HTML
 pages of your own that draw its response as a chart, a table, a dashboard, a receipt.
 
-1. Send the request and open the **View** tab of the response.
+1. Open the **Views** tab of the request (next to Scripts) — before or after sending — or
+   the **View** tab of a response.
 2. Press **Create a starter view** — pyhttp writes a working page (a bar chart and a table for
    lists, cards for single objects, the raw data) into `<data folder>/views/` and shows it at
    once. Or press **Choose HTML files…** and give the path of a page you already have, or the
@@ -257,9 +258,10 @@ pages of your own that draw its response as a chart, a table, a dashboard, a rec
 A request can have **several views**. The chips above the page switch between them, **All**
 shows every one side by side, and **↗ Open in browser** opens the one shown (or all of them)
 in your browser. *Show the view first* (in **Edit views…**) opens the View tab instead of the
-body whenever a response arrives. **History** works the same way: an entry in *Request
-history* shows the views with the response it holds, and its ⋯ menu has *Open its views in
-the browser*.
+body whenever a response arrives. **History** works the same way: click a call in *Request
+history* and it opens in the request's views with the response it holds (the dialog has
+Body, Views, Headers, Tests and Request tabs); its ⋯ menu has *Show in its views* and *Open
+its views in the browser*. A call of a request without views offers *Add views to this request*.
 
 **How a page gets the response.** pyhttp opens the page as
 
