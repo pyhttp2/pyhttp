@@ -710,3 +710,55 @@ button:not(:disabled):active { transform: translateY(1px) scale(.96); }
 .set-code { display: flex; align-items: flex-start; gap: 8px; }
 .set-code pre { flex: 1 1 auto; min-width: 0; margin: 0; padding: 10px 12px; font-size: 12px; line-height: 1.6; max-height: 180px; user-select: text; -webkit-user-select: text; }
 .set-code .copy-btn { flex: none; margin-top: 2px; }
+
+/* the modal takes focus itself when nothing inside does (see openModal) */
+.modal:focus { outline: none; }
+
+/* ------------------------------------------------------- example responses */
+.exp-list { list-style: none; margin: 10px 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
+.exp-list li { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.exp-list li:last-child { border-bottom: 0; }
+.exp-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.exp-meta { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-acts { display: flex; gap: 10px; flex: none; }
+.danger-text { color: var(--danger) !important; }
+#resp-bodies .rb-compare { flex: none; }
+
+/* ---------------------------------------------------------------- websocket */
+.response.ws-mode > :not(#ws-panel):not(.resizer) { display: none !important; }
+.ws-panel { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 220px; }
+.ws-panel[hidden] { display: none; }
+.ws-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ws-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.ws-dot.ok { background: var(--ok); } .ws-dot.err { background: var(--danger); }
+.ws-dot.busy { background: var(--warn); animation: method-pulse .8s ease-in-out infinite alternate; }
+.ws-status { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.ws-filter { width: 180px; padding: 4px 8px; font-size: 12px; }
+.ws-log { flex: 1 1 0; min-height: 90px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-3); font-size: 12.5px; }
+.ws-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px; border-bottom: 1px solid var(--border); }
+.ws-row:last-child { border-bottom: 0; }
+.ws-time { flex: none; font-size: 11px; }
+.ws-arrow { flex: none; width: 12px; text-align: center; font-weight: 700; }
+.ws-in .ws-arrow { color: var(--ok); } .ws-out .ws-arrow { color: var(--primary); }
+.ws-error .ws-arrow, .ws-error .ws-msg { color: var(--danger); }
+.ws-info .ws-msg { color: var(--muted); font-style: italic; }
+.ws-kind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.ws-msg { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 4.6em; overflow: hidden; cursor: default; }
+.ws-row.open .ws-msg { max-height: none; }
+.ws-size { flex: none; font-size: 11px; }
+.ws-empty { padding: 18px 14px; font-family: var(--sans); }
+.ws-compose { display: flex; gap: 8px; align-items: stretch; }
+.ws-compose textarea { flex: 1 1 auto; min-height: 44px; resize: vertical; }
+.ws-compose button { flex: none; align-self: flex-end; }
+.m-WS { color: #22d3ee; }
+:root[data-theme="light"] .m-WS { color: #0e7490; }
+
+/* ------------------------------------------------ JSON tree, windowed rows */
+.jv-virtual { position: relative; min-width: max-content; }
+.jv-window { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+.jv-vrow { height: 20px; line-height: 20px; white-space: pre; overflow: hidden; border-radius: 3px; }
+.jv-vrow.box { cursor: pointer; }
+.jv-vrow:hover { background: rgba(59,130,246,.08); }
+.jv-vrow.cur { background: rgba(245,158,11,.16); }
+.jv-vrow .jv-toggle.shut { transform: rotate(-90deg); }
+.rv-note.top { margin: 0 0 8px; }

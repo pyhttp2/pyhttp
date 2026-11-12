@@ -866,8 +866,68 @@ def mask_secrets(obj: Any, secrets: list[str]) -> Any:
     return obj
 
 
-def record(result: dict[str, Any], *, source: str, req: dict[str, Any], environment: str | None) -> None:
-    """Console (in memory) and history (persisted) entry for an executed request."""
+# ---- full bodies of history entries
+# The history keeps 64 KB of a response body and the viewer 512 KB. A body longer than what the
+# history keeps is also written whole to a file named after the history entry, so a response view
+# (and nothing else: the list stays light) gets the body exactly as the API sent it. The files
+# live next to the run outputs and go away with their history entries.
+BODY_DIR = "_bodies"
+HISTORY_BODY_CHARS = 64_000
+MAX_KEPT_BODY = 64 * 1024 * 1024   # larger bodies are not kept in full
+
+
+def bodies_dir() -> Path:
+    return db.current().path.parent / "outputs" / BODY_DIR
+
+
+def full_body(history_id: str | None) -> bytes | None:
+    """The whole response body of a history entry, when it was kept."""
+    if not history_id or not re.fullmatch(r"[0-9a-f]{8,64}", str(history_id)):
+        return None
+    try:
+        return (bodies_dir() / f"{history_id}.body").read_bytes()
+    except OSError:
+        return None
+
+
+def sweep_bodies() -> int:
+    """Delete the body files of history entries that no longer exist; returns how many."""
+    folder = bodies_dir()
+    if not folder.is_dir():
+        return 0
+    keep = db.history_ids()
+    gone = 0
+    for f in folder.glob("*.body"):
+        if f.stem not in keep:
+            try:
+                f.unlink()
+                gone += 1
+            except OSError:
+                pass
+    return gone
+
+
+_bodies_written = 0
+
+
+def _keep_full_body(history_id: str, result: dict[str, Any]) -> None:
+    global _bodies_written
+    resp = result.get("response") or {}
+    content = result.get("_content")
+    cut = resp.get("truncated") or resp.get("is_binary") or len(resp.get("body_text") or "") > HISTORY_BODY_CHARS
+    if not cut or not isinstance(content, (bytes, bytearray)) or not content or len(content) > MAX_KEPT_BODY:
+        return
+    folder = bodies_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{history_id}.body").write_bytes(content)
+    _bodies_written += 1
+    if _bodies_written % 25 == 1:   # the history is capped: drop the files of entries it pushed out
+        sweep_bodies()
+
+
+def record(result: dict[str, Any], *, source: str, req: dict[str, Any], environment: str | None) -> str | None:
+    """Console (in memory) and history (persisted) entry for an executed request. Returns the id
+    of the history entry (None when it could not be written), so the UI can compare two sends."""
     console.record(result, source=source, request_name=req.get("name", ""), body_name=req.get("body_name"),
                    environment=environment)
     resp = result.get("response")
@@ -879,15 +939,17 @@ def record(result: dict[str, Any], *, source: str, req: dict[str, Any], environm
     try:
         secrets = db.secret_values(req.get("folder_id"))
         detail = mask_secrets(detail, secrets)
-        db.add_history({
+        history_id = db.add_history({
             "ts": time.time(), "source": source, "method": (result.get("request") or {}).get("method", ""),
             "url": mask_secrets((result.get("request") or {}).get("url", ""), secrets), "request_id": req.get("id"),
             "request_name": req.get("name", ""), "body_name": req.get("body_name"), "status": result.get("status", ""),
             "status_code": result.get("status_code"), "duration_ms": result.get("duration_ms"),
             "error": result.get("error"), "environment": environment, "snapshot": snapshot(req), "detail": detail,
         })
+        _keep_full_body(history_id, result)
+        return history_id
     except Exception:  # noqa: BLE001 - history must never break a send
-        pass
+        return None
 
 
 class RunManager:
@@ -976,7 +1038,7 @@ class RunManager:
             if req.get("data_row"):
                 ctx["vars"].update({str(k): ("" if v is None else str(v)) for k, v in req["data_row"].items()})
             result = await execute(req, ctx)
-            record(result, source=source, req=req, environment=env_name)
+            history_id = record(result, source=source, req=req, environment=env_name)
             failed_req = result["status"] == "error" or (
                 fail_on_http_error and (result.get("status_code") or 0) >= 400
             ) or (fail_on_test and result.get("tests_failed", 0) > 0)
@@ -1026,7 +1088,7 @@ class RunManager:
                 "error": result["error"], "tests": result.get("tests"),
                 "detail": {"request": masked_req, "response": public_resp,
                            "reason": result["reason"], "extracted": masked_extracted,
-                           "dependency": result.get("dependency")},
+                           "dependency": result.get("dependency"), "history_id": history_id},
                 "body_file": body_file, "detail_file": detail_file, "started_at": started_at,
             })
             completed += 1

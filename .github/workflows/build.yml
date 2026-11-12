@@ -145,6 +145,31 @@ jobs:
       - name: Test
         run: python -m pytest tests/test_backend.py -q
 
+  # The macOS app window is WebKit, which differs from Chromium in ways that have bitten before
+  # (a dropped click on Send, list scroll positions). The same UI tests, in that engine. Not
+  # blocking yet: the job may fail without failing the run, until it has been green for a while.
+  ui-webkit:
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies and the WebKit build Playwright drives
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest playwright
+          python -m playwright install webkit
+
+      - name: UI tests in WebKit
+        env:
+          PYHTTP_UI_BROWSER: webkit
+        run: python -m pytest tests/test_ui.py -q
+
   build:
     needs: prepare
     # releases (prepare ran) and manual runs (a test build when "publish" is not ticked, where

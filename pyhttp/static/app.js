@@ -47,13 +47,48 @@ function toast(msg, kind = '', action = null) {
   toastTimer = setTimeout(() => { el.hidden = true; }, action ? 6500 : kind === 'error' ? 6000 : 2800);
 }
 
+// Tab strips follow the ARIA tabs pattern: role=tablist/tab/tabpanel, aria-selected, one tab stop
+// per strip (the selected tab) and the arrow keys, Home and End to move between tabs.
+let tabStripSeq = 0;
+function syncTabs(tabsEl, panelsEl) {
+  const tabs = $$('button[data-tab]', tabsEl);
+  const strip = tabsEl.dataset.strip || (tabsEl.dataset.strip = tabsEl.id || 'tabs' + (++tabStripSeq));
+  tabsEl.setAttribute('role', 'tablist');
+  tabs.forEach((b) => {
+    const on = b.classList.contains('active');
+    if (!b.id) b.id = `${strip}-tab-${b.dataset.tab}`;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+    const panel = panelsEl && $$('.tab-panel', panelsEl).find((p) => p.dataset.panel === b.dataset.tab);
+    if (!panel) return;
+    if (!panel.id) panel.id = `${strip}-panel-${b.dataset.tab}`;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', b.id);
+    b.setAttribute('aria-controls', panel.id);
+  });
+  if (tabs.length && !tabs.some((b) => b.tabIndex === 0)) tabs[0].tabIndex = 0;
+}
 function bindTabs(tabsEl, panelsEl) {
   $$('button[data-tab]', tabsEl).forEach((btn) => {
     btn.addEventListener('click', () => {
       $$('button[data-tab]', tabsEl).forEach((b) => b.classList.toggle('active', b === btn));
       $$('.tab-panel', panelsEl).forEach((p) => { p.hidden = p.dataset.panel !== btn.dataset.tab; });
+      syncTabs(tabsEl, panelsEl);
     });
   });
+  tabsEl.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
+    const tabs = $$('button[data-tab]', tabsEl).filter((b) => !b.hidden && !b.disabled && b.offsetParent !== null);
+    const i = tabs.indexOf(document.activeElement);
+    if (i === -1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click();
+    tabs[next].focus();
+  });
+  syncTabs(tabsEl, panelsEl);
 }
 function showTab(tabsEl, name) {
   const btn = $(`button[data-tab="${name}"]`, tabsEl);
@@ -77,7 +112,24 @@ function formatRequest(req) {
 }
 
 // -------------------------------------------------------------------- modal
+// The modal is a dialog for assistive tech too: focus moves into it, Tab stays inside it, and
+// closing it gives the focus back to whatever opened it.
+const FOCUSABLE = 'a[href], button, input, select, textarea, [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+function focusableIn(root) {
+  return $$(FOCUSABLE, root).filter((el) => !el.disabled && !el.hidden && el.offsetParent !== null);
+}
+function trapFocus(root, e) {
+  if (e.key !== 'Tab' || e.defaultPrevented) return;   // an editor inside may use Tab to indent
+  const f = focusableIn(root);
+  if (!f.length) { e.preventDefault(); return; }
+  const i = f.indexOf(document.activeElement);
+  if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+}
+let modalPrevFocus = null;
 function openModal(title, bodyHtml, footButtons = []) {
+  const back = $('#modal');
+  if (back.hidden) modalPrevFocus = document.activeElement;   // one modal replacing another keeps the first opener
   $('#modal .modal').className = 'modal';   // a dialog that wants another size adds its class after opening
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = bodyHtml;
@@ -90,13 +142,23 @@ function openModal(title, bodyHtml, footButtons = []) {
     b.addEventListener('click', onClick);
     foot.appendChild(b);
   });
-  $('#modal').hidden = false;
+  back.hidden = false;
+  if (!back.dataset.trap) {
+    back.dataset.trap = '1';
+    back.addEventListener('keydown', (e) => trapFocus($('#modal .modal'), e));
+  }
+  // focus moves into the dialog at once; callers that want a field of their own focus it right after
+  if (!back.contains(document.activeElement)) $('#modal .modal').focus();
 }
 function closeModal() {
   if (typeof envSave !== 'undefined' && envSave.timer) flushEnvSave();
+  const wasOpen = !$('#modal').hidden;
   $('#modal').hidden = true;
   $('#modal-body').innerHTML = '';   // no stale ids or listeners left behind
   $('#modal-foot').innerHTML = '';
+  const prev = modalPrevFocus;
+  modalPrevFocus = null;
+  if (wasOpen && prev && prev.focus && document.contains(prev)) prev.focus();
 }
 
 // --------------------------------------------------------------- kv editor
@@ -397,6 +459,7 @@ function renderEditor() {
   $('#f-timeout').value = r.timeout;
   inheritedInfo = null;
   renderAuthPanel(r);
+  if (typeof renderExamplesPanel === 'function') renderExamplesPanel();
   renderTestsPanel(r);
   renderRequestSettings(r);
   updateViewTab();
@@ -523,6 +586,19 @@ function renderDependencyBadge(dep) {
 }
 function renderSendButton() {
   const btn = $('#btn-send');
+  if (typeof isWsRequest === 'function' && isWsRequest()) {   // a ws:// address connects instead of sending
+    const s = wsSession();
+    const live = !!s && (s.state === 'open' || s.state === 'connecting');
+    const label = live ? 'Disconnect' : 'Connect';
+    const title = live ? 'Close this WebSocket connection' : 'Open a WebSocket connection to this address (Ctrl+Enter)';
+    btn.classList.toggle('cancel', live);
+    btn.disabled = false;
+    if (btn.title !== title) btn.title = title;
+    if (btn.textContent !== label) btn.textContent = label;
+    $('#btn-send-mode').hidden = true;
+    $('#body-list').classList.remove('sending');
+    return;
+  }
   const type = $('#f-body-type').value;
   const on = state.bodies.filter((b) => b.enabled).length;
   const n = type === 'none' ? 1 : on;
@@ -705,6 +781,7 @@ async function sendStreaming(payload) {
   };
 }
 function sendOrCancel() {
+  if (typeof isWsRequest === 'function' && isWsRequest()) { wsToggle(); return; }
   if (state.sending && state.sending.key === responseKey()) cancelSending(); else sendCurrent();
 }
 // The ➤ button next to a body: send that one body right away, whatever is checked.
@@ -939,6 +1016,7 @@ async function duplicateRequestById(id) {
 
 async function sendCurrent({ onlyBodyId = null } = {}) {
   if (!state.current) return;
+  if (typeof isWsRequest === 'function' && isWsRequest()) { wsToggle(true); return; }   // Ctrl+Enter: connect, never disconnect
   await saveNow();
   const data = readEditor();
   data.folder_id = state.current.folder_id || null;
@@ -1037,6 +1115,7 @@ function runResultToResponse(r) {
     status: d.response ? 'ok' : 'error', status_code: r.status_code, reason: d.reason || '',
     duration_ms: r.duration_ms, error: r.error, request: d.request, response: d.response, body_name: r.body_name,
     tests, tests_failed: tests.filter((t) => !t.passed).length, extracted: d.extracted || [], iteration: r.iteration || 1, dependency: d.dependency || null,
+    history_id: d.history_id || null,
   };
 }
 // response keys: a body id or NO_BODY, plus "#n" for iteration n of a run with several iterations
@@ -1094,6 +1173,7 @@ async function pollBodyRun(rs) {
   } catch (e) { toast(e.message, 'error'); }
 }
 function renderResponseArea() {
+  if (typeof renderWsPanel === 'function' && renderWsPanel()) return;   // a WebSocket request shows its console here
   const rs = responsesFor();
   if (rs) {  // forget responses of bodies that were deleted
     Object.keys(rs.byKey).forEach((k) => { if (bodyOfKey(k) !== NO_BODY && !state.bodies.some((b) => b.id === bodyOfKey(k))) delete rs.byKey[k]; });
@@ -1128,7 +1208,18 @@ function renderResponseArea() {
       ? `<span class="rb-run">${rs.run.name !== undefined ? `Run${rs.run.name ? ` “${esc(rs.run.name)}”` : ''}${rs.run.status === 'running' ? ' (running)' : ''}: ` : ''}${rs.run.completed}/${rs.run.total} sent${rs.run.parallel ? ' in parallel' : ''}${rs.run.failed ? ` · ${rs.run.failed} failed` : ''}
           <button class="link small rb-folder" title="${esc(rs.run.output_dir || '')}">Open output folder</button></span>`
       : '';
-    strip.innerHTML = keys.map(tab).join('') + runInfo;
+    // two or more real responses: any two of them can be compared as a diff
+    const real = keys.filter((k) => !rs.byKey[k].pending && !rs.byKey[k].notSent);
+    const cmpBtn = real.length > 1 ? '<button class="link small rb-compare" title="Compare the response on screen with another one: body, headers and the request as sent, as a diff">⇄ Compare</button>' : '';
+    strip.innerHTML = keys.map(tab).join('') + cmpBtn + runInfo;
+    const cmp = $('.rb-compare', strip);
+    if (cmp) cmp.addEventListener('click', () => {
+      const others = real.filter((k) => k !== rs.selected);
+      if (!real.includes(rs.selected) || !others.length) return;
+      const go = (k) => compareResults({ label: nameOf(k), result: rs.byKey[k] }, { label: nameOf(rs.selected), result: rs.byKey[rs.selected] });
+      if (others.length === 1) go(others[0]);
+      else openMenu('rb-compare', cmp, null, others.map((k) => ({ act: 'cmp:' + k, icon: '⇄', label: `with “${nameOf(k)}”`, run: () => go(k) })));
+    });
     $$('.rb-tab', strip).forEach((el) => el.addEventListener('click', () => {
       rs.selected = el.dataset.key;
       renderResponseArea();
@@ -1687,12 +1778,7 @@ function dialog({ title, message = '', field = null, buttons, danger = false }) 
       e.stopPropagation();
       if (e.key === 'Escape') { e.preventDefault(); done(cancelValue); }
       if (e.key === 'Enter' && primary && e.target.tagName !== 'BUTTON') { e.preventDefault(); primary.click(); }
-      if (e.key === 'Tab') { // keep focus inside the dialog
-        const f = $$('button, input, select', back);
-        const i = f.indexOf(document.activeElement);
-        if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-        else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
-      }
+      trapFocus(back, e);   // keep focus inside the dialog
     });
     document.body.appendChild(back);
     if (input) { input.focus(); if (input.select) input.select(); } else (primary || $('button', foot)).focus();
@@ -1805,7 +1891,7 @@ function requestRow(r, depth) {
   const tags = r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('');
   li.innerHTML =
     `<input type="checkbox" ${isSelected(r.id) ? 'checked' : ''} title="Select for run">` +
-    `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>` +
+    (/^\s*wss?:\/\//i.test(r.url || '') ? '<span class="method m-WS" title="WebSocket">WS</span>' : `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>`) +
     `<div style="min-width:0"><div class="name">${esc(r.name)}${sendCount(r) > 1 ? `<span class="bcount" title="Checked bodies">×${sendCount(r)}</span>` : ''}</div><div class="sub">${tags}${esc(r.url)}</div></div>` +
     '<button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button>';
   $('.more', li).addEventListener('click', (e) => { e.stopPropagation(); openReqMenu(r, e.currentTarget); });
@@ -1845,25 +1931,54 @@ function folderRow(f, depth, list, open) {
   return li;
 }
 
+// The sidebar is patched in place: every row has a key (its folder or request id) and a signature
+// of everything it shows. A row whose signature is unchanged keeps its DOM node, so renaming one
+// request (or ticking one checkbox) touches one <li> instead of rebuilding hundreds.
+function requestSig(r, depth) {
+  return JSON.stringify([r.name, r.method, r.url, r.tags, r.folder_id || '', depth, sendCount(r),
+    !!(state.current && state.current.id === r.id), isSelected(r.id), state.kbId === r.id]);
+}
+function folderSig(f, depth, list, open) {
+  return JSON.stringify([f.name, f.parent_id || '', depth, open, list.map((r) => r.id + (isSelected(r.id) ? '+' : '')).join(',')]);
+}
 function renderList() {
   const ul = $('#req-list');
   const keepScroll = ul.scrollTop;   // autosave re-renders the list: it must not jump to the top
-  ul.innerHTML = '';
   const filtering = !!(state.q || state.tag);
   const tree = buildTree();
   state.treeOrder = [...(tree.kids.get('') || []).flatMap((f) => tree.subtree(f.id)), ...(tree.reqs.get('') || [])];
+  const rows = [];   // what the list must show, in order: { key, sig, make }
   const walk = (fid, depth) => {
     (tree.kids.get(fid) || []).forEach((f) => {
       const list = tree.subtree(f.id);
       if (filtering && !list.length) return;
       const open = filtering || state.expanded.has(f.id);
-      ul.appendChild(folderRow(f, depth, list, open));
+      rows.push({ key: 'f:' + f.id, sig: folderSig(f, depth, list, open), make: () => folderRow(f, depth, list, open) });
       if (open) walk(f.id, depth + 1);
     });
-    (tree.reqs.get(fid) || []).forEach((r) => ul.appendChild(requestRow(r, depth)));
+    (tree.reqs.get(fid) || []).forEach((r) => rows.push({ key: 'r:' + r.id, sig: requestSig(r, depth), make: () => requestRow(r, depth) }));
   };
   walk('', 0);
-  if (!ul.children.length) {
+  const old = new Map();
+  Array.from(ul.children).forEach((li) => { if (li.dataset.key) old.set(li.dataset.key, li); else li.remove(); });
+  let at = ul.firstElementChild;   // the node that should come next
+  rows.forEach((row) => {
+    let li = old.get(row.key);
+    old.delete(row.key);
+    if (li && li.dataset.sig !== row.sig) {   // same thing, different content: swap the node, keep its place and transient marks
+      const fresh = row.make();
+      if (li.classList.contains('sending')) fresh.classList.add('sending');
+      if (li === at) at = li.nextElementSibling;
+      li.remove();
+      li = fresh;
+    } else if (!li) li = row.make();
+    li.dataset.key = row.key;
+    li.dataset.sig = row.sig;
+    if (li === at) at = at.nextElementSibling;
+    else ul.insertBefore(li, at);
+  });
+  old.forEach((li) => li.remove());
+  if (!rows.length) {
     ul.innerHTML = `<li class="empty small">${filtering ? 'No requests match.' : 'No requests yet. Click “+ New”, or create a folder first.'}</li>`;
   }
   ul.scrollTop = keepScroll;
@@ -1931,6 +2046,8 @@ function openFolderMenu(f, anchor, at) {
     '-',
     { act: 'settings', icon: '⚙', label: 'Settings (auth, headers, variables)…', run: () => openFolderSettings(f) },
     { act: 'export', icon: '🚀', label: 'Export as Postman collection', run: () => exportPostman(false, f.id) },
+    { act: 'docs', icon: '📄', label: 'Export documentation (Markdown)', run: () => exportDocs(f.id) },
+    { act: 'docs-html', icon: '🌐', label: 'Export documentation (HTML page)', run: () => exportDocs(f.id, 'html') },
     '-',
     { act: 'rename', icon: '✎', label: 'Rename', run: () => renameFolder(f) },
     { act: 'move', icon: '↪', label: 'Move to…', run: () => moveFolderDialog(f) },
@@ -2620,6 +2737,7 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
           <div id="set-ssl-warn" class="ssl-warn" ${s.verify_ssl ? 'hidden' : ''}>⚠ Certificates are not checked. Connections can be intercepted without warning.</div>
           ${sw('set-redirects', 'Follow redirects', 'Default for every request; a request can override it in its Settings tab.', s.follow_redirects)}
           ${sw('set-cookies', 'Send and store cookies', 'Keep a cookie jar like a browser. Each request can opt out in its Settings tab.', s.send_cookies)}
+          ${sw('set-keyring', 'Keep 🔒 values in the system keychain', `The values of variables marked secret (environments and folders) are stored in ${s.keyring_name ? esc(s.keyring_name) : 'the operating system\'s credential store'} instead of this project\'s database file, which then holds no secrets. They stay on this computer: on another one, or after copying the data folder, type them in again.`, s.secrets_keyring)}
           ${sw('set-parallel', 'Send in parallel', 'Send ×N (several bodies) and runs send everything at once instead of one after another. Fastest, but no order and no {{prev.…}}. The run dialog can override this per run.', s.parallel)}
         </div>
         <div class="set-grid">
@@ -2716,6 +2834,17 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
   });
   $('#set-redirects').addEventListener('change', (e) => saveSettings({ follow_redirects: e.target.checked }));
   $('#set-cookies').addEventListener('change', (e) => saveSettings({ send_cookies: e.target.checked }));
+  $('#set-keyring').addEventListener('change', async (e) => {
+    const box = e.target;
+    box.disabled = true;
+    try {
+      Object.assign(appSettings, await api('/settings', { method: 'PUT', body: { secrets_keyring: box.checked } }));
+      toast(box.checked ? 'Secret values moved to the system keychain' : 'Secret values moved back into the project database', 'ok');
+    } catch (err) {
+      box.checked = !box.checked;   // nothing was moved
+      toast(err.message, 'error');
+    } finally { box.disabled = false; }
+  });
   const concurrencyHint = () => {
     const on = $('#set-parallel').checked;
     $('#set-concurrency').disabled = !on;

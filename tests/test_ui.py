@@ -21,7 +21,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pyhttp.app import create_app  # noqa: E402
-from tests.test_backend import echo  # noqa: E402
+from tests.test_backend import echo, ws_url  # noqa: E402, F401 - ws_url is a fixture
 
 pw = pytest.importorskip("playwright.sync_api")
 
@@ -109,10 +109,222 @@ def editor_cursor(page, selector: str, anchor: int, head: int | None = None):
     page.evaluate("([sel, a, h]) => document.querySelector(sel)._enhanced.setCursor(a, h)", [selector, anchor, head])
 
 
+def click_fold(page, wrap: str, nth: int = 0):
+    """Click the nth fold marker of the CodeMirror editor inside ``wrap``. The click is aimed, with
+    the real mouse, at the middle of the gutter cell that holds the marker: in WebKit the marker
+    span itself is not hit-testable at the point Playwright picks for it, so `page.click` on the
+    span timed out there while folding by hand worked."""
+    cell = page.locator(f'{wrap} .cm-foldGutter .cm-gutterElement:has(span[title="Fold line"])').nth(nth)
+    cell.scroll_into_view_if_needed()
+    box = cell.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+
+def forget(page, app_url: str, *names: str, mocks: bool = False):
+    """Delete what a test created (the server is shared by the whole module, and later tests
+    count rows in the sidebar or expect an empty list)."""
+    for r in page.request.get(app_url + "/api/requests?fields=list").json():
+        if r["name"] in names:
+            page.request.delete(f"{app_url}/api/requests/{r['id']}")
+    if mocks:
+        for m in page.request.get(app_url + "/api/mocks").json()["mocks"]:
+            page.request.delete(f"{app_url}/api/mocks/{m['id']}")
+
+
+def test_examples_compare_tabs_and_modal_focus(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Examples and compare")
+    page.select_option("#f-method", "POST")
+    page.click("#editor-tabs button[data-tab='body']")
+    page.select_option("#f-body-type", "json")
+    for name, text in (("first", '{"n": 1}'), ("second", '{"n": 2}')):
+        page.click("#btn-body-add")
+        page.fill("#body-name", name)
+        set_editor(page, "#f-body", text)
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+
+    # tab strips are ARIA tabs: roles, aria-selected, one tab stop, arrow keys move
+    assert page.get_attribute("#editor-tabs", "role") == "tablist"
+    body_tab = page.locator("#editor-tabs button[data-tab='body']")
+    assert body_tab.get_attribute("role") == "tab" and body_tab.get_attribute("aria-selected") == "true"
+    assert page.get_attribute("#editor-tabs button[data-tab='params']", "aria-selected") == "false"
+    assert page.get_attribute("#editor-tabs button[data-tab='params']", "tabindex") == "-1"
+    panel_id = body_tab.get_attribute("aria-controls")
+    assert page.get_attribute(f"#{panel_id}", "role") == "tabpanel"
+    body_tab.focus()
+    page.keyboard.press("ArrowLeft")
+    assert page.get_attribute("#editor-tabs button[data-tab='headers']", "aria-selected") == "true"
+    page.keyboard.press("ArrowRight")
+    assert body_tab.get_attribute("aria-selected") == "true"
+
+    # send both bodies: the response strip offers to compare them
+    page.click("#btn-send")
+    page.wait_for_selector("#resp-bodies .rb-tab >> nth=1")
+    page.wait_for_function("document.querySelectorAll('#resp-bodies .rb-tab .rb-code').length === 2")
+    page.click("#resp-bodies .rb-compare")
+    page.wait_for_selector("#modal .cmp-table")
+    assert page.get_attribute("#modal .modal", "role") == "dialog"
+    assert page.locator("#modal .diff .d-add").count() >= 1 and page.locator("#modal .diff .d-del").count() >= 1
+    # focus is inside the modal and Tab cannot leave it
+    for _ in range(4):
+        page.keyboard.press("Tab")
+        assert page.evaluate("document.querySelector('#modal').contains(document.activeElement)")
+    page.click("#modal-foot button")
+    page.wait_for_selector("#modal", state="hidden")
+
+    # pin the response on screen as an example, then look at it in the Examples tab
+    page.click("#r-example")
+    page.fill("#dlg-in", "Happy path")
+    page.keyboard.press("Enter")
+    page.wait_for_function("document.querySelector('#n-examples').textContent === '1'")
+    page.click("#editor-tabs button[data-tab='examples']")
+    assert page.locator("#examples-panel .exp-name").text_content() == "Happy path"
+    page.click("#examples-panel button[data-act='view']")
+    page.wait_for_selector("#ex-viewer.rv")
+    page.click("#modal-foot button")
+    # an edit (autosave) must not drop the example
+    page.fill("#f-name", "Examples and compare 2")
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    page.reload()
+    page.wait_for_selector("#btn-new")
+    page.click("#req-list .req-item >> text=Examples and compare 2")
+    page.wait_for_function("document.querySelector('#n-examples').textContent === '1'")
+    # ...and it becomes a mock route
+    page.click("#editor-tabs button[data-tab='examples']")
+    page.click("#examples-panel button[data-act='mock']")
+    page.click(".dialog .primary")
+    page.wait_for_selector("#toast >> text=Route added")
+    page.click("#examples-panel button[data-act='del']")
+    page.click(".dialog .danger-solid")
+    page.wait_for_function("document.querySelector('#n-examples').textContent === ''")
+    forget(page, app_url, "Examples and compare 2", mocks=True)
+
+
+def test_sidebar_is_patched_in_place(page, servers):
+    """A change to one request keeps the DOM nodes of the other rows (they are not rebuilt)."""
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Patch one")
+    new_request(page, echo_url, "Patch two")
+    page.wait_for_function("document.querySelectorAll('#req-list .req-item').length >= 2")
+    row = "Array.from(document.querySelectorAll('#req-list .req-item')).find((li) => li.querySelector('.name').textContent.startsWith('Patch one'))"
+    page.evaluate(f"({row}).__kept = true")
+    order = "Array.from(document.querySelectorAll('#req-list .req-item .name')).map((e) => e.textContent).join('|')"
+    before = page.evaluate(order)
+    # rename the request in the editor ("Patch two"): its row changes, the other one is the same node
+    page.fill("#f-name", "Patch two renamed")
+    page.wait_for_function("Array.from(document.querySelectorAll('#req-list .req-item .name')).some((e) => e.textContent === 'Patch two renamed')")
+    assert page.evaluate(f"({row}).__kept") is True
+    assert page.evaluate(order) == before.replace("Patch two", "Patch two renamed")
+    # ticking it for a run redraws that row only, and filtering then clearing brings the same nodes back in order
+    page.evaluate(f"({row}).querySelector('input').click()")
+    assert page.evaluate(f"({row}).classList.contains('selected')") and page.evaluate(f"({row}).__kept") is None
+    page.evaluate(f"({row}).__kept = true")
+    page.fill("#search", "Patch two")
+    page.wait_for_function("document.querySelectorAll('#req-list .req-item').length === 1")
+    page.fill("#search", "")
+    page.wait_for_function(f"{order} === {before.replace('Patch two', 'Patch two renamed')!r}")
+    page.click("#btn-clear-sel")
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    forget(page, app_url, "Patch one", "Patch two renamed")
+
+
+def test_big_json_loads_whole_and_is_drawn_as_a_window(page, servers):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Big json")
+    page.fill("#f-url", echo_url + "/many?n=30000")
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    page.click("#btn-send")
+    # about 2 MB: the viewer holds the first part and offers the rest
+    page.wait_for_selector("#r-body .rv-note.top .rv-load-all")
+    assert "Only the first" in page.locator("#r-body .rv-note.top").text_content()
+    page.click("#r-body .rv-load-all")
+    page.wait_for_selector("#r-body .jv-virtual")
+    assert page.locator("#r-body .rv-note.top").count() == 0
+    tree = "document.querySelector('#r-body .jv-virtual')"
+    # 30 000 items are a few rows of DOM, whatever is expanded
+    assert page.evaluate(f"{tree}._rowCount()") > 30000
+    assert page.locator("#r-body .jv-vrow").count() < 250
+    page.click("#r-body .rv-expand")
+    assert page.evaluate(f"{tree}._rowCount()") > 200000 and page.locator("#r-body .jv-vrow").count() < 250
+    page.click("#r-body .rv-collapse")
+    assert page.evaluate(f"{tree}._rowCount()") < 10
+    # search covers the whole document: the last key is found, its row is brought on screen and marked
+    page.fill("#r-body .rv-search", "needle-at-the-end")
+    page.wait_for_selector("#r-body .jv-vrow.cur mark.rv-m")
+    assert page.locator("#r-body .rv-count").text_content() == "1/1"
+    assert '"tail": "needle-at-the-end"' in page.locator("#r-body .jv-vrow.cur").text_content()
+    # a match deep inside a collapsed array opens its branch
+    page.fill("#r-body .rv-search", "item 29999")
+    page.wait_for_function("(document.querySelector('#r-body .jv-vrow.cur') || {textContent: ''}).textContent.includes('\"name\": \"item 29999\"')")
+    assert page.locator("#r-body .jv-vrow.cur mark.rv-m").text_content() == "item 29999"
+    box = page.locator("#r-body .jv-vrow.cur").bounding_box()
+    assert 0 <= box["y"] <= page.viewport_size["height"]
+    page.fill("#r-body .rv-search", "")
+    # the path filter still works on the full data, and a small result is the ordinary tree again
+    page.fill("#r-body .rv-filter", "items[29999].name")
+    page.wait_for_function("document.querySelector('#r-body .rv-body').textContent.includes('item 29999') && !document.querySelector('#r-body .jv-virtual')")
+    page.fill("#r-body .rv-filter", "items[*].id")
+    page.wait_for_selector("#r-body .jv-virtual")
+    # clicking a row opens and closes it; clicking a key copies its path
+    page.fill("#r-body .rv-filter", "")
+    page.wait_for_function(f"{tree} && {tree}._rowCount() > 1000")
+    rows_before = page.evaluate(f"{tree}._rowCount()")
+    page.locator("#r-body .jv-vrow.box").nth(1).click()
+    assert page.evaluate(f"{tree}._rowCount()") < rows_before
+    forget(page, app_url, "Big json")
+
+
+def test_websocket_console(page, servers, ws_url):
+    app_url, echo_url = servers
+    url, _seen = ws_url
+    log_has = "(t) => Array.from(document.querySelectorAll('#ws-log .ws-row')).some((r) => r.textContent.includes(t))"
+    page.click("#btn-new")
+    page.fill("#f-name", "Socket")
+    assert not page.locator("#ws-panel").is_visible()
+    page.fill("#f-url", url + "/room")
+    # a ws:// address turns Send into Connect and the response area into a console
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Connect'")
+    assert page.locator("#ws-panel").is_visible() and page.locator("#ws-send").is_disabled()
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    page.click("#btn-send")
+    page.wait_for_function(log_has, arg="hello /room")
+    assert page.locator("#btn-send").text_content() == "Disconnect"
+    assert "Connected to" in page.locator("#ws-status").text_content()
+    page.wait_for_selector("#req-list .req-item .m-WS")
+
+    page.fill("#ws-text", '{"a": 1}')
+    page.keyboard.press("Control+Enter")
+    page.wait_for_function(log_has, arg='echo: {"a": 1}')
+    assert page.locator("#ws-log .ws-row.ws-out").count() == 1
+    assert page.locator("#btn-send").text_content() == "Disconnect"          # Ctrl+Enter in the box sends, it does not hang up
+    # a JSON message opens pretty-printed on click
+    out = page.locator("#ws-log .ws-row.ws-out")
+    out.click()
+    assert out.locator(".ws-msg").text_content() == '{\n  "a": 1\n}'
+    page.click("#ws-ping")
+    page.wait_for_function(log_has, arg="pong")
+    page.fill("#ws-filter", "echo")
+    assert page.locator("#ws-log .ws-row").count() == 1
+    page.fill("#ws-filter", "")
+    assert page.locator("#ws-log .ws-row").count() >= 5
+
+    page.click("#btn-send")
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Connect'")
+    assert "Closed (1000" in page.locator("#ws-status").text_content()
+    # back to an http address: an ordinary request again
+    page.fill("#f-url", echo_url + "/echo")
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Send'")
+    assert not page.locator("#ws-panel").is_visible()
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    forget(page, app_url, "Socket")
+
+
 def test_sidebar_ignores_a_late_answer_to_an_older_search(page, servers):
     app_url, echo_url = servers
     new_request(page, echo_url, "race alpha")
     new_request(page, echo_url, "race beta")
+    # "Saved" shows before the sidebar has reloaded: wait for both rows
+    page.wait_for_function("['race alpha', 'race beta'].every((n) => Array.from(document.querySelectorAll('#req-list .req-item .name')).some((e) => e.textContent === n))")
     total = page.locator("#req-list .req-item").count()
     assert total >= 2
 
@@ -127,11 +339,12 @@ def test_sidebar_ignores_a_late_answer_to_an_older_search(page, servers):
     page.wait_for_timeout(1500)         # both answers are in
     page.unroute("**/api/requests?q=race+alpha*")
     assert page.locator("#req-list .req-item").count() == total
+    forget(page, app_url, "race alpha", "race beta")
 
 
 def test_editor_comment_toggle_covers_folded_block(page, servers):
     app_url, echo_url = servers
-    new_request(page, echo_url)
+    new_request(page, echo_url, "Folded comment")
     page.click("#editor-tabs button[data-tab='body']")
     page.click("#btn-body-add")
     page.fill("#body-name", "folded")
@@ -140,7 +353,7 @@ def test_editor_comment_toggle_covers_folded_block(page, servers):
     set_editor(page, "#f-body", text)
     # fold the "a" object (second fold arrow), then Ctrl+/ with the cursor on its visible line
     page.wait_for_function("document.querySelectorAll('#body-text-wrap .cm-foldGutter span[title=\"Fold line\"]').length >= 2")
-    page.click("#body-text-wrap .cm-foldGutter span[title=\"Fold line\"] >> nth=1")
+    click_fold(page, "#body-text-wrap", 1)
     page.wait_for_selector("#body-text-wrap .cm-foldPlaceholder")
     editor_cursor(page, "#f-body", 4)
     page.keyboard.press("Control+/")
@@ -153,6 +366,8 @@ def test_editor_comment_toggle_covers_folded_block(page, servers):
     editor_cursor(page, "#f-body", text.index('"b"'))
     page.keyboard.press("Control+/")
     assert ta.input_value() == text.replace('  "b": 2', '  // "b": 2')
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    forget(page, app_url, "Folded comment")
 
 
 def test_editor_comment_toggle_and_json_status(page, servers):
@@ -192,7 +407,7 @@ def test_editor_comment_toggle_and_json_status(page, servers):
     page.keyboard.type('"c": {')
     assert ta.input_value() == '{\n  "a": 1,\n  "c": {}\n  "b": 2\n}'
     # folding: fold the root object, the placeholder appears, unfold restores
-    page.click("#body-text-wrap .cm-foldGutter span[title=\"Fold line\"] >> nth=0")
+    click_fold(page, "#body-text-wrap", 0)
     page.wait_for_selector("#body-text-wrap .cm-foldPlaceholder")
     page.click("#body-text-wrap .cm-foldPlaceholder")
     page.wait_for_function("!document.querySelector('#body-text-wrap .cm-foldPlaceholder')")

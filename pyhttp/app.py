@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman,
+from . import (USER_AGENT, __version__, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
                projects, runner, templating, updater)
 from .templating import build_context, render
 
@@ -186,6 +186,7 @@ class FolderPatch(BaseModel):
     auth: dict[str, Any] | None = None
     headers: list[KV] | None = None
     variables: list[KV] | None = None
+    views: list[dict[str, Any]] | None = None   # response views for every request inside
 
 
 class MoveIn(BaseModel):
@@ -219,6 +220,7 @@ class ImportFolder(BaseModel):
     auth: dict[str, Any] = Field(default_factory=dict)
     headers: list[KV] = Field(default_factory=list)
     variables: list[KV] = Field(default_factory=list)
+    views: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ImportIn(BaseModel):
@@ -254,7 +256,7 @@ class DataFileIn(BaseModel):
 
 # Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
 # schedule a sync. Variables a script sets while sending go out with the next edit.
-_GIT_QUIET = ("/api/git", "/api/views", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+_GIT_QUIET = ("/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
               "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
 
 
@@ -366,7 +368,8 @@ def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, An
             created_f = db.create_folder(f["name"], id_map.get(f.get("parent_id") or ""))
             id_map[f["id"]] = created_f["id"]
             db.update_folder(created_f["id"], description=f.get("description", ""), auth=f.get("auth") or {},
-                             headers=f.get("headers") or [], variables=f.get("variables") or [])
+                             headers=f.get("headers") or [], variables=f.get("variables") or [],
+                             views=f.get("views") or [])
             pending.remove(f)
             progressed = True
         if not progressed:  # cycle in the file: put the rest at the root
@@ -465,18 +468,23 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     current = {"id": project_id}   # the project this app instance has open
     git_payload: dict[str, Any] = {}   # "fn": the export function, defined further down
     git = gitsync.Syncer(lambda: git_payload["fn"]())
+    sockets = wsclient.Manager()
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         scheduler.start()
         git.touch()   # catch up on anything that was not committed or pushed last time
+        git.start()   # and look at the remote on a timer from here on
         try:
             yield
         finally:
             scheduler.stop()
+            git.stop()
+            await sockets.close_all()
             await asyncio.to_thread(git.flush)
 
     app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+    app.state.git = git
 
     def current_project() -> dict[str, Any]:
         return registry.get(current["id"]) or {"id": current["id"], "name": current["id"]}
@@ -633,6 +641,90 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(404, "Request not found")
         return r
 
+    # ------------------------------------------------------- example responses
+    # A response pinned to its request (Postman's "examples"): kept with the request (exports,
+    # Git sync), listed in the documentation export, and usable as the answer of a mock route.
+    def _request_or_404(rid: str) -> dict[str, Any]:
+        r = db.get_request(rid)
+        if not r:
+            raise HTTPException(404, "Request not found")
+        return r
+
+    def _examples_out(r: dict[str, Any], example: dict[str, Any] | None = None) -> dict[str, Any]:
+        out: dict[str, Any] = {"examples": r["options"].get("examples") or [], "options": r["options"]}
+        if example is not None:
+            out["example"] = example
+        return out
+
+    @app.get("/api/requests/{rid}/examples")
+    def list_examples(rid: str) -> dict[str, Any]:
+        return _examples_out(_request_or_404(rid))
+
+    @app.post("/api/requests/{rid}/examples", status_code=201)
+    def add_example(rid: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Pin a response: either its fields (status_code, headers, content_type, body, name), or
+        ``history_id`` to pin what a past call answered."""
+        r = _request_or_404(rid)
+        data = dict(body)
+        if body.get("history_id"):
+            h = db.get_history(str(body["history_id"]))
+            resp = ((h or {}).get("detail") or {}).get("response")
+            if not resp:
+                raise HTTPException(400, "That history entry has no response to pin")
+            data = {"status_code": resp.get("status_code") or h.get("status_code"), "reason": (h["detail"] or {}).get("reason"),
+                    "headers": resp.get("headers"), "content_type": resp.get("content_type"),
+                    "body": resp.get("body_text") or "", "truncated": resp.get("truncated"),
+                    "body_name": h.get("body_name"), "name": body.get("name")}
+        data.pop("id", None)
+        example = db.normalize_example(data)
+        if example is None or (not example["body"] and not example["headers"] and "status_code" not in data):
+            raise HTTPException(400, "Nothing to save: send status_code, headers and body, or a history_id")
+        current = r["options"].get("examples") or []
+        if len(current) >= db.MAX_EXAMPLES:
+            raise HTTPException(400, f"A request keeps at most {db.MAX_EXAMPLES} examples; delete one first")
+        taken = {e["name"] for e in current}
+        base, n = example["name"], 2
+        while example["name"] in taken:
+            example["name"] = f"{base} ({n})"
+            n += 1
+        return _examples_out(db.set_request_examples(rid, [*current, example]), example)  # type: ignore[arg-type]
+
+    @app.patch("/api/requests/{rid}/examples/{eid}")
+    def rename_example(rid: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
+        r = _request_or_404(rid)
+        current = r["options"].get("examples") or []
+        if not any(e["id"] == eid for e in current):
+            raise HTTPException(404, "Example not found")
+        name = str(body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "Give the example a name")
+        return _examples_out(db.set_request_examples(rid, [{**e, "name": name} if e["id"] == eid else e for e in current]))  # type: ignore[arg-type]
+
+    @app.delete("/api/requests/{rid}/examples/{eid}")
+    def delete_example(rid: str, eid: str) -> dict[str, Any]:
+        r = _request_or_404(rid)
+        current = r["options"].get("examples") or []
+        if not any(e["id"] == eid for e in current):
+            raise HTTPException(404, "Example not found")
+        return _examples_out(db.set_request_examples(rid, [e for e in current if e["id"] != eid]))  # type: ignore[arg-type]
+
+    @app.post("/api/requests/{rid}/examples/{eid}/mock", status_code=201)
+    def example_to_mock(rid: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Make a mock route that answers with this example: in the mock server ``mock_id``, or in
+        a new one called ``mock_name`` (default: the request's name)."""
+        r = _request_or_404(rid)
+        example = next((e for e in r["options"].get("examples") or [] if e["id"] == eid), None)
+        if not example:
+            raise HTTPException(404, "Example not found")
+        if body.get("mock_id"):
+            server = db.get_mock(str(body["mock_id"]), with_routes=False)
+            if not server:
+                raise HTTPException(404, "Mock server not found")
+        else:
+            server = db.create_mock({"name": str(body.get("mock_name") or "").strip() or r["name"]})
+        route = db.create_mock_route(server["id"], mock.route_from_example(r, example))
+        return {"mock": db.get_mock(server["id"]), "route": route}
+
     @app.get("/api/requests/{rid}/dependency")
     def dependency_status(rid: str) -> dict[str, Any]:
         """When the request last ran as a dependency of another request."""
@@ -715,6 +807,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             kwargs["headers"] = [h.model_dump() for h in body.headers]
         if body.variables is not None:
             kwargs["variables"] = [v.model_dump() for v in body.variables]
+        if body.views is not None:
+            kwargs["views"] = body.views
         try:
             f = db.update_folder(fid, **kwargs)
         except ValueError as exc:
@@ -788,7 +882,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     # -------------------------------------------------------------- settings
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
-        return db.app_settings()
+        return {**db.app_settings(), "keyring_name": secretstore.label()}
 
     @app.put("/api/settings")
     def put_settings(body: dict[str, Any]) -> dict[str, Any]:
@@ -802,7 +896,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(400, "mono_font must be one of " + ", ".join(db.MONO_FONTS))
         if body.get("certs") is not None and not isinstance(body["certs"], list):
             raise HTTPException(400, "certs must be a list")
-        return db.update_settings(body)
+        # secrets_keyring moves every secret value into (or out of) the system keychain; a keychain
+        # that cannot be used is a ValueError, answered 400 with the reason
+        return {**db.update_settings(body), "keyring_name": secretstore.label()}
 
     # ------------------------------------------------------------- variables
     @app.get("/api/variables")
@@ -850,9 +946,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         # no await between this check and registering the task, so a cancel cannot slip in between
         if body.send_id and early_cancels.pop(body.send_id, None) is not None:
             result = runner.cancelled_result(item)
-            runner.record(result, source="Send", req=item, environment=env_name)
+            history_id = runner.record(result, source="Send", req=item, environment=env_name)
             out = runner.public_result(result)
             out["body_name"] = item.get("body_name")
+            out["history_id"] = history_id
             return out
         task = asyncio.create_task(runner.execute(item, build_context(variables)))
         if body.send_id:
@@ -868,10 +965,82 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             if body.send_id:
                 sends.pop(body.send_id, None)
                 _remember(finished_sends, body.send_id)
-        runner.record(result, source="Send", req=item, environment=env_name)
+        history_id = runner.record(result, source="Send", req=item, environment=env_name)
         out = runner.public_result(result)
         out["body_name"] = item.get("body_name")
+        out["history_id"] = history_id   # lets the UI compare this response with another one
         return out
+
+    # ------------------------------------------------------------- websocket
+    # A request whose URL starts with ws:// or wss:// opens a WebSocket instead of being sent. The
+    # connection lives in this process (see wsclient.py); the UI reads its log with a long poll.
+    def _ws_or_404(sid: str) -> wsclient.Session:
+        session = sockets.get(sid)
+        if session is None:
+            raise HTTPException(404, "This WebSocket connection is no longer kept. Connect again.")
+        return session
+
+    @app.post("/api/ws/connect", status_code=201)
+    async def ws_connect(body: RequestIn) -> dict[str, Any]:
+        """Open a WebSocket to the request's URL: variables are substituted, query parameters,
+        headers and auth are applied as for a normal send. A ``Sec-WebSocket-Protocol`` header in
+        the request names the subprotocols to offer."""
+        req = _editor_request(body)
+        item = runner.expand(req)[0]
+        variables, _env = db.effective_variables(req.get("folder_id"))
+        try:
+            p = runner.prepare(item, build_context(variables))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"{type(exc).__name__}: {exc}") from exc
+        url = wsclient.normalize_url(p["url"])
+        if not wsclient.is_ws_url(url):
+            raise HTTPException(400, "A WebSocket address starts with ws:// or wss://")
+        if p.get("params"):
+            url += ("&" if "?" in url else "?") + str(httpx.QueryParams(p["params"]))
+        headers = [(str(k), str(v)) for k, v in p.get("headers") or []]
+        protocols = [x.strip() for k, v in headers if k.lower() == "sec-websocket-protocol" for x in v.split(",")]
+        try:
+            session = sockets.open(url, headers=headers, subprotocols=protocols, verify_ssl=db.verify_ssl_enabled(),
+                                   timeout=min(max(float(req.get("timeout") or 20), 1.0), 120.0))
+        except wsclient.WsError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return session.snapshot()
+
+    @app.get("/api/ws/{sid}")
+    async def ws_events(sid: str, after: int = Query(0), wait: float = Query(0)) -> dict[str, Any]:
+        """The session's state and its events after number ``after``. With ``wait`` (seconds, at
+        most 25) the call stays open until something happens, so the log is live without polling fast."""
+        return await _ws_or_404(sid).wait(after, min(max(wait, 0.0), 25.0))
+
+    @app.post("/api/ws/{sid}/send")
+    async def ws_send(sid: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Send a text message (``text``; {{variables}} are substituted unless ``raw`` is true), a
+        binary one (``base64``), or a ``ping``."""
+        session = _ws_or_404(sid)
+        try:
+            if body.get("ping"):
+                return {"event": await session.ping()}
+            if body.get("base64") is not None:
+                try:
+                    data = base64.b64decode(str(body["base64"]), validate=True)
+                except ValueError as exc:
+                    raise HTTPException(400, "base64 is not valid base64") from exc
+                return {"event": await session.send_binary(data)}
+            text = str(body.get("text") or "")
+            if not body.get("raw"):
+                variables, _env = db.effective_variables(str(body.get("folder_id") or "") or None)
+                text = render(text, build_context(variables))
+            return {"event": await session.send_text(text)}
+        except wsclient.WsError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ConnectionError, OSError) as exc:
+            raise HTTPException(409, f"The connection is gone: {exc}") from exc
+
+    @app.post("/api/ws/{sid}/close")
+    async def ws_close(sid: str) -> dict[str, Any]:
+        session = _ws_or_404(sid)
+        await session.close()
+        return session.snapshot(session.snapshot()["last"])
 
     @app.post("/api/send-stream")
     async def send_stream(body: RequestIn) -> StreamingResponse:
@@ -887,9 +1056,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         async def work() -> None:
             try:
                 result = await runner.execute(item, build_context(variables), on_chunk=queue.put)
-                runner.record(result, source="Send", req=item, environment=env_name)
+                history_id = runner.record(result, source="Send", req=item, environment=env_name)
                 out = runner.public_result(result)
                 out["body_name"] = item.get("body_name")
+                out["history_id"] = history_id
                 await queue.put({"type": "done", "result": out})
             finally:
                 await queue.put(None)
@@ -1011,9 +1181,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             item["body_name"] = h["body_name"]
         variables, env_name = db.effective_variables(req.get("folder_id"))
         result = await runner.execute(item, build_context(variables))
-        runner.record(result, source="Send again", req=item, environment=env_name)
-        newest = db.list_history(limit=1)
-        return {"id": newest[0]["id"] if newest else None, "status_code": result.get("status_code"),
+        history_id = runner.record(result, source="Send again", req=item, environment=env_name)
+        return {"id": history_id, "status_code": result.get("status_code"),
                 "status": result.get("status"), "error": result.get("error")}
 
     @app.get("/api/history/{hid}")
@@ -1023,13 +1192,28 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(404, "History entry not found")
         return h
 
+    @app.get("/api/history/{hid}/body")
+    def history_body(hid: str) -> Response:
+        """The whole response body of a call (the entry itself keeps the first 64 KB). Kept for
+        bodies larger than that; 404 for the others and for entries made before bodies were kept."""
+        h = db.get_history(hid)
+        content = runner.full_body(hid) if h else None
+        if content is None:
+            raise HTTPException(404, "The whole body was not kept for this call")
+        ctype = str((((h or {}).get("detail") or {}).get("response") or {}).get("content_type") or "application/octet-stream")
+        return Response(content=content, media_type=ctype, headers={"Cache-Control": "no-store"})
+
     @app.delete("/api/history/{hid}")
     def history_delete(hid: str) -> dict[str, Any]:
-        return {"deleted": db.delete_history(hid)}
+        deleted = db.delete_history(hid)
+        runner.sweep_bodies()   # the whole body kept for response views goes with its entry
+        return {"deleted": deleted}
 
     @app.delete("/api/history")
     def history_clear() -> dict[str, Any]:
-        return {"deleted": db.delete_history()}
+        deleted = db.delete_history()
+        runner.sweep_bodies()
+        return {"deleted": deleted}
 
     # --------------------------------------------------------------- cookies
     @app.get("/api/cookies")
@@ -1396,8 +1580,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         return _git_status()
 
     @app.get("/api/export/docs")
-    def export_docs(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
-        """The collection (or one folder) as Markdown documentation."""
+    def export_docs(folder_id: str = Query(""), name: str = Query(""), format: str = Query("md")) -> dict[str, Any]:
+        """The collection (or one folder) as documentation: Markdown, or with ``format=html`` a
+        standalone HTML page in the app's theme."""
         folders = db.list_folders()
         requests = db.list_requests()
         title = name or current_project()["name"] or "API"
@@ -1410,7 +1595,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             requests = [{**r, "folder_id": None} if r.get("folder_id") == folder_id else r
                         for r in requests if r.get("folder_id") in keep]
         md = docs.to_markdown(title, folders, requests, db.get_variables(), db.list_environments())
-        return {"filename": re.sub(r"[^\w.-]+", "_", title).strip("_") + ".md", "markdown": md}
+        stem = re.sub(r"[^\w.-]+", "_", title).strip("_") or "docs"
+        if format == "html":
+            return {"filename": stem + ".html", "html": docs.to_html(title, md, db.app_settings().get("theme") or "dark")}
+        return {"filename": stem + ".md", "markdown": md}
 
     @app.get("/api/export/postman")
     def export_postman(folder_id: str = Query(""), name: str = Query("")) -> dict[str, Any]:
@@ -1537,8 +1725,12 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         path = None if external else Path(file).expanduser()
         if path is not None and not path.is_file():
             raise HTTPException(404, f"File not found: {file}")
+        # the UI holds a cut copy of a large body (512 KB; 64 KB in the history): when the whole
+        # body of that call was kept, the view gets it as the API sent it
+        whole = runner.full_body(result.get("history_id"))
         try:
-            content = base64.b64decode(resp["body_base64"]) if resp.get("body_base64") else str(resp.get("body_text") or "").encode("utf-8")
+            content = whole if whole is not None else (
+                base64.b64decode(resp["body_base64"]) if resp.get("body_base64") else str(resp.get("body_text") or "").encode("utf-8"))
         except (ValueError, TypeError):
             content = b""
         name = str(body.get("name") or result.get("request_name") or "response")
@@ -1550,7 +1742,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             "meta": {"name": name, "body_name": result.get("body_name"), "method": req.get("method"), "url": req.get("url"),
                      "status": result.get("status_code"), "reason": result.get("reason"), "ok": result.get("status") == "ok",
                      "error": result.get("error"), "duration_ms": result.get("duration_ms"), "size": resp.get("size"),
-                     "content_type": resp.get("content_type"), "headers": headers, "truncated": bool(resp.get("truncated")),
+                     "content_type": resp.get("content_type"), "headers": headers,
+                     "truncated": bool(resp.get("truncated")) and whole is None,
                      "sent_at": body.get("sent_at")},
         }
         while len(view_store) > VIEW_KEEP or sum(len(e["content"]) for e in view_store.values()) > VIEW_BYTES:

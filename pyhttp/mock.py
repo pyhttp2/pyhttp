@@ -177,9 +177,27 @@ def _path_of(url: str) -> str:
     return normalize_path(url.split("?", 1)[0] or "/")
 
 
+_HOP_HEADERS = {"content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive", "date",
+                "content-type", "server", "set-cookie", "alt-svc", "strict-transport-security", "vary", "etag",
+                "last-modified", "age", "via"}
+
+
+def route_from_example(req: dict[str, Any], example: dict[str, Any]) -> dict[str, Any]:
+    """A draft route that answers a saved request's method and path with one of its example responses."""
+    headers = [{"key": k, "value": v, "enabled": True} for k, v in example.get("headers") or []
+               if str(k).lower() not in _HOP_HEADERS and not str(k).lower().startswith(("x-amz", "cf-", "x-cache"))]
+    name = req.get("name") or "Request"
+    if example.get("name"):
+        name = f"{name}: {example['name']}"
+    return {"name": name[:120], "method": req.get("method") or "GET", "path": _path_of(req.get("url")),
+            "status_code": int(example.get("status_code") or 200),
+            "content_type": (example.get("content_type") or "application/json").split(";")[0].strip(),
+            "headers": headers, "body": example.get("body") or ""}
+
+
 def routes_from_requests(request_ids: list[str]) -> list[dict[str, Any]]:
-    """Draft routes for saved requests, answering with the response each last gave
-    (from the request history) or an empty JSON object."""
+    """Draft routes for saved requests, answering with the request's first saved example response,
+    else with the response it last gave (from the request history), else an empty JSON object."""
     history = db.list_history(limit=db.MAX_HISTORY)
     last: dict[str, dict[str, Any]] = {}
     for entry in history:                                  # newest first
@@ -190,6 +208,10 @@ def routes_from_requests(request_ids: list[str]) -> list[dict[str, Any]]:
     for rid in request_ids:
         req = db.get_request(rid)
         if not req:
+            continue
+        examples = (req.get("options") or {}).get("examples") or []
+        if examples:
+            drafts.append(route_from_example(req, examples[0]))
             continue
         seen = last.get(rid)
         full = db.get_history(seen["id"]) if seen else None

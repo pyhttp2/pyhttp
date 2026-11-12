@@ -142,6 +142,7 @@
         <button data-tab="body">Body<span class="tab-n" id="n-body"></span></button>
         <button data-tab="tests" title="Pre-request variables and script; tests, extractions and the test script that run on the response">Scripts<span class="tab-n" id="n-tests"></span></button>
         <button data-tab="views" title="Your own HTML pages that draw this request's response: a chart, a table, a dashboard…">Views<span class="tab-n" id="n-views"></span></button>
+        <button data-tab="examples" title="Responses pinned to this request: shown in the documentation export, usable as mock answers">Examples<span class="tab-n" id="n-examples"></span></button>
         <button data-tab="settings">Settings</button>
       </div>
       <div class="tab-panels" id="editor-panels">
@@ -220,6 +221,7 @@
         </div>
         <div class="tab-panel" data-panel="tests" hidden><div id="tests-panel"></div></div>
         <div class="tab-panel" data-panel="views" hidden><div id="views-panel"></div></div>
+        <div class="tab-panel" data-panel="examples" hidden><div id="examples-panel"></div></div>
         <div class="tab-panel" data-panel="settings" hidden>
           <label class="field">Timeout (seconds) <input id="f-timeout" type="number" min="1" step="1" value="30"></label>
           <label class="field">Follow redirects
@@ -262,6 +264,9 @@
           <button id="r-layout" class="copy-btn icon-only" title="Move the response to the right of the request" aria-label="Move the response beside the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg></button>
           <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)" aria-label="Maximize the response">⤢</button>
           <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request" aria-label="Hide the response">▾</button>
+          <button id="r-example" class="copy-btn icon-only" title="Pin this response to the request as an example (Examples tab): it goes into the documentation export and can answer a mock route" aria-label="Pin this response as an example">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 4h6l-1 6 3 3H7l3-3-1-6zM12 13v7"/></svg>
+          </button>
           <button id="r-save" class="copy-btn" title="Save the response body to a file">
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
             <span>Save</span>
@@ -278,6 +283,21 @@
           <div id="r-headers" class="tab-panel r-panel" data-panel="headers" hidden></div>
           <div id="r-tests" class="tab-panel r-panel" data-panel="tests" hidden></div>
           <div id="r-request" class="tab-panel r-panel" data-panel="request" hidden></div>
+        </div>
+        <!-- shown instead of the response when the URL is ws:// or wss:// -->
+        <div id="ws-panel" class="ws-panel" hidden>
+          <div class="ws-head">
+            <span id="ws-dot" class="ws-dot"></span><span id="ws-status" class="ws-status"></span>
+            <span class="grow"></span>
+            <input id="ws-filter" type="search" class="ws-filter" placeholder="Filter messages" aria-label="Filter messages" autocomplete="off">
+            <button id="ws-ping" class="copy-btn" title="Send a ping frame; the server answers with a pong">Ping</button>
+            <button id="ws-clear" class="copy-btn" title="Empty the log on screen">Clear</button>
+          </div>
+          <div id="ws-log" class="ws-log mono" role="log" aria-live="polite" aria-label="WebSocket messages"></div>
+          <div class="ws-compose">
+            <textarea id="ws-text" class="mono" rows="2" spellcheck="false" aria-label="Message to send" placeholder='Message to send, for example {"type": "subscribe", "channel": "{{room}}"}. Ctrl+Enter sends.'></textarea>
+            <button id="ws-send" class="accent" title="Send this message (Ctrl+Enter)">Send</button>
+          </div>
         </div>
       </div>
     </div>
@@ -358,8 +378,8 @@
 </datalist>
 
 <div id="modal" class="modal-backdrop" hidden>
-  <div class="modal">
-    <div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" class="link">✕</button></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
+    <div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" class="link" aria-label="Close">✕</button></div>
     <div id="modal-body" class="modal-body"></div>
     <div id="modal-foot" class="modal-foot"></div>
   </div>

@@ -5,14 +5,19 @@ single-user tool and keeps the code free of ORM machinery.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import re
 import sqlite3
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from . import secretstore
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -188,36 +193,122 @@ CREATE INDEX IF NOT EXISTS idx_mock_calls ON mock_calls(server_id, ts);
 """
 
 _JSON_FIELDS = ("tags", "params", "headers", "bodies", "auth", "tests", "extract", "pre_vars", "options")
-_FOLDER_JSON_FIELDS = ("auth", "headers", "variables")
+_FOLDER_JSON_FIELDS = ("auth", "headers", "variables", "views")
 MAX_HISTORY = 1000
-_conn: sqlite3.Connection | None = None
-_lock = threading.RLock()
+
+
+# -------------------------------------------------------------- connections
+# One Database per open project: its SQLite connection and the lock that serialises access to
+# it. The functions of this module work on the *current* database: the one the app has open
+# (init / switch / close), unless the running code is inside ``with db.using(other):``, which
+# points this thread or task (and nothing else) at another one. That is how two projects can be
+# open at once, for instance to compare or copy between them:
+#
+#     other = db.open(registry.paths(pid)[0])
+#     try:
+#         with db.using(other):
+#             theirs = db.list_requests()      # the other project
+#         mine = db.list_requests()            # the project the app has open
+#     finally:
+#         other.close()
+class Database:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.lock = threading.RLock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        self.conn: sqlite3.Connection | None = conn
+
+    def close(self) -> None:
+        with self.lock:
+            if self.conn is not None:
+                self.conn.close()
+                self.conn = None
+
+    def __repr__(self) -> str:
+        return f"<Database {self.path}{'' if self.conn is not None else ' (closed)'}>"
+
+
+_default: Database | None = None      # the project the app has open
+_override: contextvars.ContextVar[Database | None] = contextvars.ContextVar("pyhttp_db", default=None)
+
+
+def current() -> Database:
+    database = _override.get() or _default
+    assert database is not None, "db.init() has not been called"
+    return database
+
+
+class _CurrentLock:
+    """``with _lock:`` takes the lock of whichever database is current when the block starts, and
+    releases that same one at the end even if the current database changed inside the block."""
+
+    def __init__(self) -> None:
+        self._held = threading.local()
+
+    def __enter__(self) -> None:
+        lock = current().lock
+        lock.acquire()
+        stack = getattr(self._held, "stack", None)
+        if stack is None:
+            stack = self._held.stack = []
+        stack.append(lock)
+
+    def __exit__(self, *exc: Any) -> None:
+        self._held.stack.pop().release()
+
+
+_lock = _CurrentLock()
+
+
+def open(path: Path) -> Database:  # noqa: A001 - reads well as db.open(...)
+    """Open another project's database next to the one the app has open; the caller closes it.
+    Use it with ``using()``."""
+    return Database(path)
+
+
+@contextlib.contextmanager
+def using(database: Database) -> Iterator[Database]:
+    """Run the block against ``database`` instead of the project the app has open. Only this
+    thread (or asyncio task) is affected; background work keeps using the open project."""
+    token = _override.set(database)
+    try:
+        yield database
+    finally:
+        _override.reset(token)
 
 
 def init(path: Path) -> None:
-    global _conn
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _conn = sqlite3.connect(str(path), check_same_thread=False)
-    _conn.row_factory = sqlite3.Row
-    _conn.execute("PRAGMA foreign_keys = ON")
-    _conn.execute("PRAGMA journal_mode = WAL")
-    _conn.executescript(SCHEMA)
-    _migrate(_conn)
+    """Open ``path`` as the project this process works on."""
+    global _default
+    old, _default = _default, Database(path)
+    if old is not None:
+        old.close()
 
 
 def close() -> None:
-    global _conn
-    if _conn is not None:
-        _conn.close()
-        _conn = None
+    global _default
+    if _default is not None:
+        _default.close()
+        _default = None
 
 
 def switch(path: Path) -> None:
-    """Point the module at another database (another project). Taken under the module lock,
-    so a monitor check or a request in flight finishes its statement on the old connection first."""
-    with _lock:
-        close()
-        init(path)
+    """Point the module at another database (another project). The old one is closed under its
+    own lock, so a monitor check or a request in flight finishes its statement on it first."""
+    global _default
+    old, new = _default, Database(path)
+    if old is None:
+        _default = new
+        return
+    with old.lock:
+        _default = new
+        old.close()
 
 
 def app_settings_rows() -> dict[str, str]:
@@ -263,6 +354,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     add("folders", "headers", "TEXT NOT NULL DEFAULT '[]'")
     add("folders", "variables", "TEXT NOT NULL DEFAULT '[]'")
     add("folders", "position", "INTEGER NOT NULL DEFAULT 0")
+    add("folders", "views", "TEXT NOT NULL DEFAULT '[]'")
     add("run_results", "body_name", "TEXT")
     add("run_results", "iteration", "INTEGER NOT NULL DEFAULT 1")
     add("run_results", "tests", "TEXT NOT NULL DEFAULT '[]'")
@@ -270,8 +362,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def _c() -> sqlite3.Connection:
-    assert _conn is not None, "db.init() has not been called"
-    return _conn
+    conn = current().conn
+    assert conn is not None, "the database has been closed"
+    return conn
 
 
 # ----------------------------------------------------------------- requests
@@ -333,6 +426,50 @@ def _rules(rows: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
     return out
 
 
+def normalize_views(rows: Any) -> list[dict[str, Any]]:
+    """Response views (of a request, or of a folder for every request inside it)."""
+    views = []
+    for v in rows if isinstance(rows, list) else []:
+        if isinstance(v, dict) and str(v.get("file") or "").strip():
+            views.append({"id": str(v.get("id") or "") or uuid.uuid4().hex[:8],
+                          "name": str(v.get("name") or "").strip()[:60] or "View", "file": str(v["file"]).strip()})
+    return views[:12]
+
+
+MAX_EXAMPLES = 20             # saved example responses per request
+MAX_EXAMPLE_BODY = 256_000    # characters of body text an example keeps
+
+
+def normalize_example(e: Any) -> dict[str, Any] | None:
+    """A saved example response (Postman's "examples"): a response pinned to its request, shown
+    in the documentation export and usable as a mock route."""
+    if not isinstance(e, dict):
+        return None
+    headers = []
+    for h in e.get("headers") if isinstance(e.get("headers"), list) else []:
+        if isinstance(h, (list, tuple)) and len(h) == 2:
+            headers.append([str(h[0]), str(h[1])])
+        elif isinstance(h, dict) and h.get("key"):
+            headers.append([str(h["key"]), str(h.get("value", ""))])
+    try:
+        status = int(e.get("status_code") or 200)
+    except (TypeError, ValueError):
+        status = 200
+    try:
+        created = float(e.get("created_at") or 0) or time.time()
+    except (TypeError, ValueError):
+        created = time.time()
+    body = str(e.get("body") or "")
+    content_type = str(e.get("content_type") or "").strip() or next(
+        (v.split(";")[0].strip() for k, v in headers if k.lower() == "content-type"), "")
+    return {"id": str(e.get("id") or "") or uuid.uuid4().hex[:8],
+            "name": str(e.get("name") or "").strip()[:80] or f"{status} example",
+            "status_code": status if 100 <= status <= 599 else 200, "reason": str(e.get("reason") or "")[:60],
+            "headers": headers[:80], "content_type": content_type[:120], "body": body[:MAX_EXAMPLE_BODY],
+            "truncated": bool(e.get("truncated")) or len(body) > MAX_EXAMPLE_BODY,
+            "body_name": str(e.get("body_name") or "")[:80], "created_at": created}
+
+
 def normalize_options(data: Any) -> dict[str, Any]:
     d = data if isinstance(data, dict) else {}
     out: dict[str, Any] = {}
@@ -363,15 +500,15 @@ def normalize_options(data: Any) -> dict[str, Any]:
             ttl = 0
         out["depends"] = {"request_id": str(dep["request_id"]), "ttl": ttl, "retry_on_auth": bool(dep.get("retry_on_auth", True))}
     # response views: HTML files (or URLs) that draw this request's response their own way
-    views = []
-    for v in d.get("views") if isinstance(d.get("views"), list) else []:
-        if isinstance(v, dict) and str(v.get("file") or "").strip():
-            views.append({"id": str(v.get("id") or "") or uuid.uuid4().hex[:8],
-                          "name": str(v.get("name") or "").strip()[:60] or "View", "file": str(v["file"]).strip()})
+    views = normalize_views(d.get("views"))
     if views:
-        out["views"] = views[:12]
+        out["views"] = views
         if d.get("view_first") is True:   # show the View tab, not the body, when a response arrives
             out["view_first"] = True
+    raw_examples = d.get("examples") if isinstance(d.get("examples"), list) else []
+    examples = [x for x in (normalize_example(e) for e in raw_examples) if x]
+    if examples:
+        out["examples"] = examples[:MAX_EXAMPLES]
     return out
 
 
@@ -505,9 +642,15 @@ def create_request(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_request(rid: str, data: dict[str, Any]) -> dict[str, Any] | None:
-    if not get_request(rid):
+    old = get_request(rid)
+    if not old:
         return None
     d = normalize_request(data)
+    # The editor saves on every keystroke and does not send the example responses back (they can be
+    # large): an update without the key keeps the saved ones. `"examples": []` removes them.
+    sent = data.get("options") if isinstance(data.get("options"), dict) else {}
+    if "examples" not in sent and old["options"].get("examples"):
+        d["options"]["examples"] = old["options"]["examples"]
     with _lock:
         _c().execute(
             """UPDATE requests SET name=?, description=?, tags=?, method=?, url=?, params=?,
@@ -520,6 +663,18 @@ def update_request(rid: str, data: dict[str, Any]) -> dict[str, Any] | None:
              json.dumps(d["auth"]), json.dumps(d["tests"]), json.dumps(d["extract"]),
              json.dumps(d["pre_vars"]), json.dumps(d["options"]), rid),
         )
+        _c().commit()
+    return get_request(rid)
+
+
+def set_request_examples(rid: str, examples: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Replace the saved example responses of a request; returns the request."""
+    req = get_request(rid)
+    if not req:
+        return None
+    options = normalize_options({**req["options"], "examples": examples})
+    with _lock:
+        _c().execute("UPDATE requests SET options = ?, updated_at = ? WHERE id = ?", (json.dumps(options), time.time(), rid))
         _c().commit()
     return get_request(rid)
 
@@ -562,6 +717,85 @@ def move_request(rid: str, folder_id: str | None) -> dict[str, Any] | None:
     return get_request(rid) if cur.rowcount else None
 
 
+# ------------------------------------------------- secrets in the system keychain
+# Opt-in (the ``secrets_keyring`` setting): the value of a variable marked secret goes to the
+# operating system's credential store (see secretstore.py) and the database row keeps
+# ``{"value": "", "vault": true}``. Everything above this layer sees ordinary rows with their
+# values: _seal() runs just before a row list is written, _unseal() right after one is read.
+def _vault_name(owner: str, key: str) -> str:
+    vault = get_setting("vault_id")
+    if not vault:
+        vault = uuid.uuid4().hex[:12]
+        set_setting("vault_id", vault)
+    return f"{vault}/{owner}/{urllib.parse.quote(key, safe='')}"
+
+
+def secrets_in_keyring() -> bool:
+    return get_setting("secrets_keyring") == "1"
+
+
+def _seal(rows: list[dict[str, Any]], owner: str, stored: Any = None) -> list[dict[str, Any]]:
+    """``rows`` as they go into the database. ``stored`` is what the database holds now (raw):
+    keychain entries of secrets that are gone, renamed or no longer secret are removed."""
+    on = secrets_in_keyring()
+    out: list[dict[str, Any]] = []
+    kept: set[str] = set()
+    for r in rows:
+        key = str(r.get("key") or "").strip()
+        if on and r.get("secret") and r.get("value") and key and key not in kept:
+            try:
+                secretstore.put(_vault_name(owner, key), r["value"])
+                out.append({**r, "value": "", "vault": True})
+                kept.add(key)
+                continue
+            except secretstore.SecretStoreError:
+                pass   # the keychain is not reachable right now: the value stays in the database rather than being lost
+        out.append({k: v for k, v in r.items() if k != "vault"})
+    for old in stored if isinstance(stored, list) else []:
+        key = str(old.get("key") or "").strip() if isinstance(old, dict) else ""
+        if key and old.get("vault") and key not in kept:
+            secretstore.delete(_vault_name(owner, key))
+    return out
+
+
+def _unseal(rows: Any, owner: str) -> list[dict[str, Any]]:
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        if isinstance(r, dict) and r.get("vault"):
+            value = secretstore.get(_vault_name(owner, str(r.get("key") or "").strip()))
+            r = {k: v for k, v in r.items() if k != "vault"}
+            r["value"] = value or ""
+        out.append(r)
+    return out
+
+
+def _stored_variables(table: str, ident: str) -> Any:
+    with _lock:
+        row = _c().execute(f"SELECT variables FROM {table} WHERE id = ?", (ident,)).fetchone()
+    try:
+        return json.loads(row["variables"]) if row else []
+    except (ValueError, TypeError):
+        return []
+
+
+def set_secrets_in_keyring(on: bool) -> None:
+    """Move every secret value into the system keychain, or back into the database. Raises
+    ValueError when the keychain cannot be used; nothing is moved in that case."""
+    if on == secrets_in_keyring():
+        return
+    if on:
+        ok, message = secretstore.available()
+        if not ok:
+            raise ValueError(f"The system keychain cannot be used: {message}")
+    with _lock:
+        envs, folders = list_environments(), list_folders()   # with their values, wherever they are now
+        set_setting("secrets_keyring", "1" if on else "0")
+        for env in envs:
+            update_environment(env["id"], variables=env["variables"])
+        for f in folders:
+            update_folder(f["id"], variables=f["variables"])
+
+
 # ------------------------------------------------------------------ folders
 
 
@@ -573,6 +807,8 @@ def _row_to_folder(row: sqlite3.Row) -> dict[str, Any]:
         except ValueError:
             d[f] = {} if f == "auth" else []
     d["auth"] = normalize_auth(d["auth"])
+    d["variables"] = _unseal(d["variables"], f"folder/{d['id']}")
+    d["views"] = normalize_views(d["views"])
     return d
 
 
@@ -603,13 +839,17 @@ def folder_chain(fid: str | None) -> list[dict[str, Any]]:
 
 def inherited(folder_id: str | None) -> dict[str, Any]:
     """What a request inside `folder_id` inherits: auth (nearest folder that sets one),
-    headers (root to leaf, later folders override) and variables (same precedence)."""
+    headers (root to leaf, later folders override), variables (same precedence) and the
+    response views of every folder above it (nearest folder first)."""
     chain = folder_chain(folder_id)
     auth = {"type": "none"}
     auth_from = None
     headers: dict[str, dict[str, Any]] = {}
     variables: dict[str, str] = {}
+    views: list[dict[str, Any]] = []
     for f in chain:
+        seen = {v["file"] for v in f["views"]}
+        views = [{**v, "from": f["name"]} for v in f["views"]] + [v for v in views if v["file"] not in seen]
         if f["auth"]["type"] not in ("inherit", "none"):
             auth, auth_from = f["auth"], f["name"]
         for h in f["headers"]:
@@ -619,7 +859,7 @@ def inherited(folder_id: str | None) -> dict[str, Any]:
             if v.get("enabled", True) and v.get("key", "").strip():
                 variables[v["key"].strip()] = v.get("value", "")
     return {"auth": normalize_auth(auth, "none"), "auth_from": auth_from,
-            "headers": list(headers.values()), "variables": variables}
+            "headers": list(headers.values()), "variables": variables, "views": views}
 
 
 def folder_descendants(fid: str) -> set[str]:
@@ -655,7 +895,8 @@ _KEEP = object()
 
 
 def update_folder(fid: str, name: Any = _KEEP, parent_id: Any = _KEEP, description: Any = _KEEP,
-                  auth: Any = _KEEP, headers: Any = _KEEP, variables: Any = _KEEP) -> dict[str, Any] | None:
+                  auth: Any = _KEEP, headers: Any = _KEEP, variables: Any = _KEEP,
+                  views: Any = _KEEP) -> dict[str, Any] | None:
     f = get_folder(fid)
     if not f:
         return None
@@ -674,11 +915,15 @@ def update_folder(fid: str, name: Any = _KEEP, parent_id: Any = _KEEP, descripti
         f["headers"] = _kv_rows(headers)
     if variables is not _KEEP:
         f["variables"] = _kv_rows(variables)
+    if views is not _KEEP:
+        f["views"] = normalize_views(views)
     with _lock:
         _c().execute("""UPDATE folders SET name = ?, parent_id = ?, description = ?, auth = ?, headers = ?,
-                        variables = ? WHERE id = ?""",
+                        variables = ?, views = ? WHERE id = ?""",
                      (f["name"], f["parent_id"], f["description"], json.dumps(f["auth"]),
-                      json.dumps(f["headers"]), json.dumps(f["variables"]), fid))
+                      json.dumps(f["headers"]),
+                      json.dumps(_seal(f["variables"], f"folder/{fid}", _stored_variables("folders", fid))),
+                      json.dumps(f["views"]), fid))
         _c().commit()
     return get_folder(fid)
 
@@ -698,6 +943,8 @@ def delete_folder(fid: str) -> dict[str, Any] | None:
     ids = folder_descendants(fid)
     marks = ",".join("?" * len(ids))
     with _lock:
+        for one in ids:
+            _seal([], f"folder/{one}", _stored_variables("folders", one))   # their keychain entries go with them
         req_ids = [r[0] for r in _c().execute(
             f"SELECT id FROM requests WHERE folder_id IN ({marks})", tuple(ids)).fetchall()]
         _c().execute(f"DELETE FROM requests WHERE folder_id IN ({marks})", tuple(ids))
@@ -711,7 +958,7 @@ def delete_folder(fid: str) -> dict[str, Any] | None:
 
 def _row_to_env(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
-    d["variables"] = json.loads(d["variables"])
+    d["variables"] = _unseal(json.loads(d["variables"]), f"env/{d['id']}")
     return d
 
 
@@ -732,7 +979,7 @@ def create_environment(name: str, variables: Any = None) -> dict[str, Any]:
     with _lock:
         _c().execute("INSERT INTO environments (id, name, variables, created_at) VALUES (?,?,?,?)",
                      (eid, (name or "").strip() or "New environment",
-                      json.dumps(_kv_rows(variables)), time.time()))
+                      json.dumps(_seal(_kv_rows(variables), f"env/{eid}")), time.time()))
         _c().commit()
     return get_environment(eid)  # type: ignore[return-value]
 
@@ -747,13 +994,14 @@ def update_environment(eid: str, name: Any = _KEEP, variables: Any = _KEEP) -> d
         env["variables"] = _kv_rows(variables)
     with _lock:
         _c().execute("UPDATE environments SET name = ?, variables = ? WHERE id = ?",
-                     (env["name"], json.dumps(env["variables"]), eid))
+                     (env["name"], json.dumps(_seal(env["variables"], f"env/{eid}", _stored_variables("environments", eid))), eid))
         _c().commit()
     return get_environment(eid)
 
 
 def delete_environment(eid: str) -> bool:
     with _lock:
+        _seal([], f"env/{eid}", _stored_variables("environments", eid))   # its keychain entries go with it
         cur = _c().execute("DELETE FROM environments WHERE id = ?", (eid,))
         _c().commit()
     if get_setting("active_env") == eid:
@@ -810,10 +1058,13 @@ def app_settings() -> dict[str, Any]:
         out["ui_font"] = "inter"
     if out["mono_font"] not in MONO_FONTS:
         out["mono_font"] = "default"
+    out["secrets_keyring"] = secrets_in_keyring()   # not an APP_SETTINGS key: changed through set_secrets_in_keyring()
     return out
 
 
 def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
+    if patch.get("secrets_keyring") is not None:
+        set_secrets_in_keyring(bool(patch["secrets_keyring"]))   # ValueError when the keychain is unusable
     for key, value in patch.items():
         if key not in APP_SETTINGS_DEFAULTS or value is None:
             continue
@@ -1078,6 +1329,11 @@ def get_history(hid: str) -> dict[str, Any] | None:
     return d
 
 
+def history_ids() -> set[str]:
+    with _lock:
+        return {r[0] for r in _c().execute("SELECT id FROM history").fetchall()}
+
+
 def delete_history(hid: str | None = None) -> int:
     with _lock:
         cur = _c().execute("DELETE FROM history WHERE id = ?", (hid,)) if hid else _c().execute("DELETE FROM history")
@@ -1131,6 +1387,7 @@ def apply_definitions(data: dict[str, Any], keep_secrets: bool = False) -> None:
         want_f = {str(f["id"]): f for f in rows_of("folders") if f.get("id")}
         old_f = {f["id"]: f for f in list_folders()}
         for fid in set(old_f) - set(want_f):
+            _seal([], f"folder/{fid}", _stored_variables("folders", fid))
             c.execute("DELETE FROM folders WHERE id = ?", (fid,))
         for fid, f in want_f.items():
             parent = str(f.get("parent_id") or "")
@@ -1140,10 +1397,11 @@ def apply_definitions(data: dict[str, Any], keep_secrets: bool = False) -> None:
             if fid not in old_f:
                 c.execute("INSERT INTO folders (id, name, created_at) VALUES (?,?,?)", (fid, "folder", time.time()))
             c.execute("""UPDATE folders SET name = ?, parent_id = ?, description = ?, auth = ?, headers = ?,
-                         variables = ?, position = ? WHERE id = ?""",
+                         variables = ?, views = ?, position = ? WHERE id = ?""",
                       (str(f.get("name") or "").strip() or "New folder", parent_id, str(f.get("description") or ""),
                        json.dumps(normalize_auth(f.get("auth"))), json.dumps(_kv_rows(f.get("headers"))),
-                       json.dumps(variables), int(f.get("position") or 0), fid))
+                       json.dumps(_seal(variables, f"folder/{fid}", _stored_variables("folders", fid))),
+                       json.dumps(normalize_views(f.get("views"))), int(f.get("position") or 0), fid))
         # requests
         want_r = {str(r["id"]): r for r in rows_of("requests") if r.get("id")}
         old_r = {row[0] for row in c.execute("SELECT id FROM requests").fetchall()}

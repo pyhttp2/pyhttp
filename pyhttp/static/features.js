@@ -474,8 +474,11 @@ function readDependency() {
 }
 function readRequestOptions() {
   const v = $('#f-redirects').value;
+  // example responses are saved by their own calls and can be large: the autosave leaves them out
+  // (the server keeps what it has when the key is missing)
+  const { examples: _examples, ...kept } = (state.current && state.current.options) || {};
   return {
-    ...((state.current && state.current.options) || {}),
+    ...kept,
     follow_redirects: v === '' ? null : v === '1',
     send_cookies: $('#f-send-cookies').checked,
     store_cookies: $('#f-store-cookies').checked,
@@ -747,7 +750,7 @@ function renderResponsePanels(result) {
   try { view = localStorage.getItem('pyhttp.rv.view') || undefined; } catch { view = undefined; }
   let wrap = true;
   try { wrap = localStorage.getItem('pyhttp.rv.wrap') !== '0'; } catch { /* ignore */ }
-  if (resp) mountViewer(bodyBox, resp, { view, wrap });
+  if (resp) mountViewer(bodyBox, resp, { view, wrap, fullBody: resp.truncated && result.history_id ? () => fetchFullBody(result.history_id) : null });
   else { bodyBox.classList.remove('rv'); bodyBox.innerHTML = `<pre class="mono rv-pre err-text">${esc(result.error || 'Unknown error')}</pre>`; }
   // headers
   const hs = resp ? resp.headers : [];
@@ -799,6 +802,14 @@ function renderResponsePanels(result) {
     </div>`;
   afterResponseForViews(result);
   $('#r-save').disabled = !resp;
+  $('#r-example').disabled = !resp || !!resp.is_binary;
+}
+
+// The whole body of a call whose response was too large for the viewer (kept with its history entry).
+async function fetchFullBody(historyId) {
+  const r = await fetch(`/api/history/${encodeURIComponent(historyId)}/body`);
+  if (!r.ok) throw new Error(r.status === 404 ? 'the whole body was not kept for this call' : `${r.status} ${r.statusText}`);
+  return r.text();
 }
 
 // ================================================================ history
@@ -926,7 +937,8 @@ async function openHistoryEntry(hid, tab = '') {
   bResend.title = 'Send this request again and compare the new response with this one';
   bCompare.title = 'Pick another history entry to compare with';
   bindTabs($('#hd-tabs'), $('#hd-panels'));
-  if (resp) mountViewer($('#h-viewer'), resp); else $('#h-viewer').innerHTML = '<div class="muted small">No response</div>';
+  if (resp) mountViewer($('#h-viewer'), resp, { fullBody: resp.truncated ? () => fetchFullBody(hid) : null });
+  else $('#h-viewer').innerHTML = '<div class="muted small">No response</div>';
   // the request's views, drawn with the response this entry holds
   const views = await historyViews(h);
   const box = $('#h-views');
@@ -1043,24 +1055,130 @@ async function openCompare(aId, bId) {
   let b;
   try { [a, b] = await Promise.all([api('/history/' + aId), api('/history/' + bId)]); } catch (e) { toast(e.message, 'error'); return; }
   if (a.ts > b.ts) [a, b] = [b, a]; // older on the left / as "−"
-  const ra = (a.detail || {}).response;
-  const rb = (b.detail || {}).response;
+  const side = (h) => ({
+    label: `${h.method} ${h.request_name || h.url}`, status_code: h.status_code, duration_ms: h.duration_ms,
+    response: (h.detail || {}).response, request: (h.detail || {}).request,
+    when: `${esc(fmtDate(h.ts))}<br>${esc(h.source)}${h.environment ? ' · ' + esc(h.environment) : ''}`,
+  });
+  showCompare(side(a), side(b));
+}
+// Two responses of the request on screen (one per body, or per iteration), straight from the
+// response strip. They are compared from memory, so the whole body takes part, not the cut copy
+// the history keeps.
+function compareResults(a, b) {
+  const side = (x) => ({ label: x.label, status_code: x.result.status_code, duration_ms: x.result.duration_ms,
+    response: x.result.response, request: x.result.request, when: x.result.error ? esc(x.result.error) : '' });
+  showCompare(side(a), side(b));
+}
+// a, b: { label, status_code, duration_ms, response, request, when (HTML) }; a is shown as "−", b as "+"
+function showCompare(a, b) {
+  const ra = a.response;
+  const rb = b.response;
   const hdr = (r) => ((r || {}).headers || []).filter(([k]) => !/^(date|age|expires|x-request-id|x-amzn-requestid|cf-ray|set-cookie|etag|last-modified|content-length)$/i.test(k)).map(([k, v]) => `${k.toLowerCase()}: ${v}`).sort().join('\n');
-  const reqText = (h) => formatRequest((h.detail || {}).request);
   const bodyOps = lineDiff(diffText(ra), diffText(rb));
   const adds = bodyOps.filter((o) => o.t === '+').length;
   const dels = bodyOps.filter((o) => o.t === '-').length;
-  const cell = (h, r) => `<td><span class="status ${codeClass(h.status_code)}">${h.status_code ?? 'ERR'}</span></td><td>${fmtMs(h.duration_ms)}</td><td>${r ? fmtBytes(r.size) : '—'}</td><td class="muted small">${esc(fmtDate(h.ts))}<br>${esc(h.source)}${h.environment ? ' · ' + esc(h.environment) : ''}</td>`;
+  const cell = (h, r) => `<td><span class="status ${codeClass(h.status_code)}">${h.status_code ?? 'ERR'}</span></td><td>${fmtMs(h.duration_ms)}</td><td>${r ? fmtBytes(r.size) : '—'}</td><td class="muted small">${h.when || ''}</td>`;
   openModal('Compare responses', `
     <table class="cmp-table">
-      <tr><th></th><th>Status</th><th>Time</th><th>Size</th><th>When</th></tr>
-      <tr class="cmp-a"><th>− ${esc(a.method)} ${esc(a.request_name || a.url)}</th>${cell(a, ra)}</tr>
-      <tr class="cmp-b"><th>+ ${esc(b.method)} ${esc(b.request_name || b.url)}</th>${cell(b, rb)}</tr>
+      <tr><th></th><th>Status</th><th>Time</th><th>Size</th><th>${a.when || b.when ? 'When' : ''}</th></tr>
+      <tr class="cmp-a"><th>− ${esc(a.label)}</th>${cell(a, ra)}</tr>
+      <tr class="cmp-b"><th>+ ${esc(b.label)}</th>${cell(b, rb)}</tr>
     </table>
     <div class="detail-section"><h4>Response body <span class="muted small">${adds || dels ? `<span class="ok-text">+${adds}</span> <span class="err-text">−${dels}</span> lines${ra && ra.is_json ? ' · JSON keys sorted' : ''}` : ''}</span></h4>${renderDiff(bodyOps)}</div>
     <div class="detail-section"><h4>Response headers <span class="muted small">(volatile ones such as Date are left out)</span></h4>${renderDiff(lineDiff(hdr(ra), hdr(rb)))}</div>
-    <div class="detail-section"><h4>Request as sent</h4>${renderDiff(lineDiff(reqText(a), reqText(b)))}</div>
+    <div class="detail-section"><h4>Request as sent</h4>${renderDiff(lineDiff(formatRequest(a.request), formatRequest(b.request)))}</div>
   `, [{ label: 'Close', onClick: closeModal }]);
+  $('#modal .modal').classList.add('wide');
+}
+
+// ============================================================ example responses
+// A response pinned to its request (Postman's "examples"). The server keeps them in the request's
+// options, so they travel with exports and Git sync; they are changed through /examples calls only.
+const examplesOf = (r) => ((r && r.options && r.options.examples) || []);
+function applyExamples(r, out) {
+  r.options = out.options;
+  if (state.current === r) renderExamplesPanel();
+}
+function renderExamplesPanel() {
+  const box = $('#examples-panel');
+  const r = state.current;
+  if (!box || !r) return;
+  const list = examplesOf(r);
+  $('#n-examples').textContent = list.length ? String(list.length) : '';
+  box.innerHTML = `<div class="vwp exp">
+    <p class="muted small">Responses pinned to this request. They are listed in the documentation export, travel with exports and Git sync,
+      and each one can become the answer of a mock route. Send the request, then use the pin button in the response bar (or the button below) to add one.</p>
+    ${list.length ? `<ul class="exp-list">${list.map((e) => `<li data-eid="${esc(e.id)}">
+        <span class="status ${codeClass(e.status_code)}">${esc(String(e.status_code))}</span>
+        <span class="exp-name" title="${esc(e.name)}">${esc(e.name)}</span>
+        <span class="muted small exp-meta">${esc([e.content_type, fmtBytes((e.body || '').length) + (e.truncated ? ' (cut)' : ''), e.body_name ? 'body “' + e.body_name + '”' : '', fmtDate(e.created_at)].filter(Boolean).join(' · '))}</span>
+        <span class="exp-acts"><button class="link small" data-act="view">View</button><button class="link small" data-act="mock" title="Add a mock route that answers with this example">Mock…</button><button class="link small" data-act="rename">Rename</button><button class="link small danger-text" data-act="del">Delete</button></span></li>`).join('')}</ul>`
+      : '<div class="vwp-none muted small">No examples on this request yet.</div>'}
+    <div class="vw-actions"><button id="exp-pin" class="${list.length ? '' : 'primary'}">Pin the response on screen</button></div></div>`;
+  $('#exp-pin').addEventListener('click', pinExample);
+  $$('.exp-list li', box).forEach((li) => {
+    const e = list.find((x) => x.id === li.dataset.eid);
+    $$('button[data-act]', li).forEach((b) => b.addEventListener('click', () => exampleAction(r, e, b.dataset.act)));
+  });
+}
+async function pinExample() {
+  if (!state.current) return;
+  await saveNow();   // a draft has no id yet
+  const r = state.current;
+  const rs = responsesFor();
+  const result = rs && rs.byKey[rs.selected];
+  if (!r.id) { toast('Give the request a URL or a name first, so it can be saved', 'error'); return; }
+  if (!result || !result.response) { toast('There is no response to pin yet: send the request first', 'error'); return; }
+  const resp = result.response;
+  if (resp.is_binary) { toast('A binary response cannot be pinned as an example', 'error'); return; }
+  const suggestion = `${result.status_code} ${result.reason || ''}`.trim() + (result.body_name ? ` · ${result.body_name}` : '');
+  const name = await promptDialog('Pin as example', { label: 'Name of the example', value: suggestion, okLabel: 'Pin',
+    message: 'The status, headers and body of this response are saved with the request.' });
+  if (!name) return;
+  try {
+    const out = await api(`/requests/${r.id}/examples`, { method: 'POST', body: {
+      name, status_code: result.status_code, reason: result.reason || '', headers: resp.headers || [],
+      content_type: resp.content_type || '', body: resp.body_text || '', truncated: !!resp.truncated, body_name: result.body_name || '' } });
+    applyExamples(r, out);
+    toast(`Pinned “${out.example.name}”`, 'ok', { label: 'Show examples', onClick: () => showTab($('#editor-tabs'), 'examples') });
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function exampleAction(r, e, act) {
+  const base = `/requests/${r.id}/examples/${encodeURIComponent(e.id)}`;
+  try {
+    if (act === 'view') {
+      openModal(`Example: ${e.name}`, `
+        <div class="hd-sum"><span class="status ${codeClass(e.status_code)}">${esc(`${e.status_code} ${e.reason || ''}`.trim())}</span>
+          <span class="muted small">${esc(fmtBytes((e.body || '').length))}</span><span class="muted small">pinned ${esc(fmtDate(e.created_at))}</span></div>
+        <div class="tabs hd-tabs" id="ex-tabs"><button data-tab="body" class="active">Body</button><button data-tab="headers">Headers<span class="tab-n">${e.headers.length || ''}</span></button></div>
+        <div class="tab-panels hd-panels" id="ex-panels">
+          <div class="tab-panel" data-panel="body"><div id="ex-viewer"></div></div>
+          <div class="tab-panel" data-panel="headers" hidden>${e.headers.length ? `<table class="htable"><tbody>${e.headers.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</tbody></table>` : '<div class="muted small">No headers</div>'}</div>
+        </div>`, [{ label: 'Close', cls: 'primary', onClick: closeModal }]);
+      $('#modal .modal').classList.add('wide');
+      bindTabs($('#ex-tabs'), $('#ex-panels'));
+      mountViewer($('#ex-viewer'), { body_text: e.body || '', content_type: e.content_type || '', headers: e.headers, size: (e.body || '').length, truncated: !!e.truncated });
+    } else if (act === 'rename') {
+      const name = await promptDialog('Rename example', { label: 'Name', value: e.name });
+      if (name && name !== e.name) applyExamples(r, await api(base, { method: 'PATCH', body: { name } }));
+    } else if (act === 'del') {
+      if (!await confirmDialog('Delete this example?', `${strong(e.name)} is removed from the request. Mock routes made from it stay.`, { okLabel: 'Delete', danger: true })) return;
+      applyExamples(r, await api(base, { method: 'DELETE' }));
+    } else if (act === 'mock') {
+      await loadMocks(false);
+      const NEW = '__new';
+      const pick = await selectDialog('Mock route from this example', {
+        label: 'Mock server', okLabel: 'Add route', value: mocks.list.length ? mocks.list[0].id : NEW,
+        options: [...mocks.list.map((m) => ({ value: m.id, label: m.name })), { value: NEW, label: `＋ New mock server “${r.name}”` }],
+        message: `Adds a route for ${strong(r.method)} and the path of this request that answers with ${strong(e.name)}.`,
+      });
+      if (!pick) return;
+      const out = await api(base + '/mock', { method: 'POST', body: pick === NEW ? {} : { mock_id: pick } });
+      await loadMocks(false);
+      toast(`Route added to “${out.mock.name}”: ${out.route.method} ${out.route.path}`, 'ok', { label: 'Open mocks', onClick: () => openMocksModal() });
+    }
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 // ================================================================ cookies
@@ -1214,12 +1332,16 @@ function exportMenu(anchor) {
     { act: 'postman-env', icon: '🌐', label: 'Postman environments', run: () => exportPostman(true) },
     '-',
     { act: 'docs', icon: '📄', label: 'Documentation (Markdown)', run: () => exportDocs() },
+    { act: 'docs-html', icon: '🌐', label: 'Documentation (HTML page)', run: () => exportDocs('', 'html') },
   ]);
 }
-async function exportDocs(folderId = '') {
+async function exportDocs(folderId = '', format = 'md') {
   try {
-    const d = await api('/export/docs' + (folderId ? '?folder_id=' + encodeURIComponent(folderId) : ''));
-    await downloadText(d.markdown, d.filename);
+    const qs = new URLSearchParams();
+    if (folderId) qs.set('folder_id', folderId);
+    if (format === 'html') qs.set('format', 'html');
+    const d = await api('/export/docs' + (qs.toString() ? '?' + qs.toString() : ''));
+    await downloadText(format === 'html' ? d.html : d.markdown, d.filename);
   } catch (e) { toast('Export failed: ' + e.message, 'error'); }
 }
 async function exportPostman(envsOnly = false, folderId = '') {
@@ -1289,7 +1411,8 @@ function renderReqTabs() {
   box.hidden = tabs.list.length === 0;
   const items = tabs.list.map((t) => {
     const r = t.id === 'draft' ? state.current : (cur === t.id ? state.current : state.requests.find((x) => x.id === t.id));
-    return r ? { key: t.id, name: r.name || 'Untitled', method: r.method, active: t.id === cur } : null;
+    const url = cur === t.id ? $('#f-url').value : r && r.url;
+    return r ? { key: t.id, name: r.name || 'Untitled', method: /^\s*wss?:\/\//i.test(url || '') ? 'WS' : r.method, active: t.id === cur } : null;
   }).filter(Boolean);
   const sig = JSON.stringify(items);
   if (sig !== tabsSignature) {
@@ -1474,6 +1597,7 @@ async function openFolderSettings(f) {
     <div class="set-section"><h4>Description</h4><textarea id="fs-desc" rows="2" placeholder="What this folder is for">${esc(fresh.description || '')}</textarea></div>
     <div class="set-section"><h4>Authorization</h4><div id="fs-auth"></div></div>
     <div class="set-section"><h4>Headers added to every request</h4><div id="fs-headers" class="kv"></div></div>
+    <div class="set-section"><h4>Response views for every request inside</h4><p class="muted small">Name on the left, the full path of an HTML file (or a page address) on the right. Each request in this folder shows them in the View tab of its response, next to its own.</p><div id="fs-views" class="kv"></div></div>
     <div class="set-section"><h4>Variables (collection variables)</h4><p class="muted small">Lowest precedence: environment and global variables with the same name win, request pre-request variables win over those.</p><div id="fs-vars" class="kv"></div></div>
   `, [
     { label: 'Cancel', onClick: closeModal },
@@ -1481,7 +1605,13 @@ async function openFolderSettings(f) {
       const box = $('#fs-auth');
       const auth = readAuthFields(box, $('#fs-auth-type', box).value, fresh.auth);
       try {
-        await api('/folders/' + f.id, { method: 'PATCH', body: { description: $('#fs-desc').value, auth, headers: readKv($('#fs-headers')), variables: readKv($('#fs-vars')) } });
+        const old = fresh.views || [];
+        const views = readKv($('#fs-views')).filter((v) => (v.value || '').trim()).map((v) => {
+          const file = v.value.trim();
+          const was = old.find((o) => o.file === file);
+          return { id: was ? was.id : newViewId(), name: (v.key || '').trim() || (file.split(/[\\/]/).pop() || 'View').replace(/\.html?$/i, ''), file };
+        });
+        await api('/folders/' + f.id, { method: 'PATCH', body: { description: $('#fs-desc').value, auth, headers: readKv($('#fs-headers')), variables: readKv($('#fs-vars')), views } });
         closeModal();
         toast('Folder settings saved', 'ok');
         await loadRequests();
@@ -1500,6 +1630,7 @@ async function openFolderSettings(f) {
   };
   draw(a);
   renderKv($('#fs-headers'), fresh.headers || [], true);
+  renderKv($('#fs-views'), (fresh.views || []).map((v) => ({ key: v.name, value: v.file, enabled: true })), false);
   $('#fs-vars').dataset.secrets = '1';
   renderKv($('#fs-vars'), fresh.variables || [], true);
 }
@@ -1511,6 +1642,7 @@ async function refreshInherited() {
   renderAuthPanel({ ...r, auth: readAuth() });
   renderInheritedHeaders();
   updateTabCounts();
+  if (typeof updateViewTab === 'function') updateViewTab();   // the folders' views count too
 }
 
 // ============================================================ reorder DnD
@@ -1891,6 +2023,7 @@ function initFeatures() {
   $('#btn-cookies').addEventListener('click', openCookieManager);
   $('#btn-help').addEventListener('click', openHelp);
   $('#r-save').addEventListener('click', saveResponseBody);
+  $('#r-example').addEventListener('click', pinExample);
   $('#f-url').addEventListener('input', renderPathVars);
   $('#kv-params').addEventListener('input', () => { renderPathVars(); updateTabCounts(); });
   $('#kv-params').addEventListener('click', (e) => { if (e.target.closest('.kv-del')) setTimeout(() => { renderPathVars(); updateTabCounts(); }, 0); });
@@ -2483,6 +2616,12 @@ function initMocks() {
 const viewUi = { sessions: new WeakMap() };   // result -> { view file: { url, api } }
 const VIEW_ICON = '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 17v-3M12 17v-5M16 17v-2"/></g></svg>';
 const viewsOf = (req) => ((req && req.options && req.options.views) || []);
+// The request's own views, then the ones its folders give to every request inside them.
+function mergeViews(own, inherited) {
+  const files = new Set(own.map((v) => v.file));
+  return [...own, ...(inherited || []).filter((v) => !files.has(v.file))];
+}
+const effectiveViews = () => mergeViews(viewsOf(state.current), inheritedInfo && state.current && state.current.folder_id ? inheritedInfo.views : []);
 const newViewId = () => 'v' + Math.random().toString(36).slice(2, 9);
 
 async function viewSession(result, view, name) {
@@ -2493,6 +2632,7 @@ async function viewSession(result, view, name) {
     per[view.file] = await api('/views/open', { method: 'POST', body: { file: view.file, name, sent_at: result.ts || null, result: {
       status: result.status, status_code: result.status_code, reason: result.reason, error: result.error,
       duration_ms: result.duration_ms, body_name: result.body_name,
+      history_id: result.history_id || null,   // a body too large for the viewer is served whole from the history's copy
       request: { method: (result.request || {}).method, url: (result.request || {}).url },
       response: { headers: resp.headers, content_type: resp.content_type, size: resp.size, body_text: resp.body_text,
                   body_base64: resp.body_base64, truncated: resp.truncated } } } });
@@ -2570,7 +2710,7 @@ async function openViewsOutside(result, views, name) {
 function renderRespView() {
   const box = $('#r-view');
   if (!box || !state.current) return;
-  mountViews(box, { result: lastResult, views: viewsOf(state.current), name: state.current.name,
+  mountViews(box, { result: lastResult, views: effectiveViews(), name: state.current.name,
     onEdit: openViewsDialog, onStarter: () => addStarterView() });
 }
 function setViews(views, viewFirst) {
@@ -2582,7 +2722,7 @@ function setViews(views, viewFirst) {
   renderRespView();
 }
 function updateViewTab() {
-  const n = viewsOf(state.current).length;
+  const n = effectiveViews().length;
   $('#n-r-view').textContent = n ? String(n) : '';
   $('#n-views').textContent = n ? String(n) : '';
   renderViewsPanel();
@@ -2592,11 +2732,14 @@ function renderViewsPanel() {
   const box = $('#views-panel');
   if (!box || !state.current) return;
   const views = viewsOf(state.current);
+  const fromFolders = effectiveViews().slice(views.length);
   box.innerHTML = `<div class="vwp">
     <p class="muted small">HTML pages of your own that draw this request's response: a chart, a table, a dashboard. After you send,
       they show in the <b>View</b> tab of the response, and for every past call in <b>Request history</b>.</p>
     ${views.length ? `<ul class="vwp-list">${views.map((v) => `<li><span class="vwp-name">${esc(v.name)}</span><span class="mono muted small" title="${esc(v.file)}">${esc(v.file)}</span></li>`).join('')}</ul>`
       : '<div class="vwp-none muted small">No views on this request yet.</div>'}
+    ${fromFolders.length ? `<p class="muted small" style="margin-bottom:4px">From its folders (set in the folder's ⋯ menu → Settings):</p>
+      <ul class="vwp-list">${fromFolders.map((v) => `<li><span class="vwp-name">${esc(v.name)} <span class="muted small">· ${esc(v.from || 'folder')}</span></span><span class="mono muted small" title="${esc(v.file)}">${esc(v.file)}</span></li>`).join('')}</ul>` : ''}
     <div class="vw-actions"><button id="vwp-edit" class="${views.length ? '' : 'primary'}">${views.length ? 'Edit views…' : 'Choose HTML files…'}</button><button id="vwp-starter" title="Writes a working page (chart, table, raw data) you can edit">Create a starter view</button></div>
     <p class="muted small">A page finds the response in its own address: <code>new URLSearchParams(location.search).get('api')</code>, then <code>fetch(api)</code>.</p></div>`;
   $('#vwp-edit').addEventListener('click', openViewsDialog);
@@ -2616,7 +2759,7 @@ async function addStarterView() {
 function afterResponseForViews(result) {
   if (!state.current) return;
   updateViewTab();
-  const views = viewsOf(state.current);
+  const views = effectiveViews();
   const onView = !$('#r-view').hidden;
   if (views.length && result.response && (state.current.options || {}).view_first && !onView) { showTab($('#resp-tabs'), 'view'); return; }
   if (onView) renderRespView();
@@ -2672,7 +2815,7 @@ const data = await fetch(api).then((r) => r.json());   // the body, as the API s
 function historyResult(h) {
   const d = h.detail || {};
   return { status: h.status, status_code: h.status_code, reason: d.reason, duration_ms: h.duration_ms, error: h.error,
-    body_name: h.body_name, ts: h.ts, request: d.request, response: d.response };
+    body_name: h.body_name, ts: h.ts, request: d.request, response: d.response, history_id: h.id };
 }
 // The saved request a history entry belongs to. Older entries did not record the id: those
 // are matched by name and method.
@@ -2685,7 +2828,9 @@ function historyRequestId(h) {
 // the call was sent with when the request is gone.
 async function historyViews(h) {
   const rid = historyRequestId(h);
-  const views = rid ? viewsOf(await api('/requests/' + rid).catch(() => null)) : [];
+  const req = rid ? await api('/requests/' + rid).catch(() => null) : null;
+  const inherited = req && req.folder_id ? await api(`/folders/${req.folder_id}/inherited`).catch(() => null) : null;
+  const views = mergeViews(viewsOf(req), inherited ? inherited.views : []);
   return views.length ? views : viewsOf(h.snapshot);
 }
 async function openHistoryViews(hid) {
@@ -2816,8 +2961,13 @@ function renderGitPanel(box) {
       <div class="switch-list">
         ${sw('git-auto-commit', 'Commit automatically', 'A few seconds after the last edit, with the names of what changed as the message. Off: the files are still written, and “Sync now” commits them.', g.auto_commit)}
         ${sw('git-auto-push', 'Push automatically', 'After every commit. A push that fails (offline, no access) is tried again with the next change. Off: “Sync now” pushes.', g.auto_push)}
-        ${sw('git-auto-pull', 'Pull automatically', 'With every sync and when the app starts: changes from the remote are merged and read into this project. In a repository shared with code, that merges the remote branch into the one checked out. Off: “Sync now” pulls.', g.auto_pull)}
+        ${sw('git-auto-pull', 'Pull automatically', 'With every sync, when the app starts and on the timer below: changes from the remote are merged and read into this project. In a repository shared with code, that merges the remote branch into the one checked out. Off: “Sync now” pulls.', g.auto_pull)}
         ${sw('git-secrets', 'Include secret values', 'Off: the values of variables marked 🔒 are written empty, so they never reach the repository. Tokens and passwords typed straight into a request are always written.', g.secrets)}
+      </div>
+      <div class="set-grid">
+        <div class="set-field"><span class="set-label">Look at the remote every</span>
+          <select id="git-poll">${[[1, '1 minute'], [5, '5 minutes'], [15, '15 minutes'], [60, 'hour'], [0, 'never (only with a sync)']].map(([v, l]) => `<option value="${v}" ${Number(g.poll_minutes ?? 5) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <span class="set-hint muted small">So a teammate's push arrives while you are only reading. Needs “Pull automatically” and a remote.</span></div>
       </div>
     </div>`;
   renderGitStatus();
@@ -2846,9 +2996,14 @@ function renderGitPanel(box) {
     if (!dir) throw new Error('Choose a folder (or use “Turn off” to stop syncing)');
     const info = await api('/git', { method: 'PUT', body: {
       dir, remote: $('#git-remote').value.trim(), auto_commit: $('#git-auto-commit').checked,
-      auto_push: $('#git-auto-push').checked, auto_pull: $('#git-auto-pull').checked, secrets: $('#git-secrets').checked } });
+      auto_push: $('#git-auto-push').checked, auto_pull: $('#git-auto-pull').checked, secrets: $('#git-secrets').checked,
+      poll_minutes: Number($('#git-poll').value) } });
     done(info, on ? 'Git settings saved' : 'Git sync is on');
   }));
+  $('#git-poll').addEventListener('change', async (e) => {
+    if (!on) return;
+    try { done(await api('/git', { method: 'PUT', body: { poll_minutes: Number(e.target.value) } })); } catch (err) { toast(err.message, 'error'); }
+  });
   [['git-auto-commit', 'auto_commit'], ['git-auto-push', 'auto_push'], ['git-auto-pull', 'auto_pull'], ['git-secrets', 'secrets']].forEach(([id, key]) => {
     $('#' + id).addEventListener('change', async (e) => {
       if (!on) return;   // not on yet: the switches are sent along with “Turn on”
@@ -2877,3 +3032,148 @@ function initGit() {
 }
 
 document.addEventListener('DOMContentLoaded', initFeatures);
+
+
+// ============================================================== websocket
+// A request whose address starts with ws:// or wss:// is a WebSocket: Send becomes Connect, and
+// the response area becomes a console (a live log of messages, and a box to send one). The
+// connection itself is held by the server (see wsclient.py); the log arrives through a long poll.
+const wsUi = { byKey: {}, shown: null, rendered: 0, filter: '', mode: false };
+const isWsUrl = (u) => /^\s*wss?:\/\//i.test(u || '');
+const isWsRequest = () => !!state.current && isWsUrl($('#f-url').value);
+function wsSession() { return wsUi.byKey[responseKey()] || null; }
+const wsLive = (s) => !!s && (s.state === 'open' || s.state === 'connecting');
+
+function wsApply(s, snap) {
+  Object.assign(s, { state: snap.state, url: snap.url, last: snap.last, subprotocol: snap.subprotocol, close_code: snap.close_code, close_reason: snap.close_reason });
+  s.events.push(...snap.events);
+  if (s.events.length > 2000) { s.events.splice(0, s.events.length - 2000); if (wsUi.shown === s) wsUi.rendered = -1; }   // -1: draw from scratch
+}
+function wsNote(s, text) {
+  s.events.push({ n: 0, ts: Date.now() / 1000, dir: 'error', kind: 'close', text, size: 0 });
+}
+async function wsPoll(key, s) {
+  while (wsUi.byKey[key] === s && wsLive(s)) {
+    try { wsApply(s, await api(`/ws/${s.id}?after=${s.last}&wait=20`)); }
+    catch (e) { s.state = 'error'; wsNote(s, e.message); }
+    if (responseKey() === key) { renderSendButton(); renderWsPanel(); }
+  }
+}
+async function wsConnect() {
+  await saveNow();
+  if (!state.current) return;
+  const data = readEditor();
+  data.folder_id = state.current.folder_id || null;
+  const key = responseKey();
+  const s = wsUi.byKey[key] = { id: null, state: 'connecting', url: data.url, events: [], last: 0 };
+  renderSendButton();
+  renderWsPanel();
+  try {
+    const snap = await api('/ws/connect', { method: 'POST', body: { ...data, id: state.current.id } });
+    s.id = snap.id;
+    wsApply(s, snap);
+    wsPoll(key, s);
+  } catch (e) { s.state = 'error'; wsNote(s, e.message); }
+  if (responseKey() === key) { renderSendButton(); renderWsPanel(); }
+}
+async function wsDisconnect() {
+  const s = wsSession();
+  if (!s || !s.id || !wsLive(s)) return;
+  try { wsApply(s, await api(`/ws/${s.id}/close`, { method: 'POST' })); } catch (e) { toast(e.message, 'error'); }
+  renderSendButton();
+  renderWsPanel();
+}
+// connectOnly: the keyboard shortcut connects (or moves to the message box) but never hangs up
+function wsToggle(connectOnly = false) {
+  if (wsLive(wsSession())) { if (connectOnly) $('#ws-text').focus(); else wsDisconnect(); } else wsConnect();
+}
+async function wsSendMessage() {
+  const s = wsSession();
+  const text = $('#ws-text').value;
+  if (!s || s.state !== 'open') { toast('Not connected: press Connect first', 'error'); return; }
+  if (!text) return;
+  try { await api(`/ws/${s.id}/send`, { method: 'POST', body: { text, folder_id: (state.current && state.current.folder_id) || null } }); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function wsRowHtml(e) {
+  const arrow = e.dir === 'in' ? '↓' : e.dir === 'out' ? '↑' : e.dir === 'error' ? '!' : '•';
+  const kind = e.kind === 'text' || e.kind === 'open' || e.kind === 'close' ? '' : `<span class="ws-kind">${esc(e.kind)}</span>`;
+  const size = e.dir === 'in' || e.dir === 'out' ? `<span class="ws-size muted">${esc(fmtBytes(e.size || 0))}</span>` : '';
+  return `<div class="ws-row ws-${e.dir}" data-n="${e.n}" title="${e.dir === 'in' ? 'Received' : e.dir === 'out' ? 'Sent' : ''} ${esc(fmtClock(e.ts))}${e.kind === 'text' ? '. Click to pretty-print JSON' : ''}">
+    <span class="ws-time muted">${esc(fmtClock(e.ts))}</span><span class="ws-arrow">${arrow}</span>${kind}<span class="ws-msg">${esc(e.text || '')}${e.truncated ? ' …' : ''}</span>${size}</div>`;
+}
+// Draws the console for the request on screen; returns false when it is not a WebSocket request.
+function renderWsPanel() {
+  const box = $('#response');
+  const on = isWsRequest();
+  wsUi.mode = on;
+  box.classList.toggle('ws-mode', on);
+  $('#ws-panel').hidden = !on;
+  if (!on) { wsUi.shown = null; return false; }
+  box.hidden = false;
+  const s = wsSession();
+  const dot = $('#ws-dot');
+  dot.className = 'ws-dot ' + (!s ? '' : s.state === 'open' ? 'ok' : s.state === 'connecting' ? 'busy' : s.state === 'error' ? 'err' : '');
+  $('#ws-status').textContent = !s ? 'Not connected. Press Connect to open the WebSocket.'
+    : s.state === 'connecting' ? `Connecting to ${s.url}…`
+    : s.state === 'open' ? `Connected to ${s.url}${s.subprotocol ? ` (${s.subprotocol})` : ''}`
+    : s.state === 'error' ? 'Could not connect, or the connection failed'
+    : `Closed${s.close_code ? ` (${s.close_code}${s.close_reason ? ': ' + s.close_reason : ''})` : ''}`;
+  $('#ws-send').disabled = !s || s.state !== 'open';
+  $('#ws-ping').disabled = !s || s.state !== 'open';
+  const text = $('#ws-text');
+  if (!text.value && !text.dataset.touched) {   // start from the body of the request, if it has one
+    const b = typeof activeBody === 'function' ? activeBody() : null;
+    if (b && $('#f-body-type').value !== 'none' && (b.body || '').trim()) text.value = b.body;
+  }
+  const log = $('#ws-log');
+  const events = s ? s.events : [];
+  const q = wsUi.filter.toLowerCase();
+  const fresh = wsUi.shown !== s || wsUi.rendered < 0 || wsUi.rendered > events.length || wsUi.q !== q;
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const rows = (fresh ? events : events.slice(wsUi.rendered)).filter((e) => !q || (e.text || '').toLowerCase().includes(q));
+  if (fresh) log.innerHTML = rows.length || s ? '' : '';
+  if (rows.length) log.insertAdjacentHTML('beforeend', rows.map(wsRowHtml).join(''));
+  if (!log.children.length) log.innerHTML = `<div class="ws-empty muted small">${!s ? 'Messages appear here once connected. Headers, auth, query parameters and {{variables}} of this request are used for the connection.' : q ? 'No message matches the filter.' : 'No messages yet.'}</div>`;
+  else { const empty = $('.ws-empty', log); if (empty && log.children.length > 1) empty.remove(); }
+  wsUi.shown = s;
+  wsUi.rendered = events.length;
+  wsUi.q = q;
+  if (fresh || atEnd) log.scrollTop = log.scrollHeight;
+  return true;
+}
+function initWs() {
+  $('#ws-send').addEventListener('click', wsSendMessage);
+  $('#ws-ping').addEventListener('click', async () => {
+    const s = wsSession();
+    if (s && s.state === 'open') { try { await api(`/ws/${s.id}/send`, { method: 'POST', body: { ping: true } }); } catch (e) { toast(e.message, 'error'); } }
+  });
+  $('#ws-clear').addEventListener('click', () => { const s = wsSession(); if (s) s.events = []; wsUi.rendered = -1; renderWsPanel(); });
+  $('#ws-filter').addEventListener('input', (e) => { wsUi.filter = e.target.value; renderWsPanel(); });
+  const text = $('#ws-text');
+  text.addEventListener('input', () => { text.dataset.touched = '1'; });
+  text.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); wsSendMessage(); }
+  });
+  // a text message that is JSON opens pretty-printed on click, and folds back on the next one
+  $('#ws-log').addEventListener('click', (e) => {
+    const row = e.target.closest('.ws-row');
+    const s = wsSession();
+    if (!row || !s || window.getSelection().toString()) return;
+    const ev = s.events.find((x) => String(x.n) === row.dataset.n && x.n);
+    if (!ev || ev.kind !== 'text') return;
+    const msg = $('.ws-msg', row);
+    if (row.classList.toggle('open')) {
+      try { msg.textContent = JSON.stringify(JSON.parse(ev.text), null, 2); } catch { msg.textContent = ev.text; }
+    } else msg.textContent = ev.text + (ev.truncated ? ' …' : '');
+  });
+  // the address decides what this request is: redraw when it turns into (or stops being) a WebSocket one
+  $('#f-url').addEventListener('input', () => {
+    if (isWsRequest() !== wsUi.mode) { renderSendButton(); renderResponseArea(); renderReqTabs(); }
+  });
+  // connections are held by the server: hang up when the window goes away
+  window.addEventListener('pagehide', () => {
+    Object.values(wsUi.byKey).forEach((s) => { if (s.id && wsLive(s)) navigator.sendBeacon(`/api/ws/${s.id}/close`); });
+  });
+}
+document.addEventListener('DOMContentLoaded', initWs);

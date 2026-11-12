@@ -274,9 +274,14 @@ class Syncer:
     autosaves becomes one commit."""
 
     DELAY = 3.0   # seconds of quiet before a change is committed
+    POLL_MINUTES = 5   # default for "look at the remote every …"; 0 turns the timer off
+    POLL_TICK = 20.0   # how often the timer thread wakes up to see whether a look is due
 
     def __init__(self, payload: Callable[[], dict[str, Any]]) -> None:
         self._payload = payload
+        self._stop = threading.Event()
+        self._poller: threading.Thread | None = None
+        self._polled_at = time.time()
         self._lock = threading.RLock()        # one sync at a time
         self._tlock = threading.Lock()        # the timer only: touch() must never wait for a push
         self._timer: threading.Timer | None = None
@@ -290,6 +295,10 @@ class Syncer:
         for key, default in _BOOLS.items():
             raw = db.get_setting(f"git_{key}")
             cfg[key] = default if raw is None else raw != "0"
+        try:
+            cfg["poll_minutes"] = max(0, int(float(db.get_setting("git_poll_minutes") or self.POLL_MINUTES)))
+        except ValueError:
+            cfg["poll_minutes"] = self.POLL_MINUTES
         return cfg
 
     def set_config(self, patch: dict[str, Any]) -> None:
@@ -315,6 +324,67 @@ class Syncer:
         for key in _BOOLS:
             if patch.get(key) is not None:
                 db.set_setting(f"git_{key}", "1" if patch[key] else "0")
+        if patch.get("poll_minutes") is not None:
+            try:
+                minutes = int(float(patch["poll_minutes"]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("poll_minutes must be a number of minutes (0 turns the timer off)") from exc
+            db.set_setting("git_poll_minutes", str(min(max(0, minutes), 24 * 60)))
+
+    # ---------------------------------------------------------------- timer
+    # A teammate's push used to arrive only with the next edit, at app start or with “Sync now”.
+    # The timer looks at the remote every few minutes and syncs when it has something new.
+    def start(self) -> None:
+        if self._poller and self._poller.is_alive():
+            return
+        self._stop.clear()
+        self._polled_at = time.time()
+        self._poller = threading.Thread(target=self._poll_loop, daemon=True, name="pyhttp-git-poll")
+        self._poller.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _poll_loop(self) -> None:
+        while not self._stop.wait(self.POLL_TICK):
+            try:
+                minutes = self.config()["poll_minutes"]
+                # any sync looks at the remote too, so the clock restarts with each one
+                last = max(self._polled_at, float(self._state.get("synced_at") or 0))
+                if minutes > 0 and time.time() - last >= minutes * 60:
+                    self.poll()
+            except Exception:  # noqa: BLE001 - the database is being switched or closed; try again next tick
+                pass
+
+    def poll(self) -> bool:
+        """Look at the remote and sync when it has commits this project does not have yet; true
+        when it synced. Quiet on purpose: a remote that cannot be reached (offline, no access) is
+        left for the next real sync to report, so a laptop on a train does not turn the Git button
+        red every few minutes."""
+        self._polled_at = time.time()
+        if not self._lock.acquire(blocking=False):   # a sync is running: it fetches anyway
+            return False
+        try:
+            cfg = self.config()
+            if not cfg["dir"] or not cfg["auto_pull"] or self._state.get("conflict") or self._timer is not None:
+                return False
+            root = Path(cfg["dir"])
+            if not root.is_dir() or not _head(root):
+                return False
+            remotes = _run(root, "remote")[1].split()
+            remote = "origin" if "origin" in remotes else (remotes[0] if remotes else "")
+            if not remote:
+                return False
+            _run(root, "fetch", remote, timeout=90)
+            up = _upstream(root, remote)
+            if not up or _run(root, "rev-list", "--count", f"HEAD..{up}")[1] == "0":
+                return False
+        except GitError:
+            return False
+        finally:
+            self._lock.release()
+        self.sync()
+        return True
 
     # ------------------------------------------------------------- schedule
     def touch(self) -> None:

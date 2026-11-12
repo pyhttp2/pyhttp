@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -84,6 +85,18 @@ def redirect() -> Response:
 @echo.post("/post-only")
 async def post_only(request: Request) -> dict:
     return {"method": request.method}
+
+
+@echo.get("/big")
+async def big(n: int = 700_000):
+    """A JSON body larger than what the viewer (512 KB) and the history (64 KB) keep."""
+    return {"data": "y" * n, "end": True}
+
+
+@echo.get("/many")
+async def many(n: int = 30_000):
+    """A JSON document with many nodes (about 60 bytes per item)."""
+    return {"count": n, "items": [{"id": i, "name": f"item {i}", "tags": ["a", "b"]} for i in range(n)], "tail": "needle-at-the-end"}
 
 
 @echo.get("/status/{code}")
@@ -1436,6 +1449,18 @@ def test_tools_cli(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "integrity ok" in out and "orphans:  1" in out and "Deleted 1 folder" in out
     assert not old.exists()
+    # doctor --vacuum: deleted rows give their space back
+    conn = sqlite3.connect(str(tmp_path / "pyhttp.db"))
+    conn.execute("CREATE TABLE junk (x TEXT)")
+    conn.executemany("INSERT INTO junk VALUES (?)", [("y" * 2000,) for _ in range(500)])
+    conn.commit()
+    conn.execute("DROP TABLE junk")
+    conn.commit()
+    conn.close()
+    before = (tmp_path / "pyhttp.db").stat().st_size
+    assert tools.doctor_main(["--vacuum"], tmp_path) == 0
+    assert "Compacted “Default”" in capsys.readouterr().out
+    assert (tmp_path / "pyhttp.db").stat().st_size < before
 
 
 def test_update_repo_never_points_at_the_old_releases_repo(client, monkeypatch):
@@ -1779,6 +1804,35 @@ def test_git_sync_reads_remote_changes_back(client, tmp_path):
 
 
 @needs_git
+def test_git_sync_timer_picks_up_a_remote_push(client, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    r = client.post("/api/requests", json={"name": "Ping", "url": "http://x/ping"}).json()
+    st = client.put("/api/git", json={"dir": str(tmp_path / "work"), "remote": str(remote), "poll_minutes": 1}).json()
+    assert st["state"] == "ok" and st["poll_minutes"] == 1, st
+    syncer = client.app.state.git
+    assert syncer.poll() is False                                   # nothing new on the remote: no sync
+    assert client.get("/api/git").json()["pulled_at"] is None
+
+    mate = _mate(tmp_path, remote)
+    f = mate / "collection" / "Ping.json"
+    data = json.loads(f.read_text(encoding="utf-8"))
+    f.write_text(json.dumps({**data, "url": "http://x/pong"}, indent=2) + "\n", encoding="utf-8")
+    _mate_push(mate, "mate: pong")
+    assert syncer.poll() is True                                    # no edit here, no “Sync now”
+    assert client.get(f"/api/requests/{r['id']}").json()["url"] == "http://x/pong"
+    st = client.get("/api/git").json()
+    assert st["state"] == "ok" and st["pulled_at"], st
+
+    # a remote that cannot be reached is not an error on the timer, and "pull automatically" off skips it
+    client.put("/api/git", json={"remote": str(tmp_path / "nowhere.git")})
+    assert syncer.poll() is False
+    client.put("/api/git", json={"remote": str(remote), "auto_pull": False, "poll_minutes": 0})
+    assert client.get("/api/git").json()["poll_minutes"] == 0 and syncer.poll() is False
+    assert client.put("/api/git", json={"poll_minutes": "soon"}).status_code == 400
+
+
+@needs_git
 def test_git_sync_joining_an_existing_repository(client, tmp_path):
     remote = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote))
@@ -1856,3 +1910,358 @@ def test_response_views(client, tmp_path):
     assert client.post("/api/views/open", json={"file": str(tmp_path / "missing.html"), "result": result}).status_code == 404
     assert client.post("/api/views/open", json={"file": "", "result": result}).status_code == 400
     assert client.get("/response/x/nope").status_code == 404
+
+
+def test_example_responses_docs_and_mock(client, echo_url):
+    r = client.post("/api/requests", json={"name": "Echo", "method": "POST", "url": echo_url + "/echo",
+                                           "body_type": "json", "bodies": [{"name": "one", "body": '{"a": 1}'}]}).json()
+    sent = client.post("/api/send", json={**r, "id": r["id"]}).json()
+    assert sent["history_id"] and client.get(f"/api/history/{sent['history_id']}").json()["request_id"] == r["id"]
+
+    # pin the response from its fields, and another one straight from the history
+    resp = sent["response"]
+    made = client.post(f"/api/requests/{r['id']}/examples", json={
+        "name": "OK", "status_code": sent["status_code"], "reason": sent["reason"], "headers": resp["headers"],
+        "content_type": resp["content_type"], "body": resp["body_text"]})
+    assert made.status_code == 201, made.text
+    ex = made.json()["example"]
+    assert ex["name"] == "OK" and ex["status_code"] == 200 and "json" in ex["content_type"] and ex["body"]
+    again = client.post(f"/api/requests/{r['id']}/examples", json={"history_id": sent["history_id"], "name": "OK"}).json()
+    assert again["example"]["name"] == "OK (2)" and len(again["examples"]) == 2
+    assert client.post(f"/api/requests/{r['id']}/examples", json={"history_id": "nope"}).status_code == 400
+    assert client.post("/api/requests/nope/examples", json={"body": "x"}).status_code == 404
+
+    # the editor's autosave does not send examples back: they stay; an explicit empty list clears them
+    saved = client.put(f"/api/requests/{r['id']}", json={**r, "name": "Echo 2", "options": {"send_cookies": True}}).json()
+    assert saved["name"] == "Echo 2" and [e["name"] for e in saved["options"]["examples"]] == ["OK", "OK (2)"]
+    renamed = client.patch(f"/api/requests/{r['id']}/examples/{again['example']['id']}", json={"name": "Second"}).json()
+    assert [e["name"] for e in renamed["examples"]] == ["OK", "Second"]
+    assert client.patch(f"/api/requests/{r['id']}/examples/{ex['id']}", json={"name": " "}).status_code == 400
+
+    # they travel with the request: duplicate, export, documentation
+    copy = client.post(f"/api/requests/{r['id']}/duplicate").json()
+    assert len(copy["options"]["examples"]) == 2
+    exported = next(x for x in client.get("/api/export").json()["requests"] if x["id"] == r["id"])
+    assert len(exported["options"]["examples"]) == 2
+    md = client.get("/api/export/docs").json()["markdown"]
+    assert "**Example responses** (2)" in md and "*OK*: `200 OK` · `application/json`" in md
+    page = client.get("/api/export/docs", params={"format": "html"}).json()
+    assert page["filename"].endswith(".html") and page["html"].startswith("<!doctype html>")
+    assert '<code class="m m-POST">POST</code>' in page["html"] and "<pre><code class=\"lang-json\">" in page["html"]
+    assert "<h2 id=\"contents\">Contents</h2>" in page["html"] and "<script" not in page["html"]
+
+    # an example becomes a mock route, in a new mock server or an existing one
+    out = client.post(f"/api/requests/{r['id']}/examples/{ex['id']}/mock", json={})
+    assert out.status_code == 201, out.text
+    mock_server, route = out.json()["mock"], out.json()["route"]
+    assert route["method"] == "POST" and route["path"] == "/echo" and route["status_code"] == 200
+    assert not any(h["key"].lower() in ("content-length", "date") for h in route["headers"])
+    hit = client.post(f"/mock/{mock_server['slug']}/echo", json={})
+    assert hit.status_code == 200 and hit.text == ex["body"]
+    out = client.post(f"/api/requests/{r['id']}/examples/{again['example']['id']}/mock", json={"mock_id": mock_server["id"]}).json()
+    assert len(out["mock"]["routes"]) == 2
+    # "routes from requests" prefers the saved example over the last history entry
+    seeded = client.post(f"/api/mocks/{mock_server['id']}/from-requests", json={"request_ids": [r["id"]]}).json()
+    assert seeded["added"] == 1 and seeded["routes"][-1]["name"] == "Echo 2: OK"
+
+    left = client.delete(f"/api/requests/{r['id']}/examples/{ex['id']}").json()
+    assert [e["name"] for e in left["examples"]] == ["Second"]
+    assert client.delete(f"/api/requests/{r['id']}/examples/{ex['id']}").status_code == 404
+    cleared = client.put(f"/api/requests/{r['id']}", json={**saved, "options": {**saved["options"], "examples": []}}).json()
+    assert "examples" not in cleared["options"]
+
+
+def test_docs_markdown_to_html():
+    from pyhttp import docs
+
+    html = docs.markdown_to_html("# T <x>\n\nA **b** *c* `d<e>` [l](https://x.test/?a=1&b=2) [bad](javascript:alert(1))\n\n"
+                                 "- one\n  - two\n- three\n\n| A | B |\n|---|---|\n| `1` | 2 |\n\n````\n```\n<in>\n````\n")
+    assert '<h1 id="t-x">T &lt;x&gt;</h1>' in html
+    assert "<strong>b</strong> <em>c</em> <code>d&lt;e&gt;</code>" in html
+    assert '<a href="https://x.test/?a=1&amp;b=2">l</a>' in html and "javascript:" not in html.replace("[bad](javascript:alert(1))", "")
+    assert "<ul><li>\none\n<ul><li>\ntwo\n</li></ul>\n</li><li>\nthree\n</li></ul>" in html
+    assert "<th>A</th><th>B</th>" in html and "<td><code>1</code></td><td>2</td>" in html
+    assert "<pre><code>```\n&lt;in&gt;</code></pre>" in html
+    page = docs.to_html("API", "# API\n", "system")
+    assert "prefers-color-scheme:dark" in page and "<title>API</title>" in page
+
+
+def test_secrets_in_the_system_keychain(client, tmp_path):
+    from pyhttp import secretstore
+
+    store = secretstore.MemoryBackend()
+    secretstore.use(store)
+    try:
+        folder = client.post("/api/folders", json={"name": "Api"}).json()
+        client.patch(f"/api/folders/{folder['id']}", json={"variables": [{"key": "fkey", "value": "folder-secret", "secret": True}]})
+        env = client.post("/api/environments", json={"name": "Prod", "variables": [
+            {"key": "token", "value": "hunter2", "secret": True}, {"key": "host", "value": "prod"}]}).json()
+        raw = lambda table, ident: json.loads(db._c().execute(f"SELECT variables FROM {table} WHERE id = ?", (ident,)).fetchone()[0])  # noqa: E731
+        assert raw("environments", env["id"])[0]["value"] == "hunter2" and not store.items     # off by default
+
+        st = client.put("/api/settings", json={"secrets_keyring": True}).json()
+        assert st["secrets_keyring"] is True and st["keyring_name"] == "memory"
+        stored = raw("environments", env["id"])
+        assert stored[0] == {"key": "token", "value": "", "enabled": True, "secret": True, "vault": True}
+        assert stored[1]["value"] == "prod" and "vault" not in stored[1]                        # only secrets move
+        assert raw("folders", folder["id"])[0]["value"] == "" and len(store.items) == 2
+        assert "hunter2" not in db._c().execute("SELECT group_concat(variables) FROM environments").fetchone()[0]
+        # everything above the storage layer still sees the values
+        envs = client.get("/api/environments").json()["environments"]
+        assert {v["key"]: v["value"] for v in envs[0]["variables"]} == {"token": "hunter2", "host": "prod"}
+        assert "vault" not in envs[0]["variables"][0]
+        client.put("/api/environments/active", json={"id": env["id"]})
+        assert db.effective_variables(folder["id"])[0]["token"] == "hunter2"
+        assert db.effective_variables(folder["id"])[0]["fkey"] == "folder-secret"
+        assert "hunter2" in db.secret_values()
+
+        # a changed value is rewritten; a secret that is renamed or deleted leaves no entry behind
+        client.patch(f"/api/environments/{env['id']}", json={"variables": [
+            {"key": "token2", "value": "s3cret-" + "x" * 5000, "secret": True}, {"key": "host", "value": "prod"}]})
+        secretstore._cache.clear()   # as another process (the CLI, the MCP server) would read it
+        got = client.get("/api/environments").json()["environments"][0]["variables"]
+        assert got[0]["value"] == "s3cret-" + "x" * 5000
+        assert not any("/token" in k and "token2" not in k for k in store.items) and any("#1" in k for k in store.items)
+        client.delete(f"/api/folders/{folder['id']}")
+        assert not any("folder/" in k for k in store.items)
+
+        # switching it off brings the values back into the database and empties the keychain
+        assert client.put("/api/settings", json={"secrets_keyring": False}).json()["secrets_keyring"] is False
+        assert raw("environments", env["id"])[0]["value"].startswith("s3cret-") and not store.items
+
+        # a keychain that cannot be used is refused, and nothing moves
+        class Broken(secretstore.MemoryBackend):
+            def set(self, name, value):
+                raise secretstore.SecretStoreError("locked")
+        secretstore.use(Broken())
+        res = client.put("/api/settings", json={"secrets_keyring": True})
+        assert res.status_code == 400 and "locked" in res.json()["detail"]
+        assert client.get("/api/settings").json()["secrets_keyring"] is False
+    finally:
+        secretstore.use(None)
+
+
+def test_two_project_databases_open_at_once(client, tmp_path):
+    """db.using() points one thread at another project while the app's own project stays open."""
+    mine = client.post("/api/requests", json={"name": "Mine", "url": "http://x/mine"}).json()
+    other = db.open(tmp_path / "other" / "pyhttp.db")
+    try:
+        with db.using(other):
+            assert db.current() is other and db.list_requests() == []
+            theirs = db.create_request({"name": "Theirs", "url": "http://x/theirs"})
+            db.set_setting("marker", "other")
+            # another thread is not affected: it still sees the project the app has open
+            seen: list[str] = []
+            t = threading.Thread(target=lambda: seen.extend(r["name"] for r in db.list_requests()))
+            t.start()
+            t.join()
+            assert seen == ["Mine"]
+        assert db.current() is not other
+        assert [r["id"] for r in db.list_requests()] == [mine["id"]] and db.get_setting("marker") is None
+        with db.using(other):
+            assert [r["id"] for r in db.list_requests()] == [theirs["id"]] and db.get_setting("marker") == "other"
+    finally:
+        other.close()
+    assert "closed" in repr(other)
+    # switching the app's project closes the old database and opens the new one
+    client.post("/api/projects", json={"name": "Second"})
+    assert client.get("/api/requests").json() == []
+
+
+def test_folder_views_and_the_whole_body_for_large_responses(client, echo_url, tmp_path):
+    page = tmp_path / "chart.html"
+    page.write_text("<html><body>chart</body></html>", encoding="utf-8")
+    top = client.post("/api/folders", json={"name": "Top"}).json()
+    sub = client.post("/api/folders", json={"name": "Sub", "parent_id": top["id"]}).json()
+    client.patch(f"/api/folders/{top['id']}", json={"views": [{"name": "Chart", "file": str(page)}, {"name": "", "file": " "}]})
+    client.patch(f"/api/folders/{sub['id']}", json={"views": [{"name": "Table", "file": "http://localhost:1/table.html"}]})
+    assert [v["name"] for v in next(f for f in client.get("/api/folders").json() if f["id"] == top["id"])["views"]] == ["Chart"]
+    inh = client.get(f"/api/folders/{sub['id']}/inherited").json()
+    assert [(v["name"], v["from"]) for v in inh["views"]] == [("Table", "Sub"), ("Chart", "Top")]   # nearest folder first
+    # they travel with the project: export and import
+    exp = client.get("/api/export").json()
+    assert next(f for f in exp["folders"] if f["id"] == top["id"])["views"][0]["file"] == str(page)
+    client.post("/api/import", json={**exp, "replace": True})
+    assert [v["name"] for v in next(f for f in client.get("/api/folders").json() if f["name"] == "Top")["views"]] == ["Chart"]
+
+    # a response larger than the viewer keeps: the view still gets every byte
+    sent = client.post("/api/send", json={"name": "Big", "url": echo_url + "/big?n=700000"}).json()
+    resp = sent["response"]
+    assert resp["truncated"] and len(resp["body_text"]) == 512_000 and resp["size"] > 700_000
+    kept = db.current().path.parent / "outputs" / "_bodies" / f"{sent['history_id']}.body"
+    assert kept.is_file() and kept.stat().st_size == resp["size"]
+    opened = client.post("/api/views/open", json={"file": str(page), "name": "Big", "result": sent}).json()
+    body = client.get("/" + opened["api"].split("//", 1)[1].split("/", 1)[1])
+    assert body.status_code == 200 and len(body.content) == resp["size"] and body.json()["end"] is True
+    meta = client.get("/" + opened["meta"].split("//", 1)[1].split("/", 1)[1]).json()
+    assert meta["truncated"] is False and meta["json"]["end"] is True
+    # ...also when opened from the history, which holds only 64 KB of it
+    h = client.get(f"/api/history/{sent['history_id']}").json()
+    assert len(h["detail"]["response"]["body_text"]) == 64_000
+    from_history = {"status": h["status"], "status_code": h["status_code"], "history_id": h["id"],
+                    "request": h["detail"]["request"], "response": h["detail"]["response"]}
+    opened = client.post("/api/views/open", json={"file": str(page), "name": "Big", "result": from_history}).json()
+    assert len(client.get("/" + opened["api"].split("//", 1)[1].split("/", 1)[1]).content) == resp["size"]
+    # the viewer loads the whole body on request
+    whole = client.get(f"/api/history/{sent['history_id']}/body")
+    assert whole.status_code == 200 and len(whole.content) == resp["size"] and "json" in whole.headers["content-type"]
+    # a small response keeps no extra file, and the file goes away with its history entry
+    small = client.post("/api/send", json={"name": "Small", "url": echo_url + "/echo"}).json()
+    assert not (kept.parent / f"{small['history_id']}.body").exists()
+    assert client.get(f"/api/history/{small['history_id']}/body").status_code == 404
+    client.delete(f"/api/history/{sent['history_id']}")
+    assert not kept.exists()
+
+
+# ---------------------------------------------------------------- websocket
+def _ws_server_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
+    import struct
+
+    head = bytes([(0x80 if fin else 0) | opcode])
+    n = len(payload)
+    head += bytes([n]) if n < 126 else bytes([126]) + struct.pack("!H", n) if n < 65536 else bytes([127]) + struct.pack("!Q", n)
+    return head + payload
+
+
+@pytest.fixture(scope="session")
+def ws_url():
+    """A tiny WebSocket server: greets, echoes text (in two fragments when it starts with "frag:"),
+    pings on "ping me", answers binary with its length, closes with 4001 on "bye"."""
+    import asyncio
+    import hashlib
+    import struct
+
+    seen: dict[str, str] = {}
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            head = (await reader.readuntil(b"\r\n\r\n")).decode("iso-8859-1")
+            lines = head.split("\r\n")
+            fields = {k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
+            if lines[0].split(" ")[1].startswith("/plain"):
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                await writer.drain()
+                return
+            seen.update(path=lines[0].split(" ")[1], auth=fields.get("authorization", ""), proto=fields.get("sec-websocket-protocol", ""))
+            accept = base64.b64encode(hashlib.sha1((fields["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            proto = fields.get("sec-websocket-protocol", "").split(",")[0].strip()
+            writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                          f"Sec-WebSocket-Accept: {accept}\r\n" + (f"Sec-WebSocket-Protocol: {proto}\r\n" if proto else "") + "\r\n").encode())
+            writer.write(_ws_server_frame(1, f"hello {seen['path']}".encode()))
+            await writer.drain()
+            while True:
+                b1, b2 = await reader.readexactly(2)
+                opcode, n = b1 & 0x0F, b2 & 0x7F
+                assert b2 & 0x80, "a client must mask its frames"
+                if n == 126:
+                    n = struct.unpack("!H", await reader.readexactly(2))[0]
+                elif n == 127:
+                    n = struct.unpack("!Q", await reader.readexactly(8))[0]
+                mask = await reader.readexactly(4)
+                data = bytes(b ^ mask[i % 4] for i, b in enumerate(await reader.readexactly(n)))
+                if opcode == 8:
+                    writer.write(_ws_server_frame(8, data[:2]))
+                    await writer.drain()
+                    return
+                if opcode == 9:
+                    writer.write(_ws_server_frame(10, data))
+                elif opcode == 2:
+                    writer.write(_ws_server_frame(1, f"got {len(data)} bytes".encode()))
+                elif opcode == 1:
+                    text = data.decode()
+                    if text == "bye":
+                        writer.write(_ws_server_frame(8, struct.pack("!H", 4001) + b"see you"))
+                    elif text == "ping me":
+                        writer.write(_ws_server_frame(9, b"are you there"))
+                    elif text.startswith("frag:"):
+                        half = len(data) // 2
+                        writer.write(_ws_server_frame(1, data[:half], fin=False) + _ws_server_frame(0, data[half:]))
+                    else:
+                        writer.write(_ws_server_frame(1, b"echo: " + data))
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    port: list[int] = []
+
+    def run() -> None:
+        asyncio.set_event_loop(loop)
+        server = loop.run_until_complete(asyncio.start_server(handle, "127.0.0.1", 0))
+        port.append(server.sockets[0].getsockname()[1])
+        ready.set()
+        loop.run_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    ready.wait(10)
+    yield f"ws://127.0.0.1:{port[0]}", seen   # the loop is a daemon thread and ends with the test run
+
+
+def _ws_wait(client: TestClient, sid: str, after: int, want: int = 1) -> dict:
+    events: list[dict] = []
+    snap: dict = {}
+    for _ in range(20):
+        snap = client.get(f"/api/ws/{sid}", params={"after": after, "wait": 3}).json()
+        events += snap["events"]
+        after = snap["last"]
+        if len(events) >= want or snap["state"] not in ("connecting", "open"):
+            break
+    return {**snap, "events": events}
+
+
+def test_websocket_console(client, ws_url):
+    url, seen = ws_url
+    client.put("/api/variables", json={"variables": {"room": "lobby", "who": "ada"}})
+    made = client.post("/api/ws/connect", json={
+        "name": "Chat", "url": url.replace("ws://", "http://") + "/chat/{{room}}",   # http(s) is taken as ws(s)
+        "params": [{"key": "v", "value": "2"}], "auth": {"type": "bearer", "token": "t0ken"},
+        "headers": [{"key": "Sec-WebSocket-Protocol", "value": "chat.v2, chat.v1"}]})
+    assert made.status_code == 201, made.text
+    sid = made.json()["id"]
+    snap = _ws_wait(client, sid, 0, want=2)
+    assert snap["state"] == "open" and snap["subprotocol"] == "chat.v2" and snap["url"].endswith("/chat/lobby?v=2")
+    assert [(e["dir"], e["kind"]) for e in snap["events"]] == [("info", "open"), ("in", "text")]
+    assert snap["events"][1]["text"] == "hello /chat/lobby?v=2"
+    assert seen["auth"] == "Bearer t0ken" and seen["proto"] == "chat.v2, chat.v1"
+
+    # text (variables substituted), a fragmented answer, binary, and pings both ways
+    sent = client.post(f"/api/ws/{sid}/send", json={"text": "hi {{who}} ✓"}).json()["event"]
+    assert sent["dir"] == "out" and sent["text"] == "hi ada ✓"
+    got = _ws_wait(client, sid, sent["n"])["events"]
+    assert got[0]["text"] == "echo: hi ada ✓"
+    raw = client.post(f"/api/ws/{sid}/send", json={"text": "{{who}}", "raw": True}).json()["event"]
+    assert raw["text"] == "{{who}}"
+    _ws_wait(client, sid, raw["n"])
+    big = "frag:" + "z" * 70000                                       # 64-bit length out, two fragments back
+    n = client.post(f"/api/ws/{sid}/send", json={"text": big}).json()["event"]["n"]
+    assert _ws_wait(client, sid, n)["events"][0]["text"] == big
+    ev = client.post(f"/api/ws/{sid}/send", json={"base64": base64.b64encode(bytes(range(200))).decode()}).json()["event"]
+    assert ev["kind"] == "binary" and ev["size"] == 200 and ev["text"].startswith("00 01 02")
+    assert _ws_wait(client, sid, ev["n"])["events"][0]["text"] == "got 200 bytes"
+    n = client.post(f"/api/ws/{sid}/send", json={"ping": True}).json()["event"]["n"]
+    assert _ws_wait(client, sid, n)["events"][0]["kind"] == "pong"
+    n = client.post(f"/api/ws/{sid}/send", json={"text": "ping me"}).json()["event"]["n"]
+    assert _ws_wait(client, sid, n)["events"][0]["kind"] == "ping"   # the client answers it with a pong by itself
+    assert client.post(f"/api/ws/{sid}/send", json={"base64": "***"}).status_code == 400
+
+    # the server closes: code and reason are reported, and sending after that is refused
+    n = client.post(f"/api/ws/{sid}/send", json={"text": "bye"}).json()["event"]["n"]
+    snap = _ws_wait(client, sid, n)
+    assert snap["state"] == "closed" and snap["close_code"] == 4001 and snap["close_reason"] == "see you"
+    assert client.post(f"/api/ws/{sid}/send", json={"text": "x"}).status_code == 409
+
+    # closing from here, and the errors a person will actually meet
+    sid = client.post("/api/ws/connect", json={"url": url + "/again"}).json()["id"]
+    assert _ws_wait(client, sid, 0, want=2)["state"] == "open"
+    closed = client.post(f"/api/ws/{sid}/close").json()
+    assert closed["state"] == "closed" and closed["close_code"] == 1000
+    sid = client.post("/api/ws/connect", json={"url": url + "/plain"}).json()["id"]
+    snap = _ws_wait(client, sid, 0)
+    assert snap["state"] == "error" and "does not speak WebSocket" in snap["events"][0]["text"]
+    sid = client.post("/api/ws/connect", json={"url": "ws://127.0.0.1:9/nobody", "timeout": 3}).json()["id"]
+    assert _ws_wait(client, sid, 0)["state"] == "error"
+    assert client.post("/api/ws/connect", json={"url": "ftp://x"}).status_code == 400
+    assert client.get("/api/ws/unknown").status_code == 404

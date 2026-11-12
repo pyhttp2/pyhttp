@@ -154,10 +154,36 @@ def _inspect_db(path: Path) -> dict[str, Any]:
     return out
 
 
+def vacuum_db(path: Path) -> dict[str, Any]:
+    """Rebuild a database file so the space of deleted rows goes back to the disk. Sizes count the
+    WAL file too. Fails (without touching anything) while another process holds the database,
+    which is the case while pyhttp runs with that project open and busy."""
+    def size() -> int:
+        return sum(q.stat().st_size for q in (path, Path(str(path) + "-wal")) if q.exists())
+
+    before = size()
+    try:
+        conn = sqlite3.connect(str(path), timeout=2, isolation_level=None)
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"cannot open: {exc}", "before": before, "after": before}
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error as exc:
+        hint = " (close pyhttp and try again)" if "locked" in str(exc).lower() or "busy" in str(exc).lower() else ""
+        return {"ok": False, "error": f"{exc}{hint}", "before": before, "after": size()}
+    finally:
+        conn.close()
+    return {"ok": True, "before": before, "after": size()}
+
+
 def doctor_main(argv: list[str], default_data_dir: Path) -> int:
     p = argparse.ArgumentParser(prog="pyhttp doctor", description="Check the data folder: databases, run outputs, disk use.")
     p.add_argument("--data-dir", type=Path, default=default_data_dir, help=f"pyhttp data folder (default: {default_data_dir})")
     p.add_argument("--clean-outputs", type=float, metavar="DAYS", help="delete run output folders older than DAYS (in every project)")
+    p.add_argument("--vacuum", action="store_true",
+                   help="compact every project database (worth it after deleting a lot of history); close pyhttp first")
     p.add_argument("--yes", action="store_true", help="do not ask before deleting")
     args = p.parse_args(argv)
     data_dir = args.data_dir.resolve()
@@ -184,7 +210,8 @@ def doctor_main(argv: list[str], default_data_dir: Path) -> int:
         if info["counts"]:
             print("  rows:     " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in info["counts"].items()))
         size, files = _dir_size(out_dir)
-        folders = [d for d in out_dir.iterdir() if d.is_dir()] if out_dir.exists() else []
+        # names starting with "_" are pyhttp's own (_bodies: whole response bodies of history entries), not runs
+        folders = [d for d in out_dir.iterdir() if d.is_dir() and not d.name.startswith("_")] if out_dir.exists() else []
         print(f"  outputs:  {len(folders)} run folder(s), {files} file(s), {_fmt_bytes(size)}")
         known = {str(Path(x).resolve()) for x in info.get("run_dirs", set())}
         orphans = [d for d in folders if str(d.resolve()) not in known]
@@ -204,5 +231,18 @@ def doctor_main(argv: list[str], default_data_dir: Path) -> int:
                 freed += _dir_size(d)[0]
                 shutil.rmtree(d, ignore_errors=True)
             print(f"Deleted {len(to_delete)} folder(s), {_fmt_bytes(freed)} freed. Run history keeps its rows; the files are gone.")
+    if args.vacuum:
+        print()
+        for proj in reg.list():
+            db_path, _out = reg.paths(proj["id"])
+            if not db_path.exists():
+                continue
+            res = vacuum_db(db_path)
+            if res["ok"]:
+                print(f"Compacted “{proj['name']}”: {_fmt_bytes(res['before'])} -> {_fmt_bytes(res['after'])}"
+                      f" ({_fmt_bytes(max(0, res['before'] - res['after']))} freed)")
+            else:
+                problems += 1
+                print(f"Could not compact “{proj['name']}”: {res['error']}", file=sys.stderr)
     print("\nAll good." if not problems else f"\n{problems} problem(s) found.")
     return 1 if problems else 0

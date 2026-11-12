@@ -3,6 +3,63 @@
 Status: `[x]` done · `[~]` in progress · `[ ]` open. Newest decisions at the top of each
 section. Keep this file honest: when an item ships, tick it and say where (file or release).
 
+## Shipped on 2026-11-13
+
+- [x] **WebSocket client.** A request with a `ws://` / `wss://` address connects instead of
+  sending: Send becomes Connect, the response area becomes a console (live log, filter, Ping,
+  a box to send from). Query parameters, headers, auth and `{{variables}}` of the request are
+  used; `Sec-WebSocket-Protocol` offers subprotocols. No dependency: handshake and framing are
+  in `pyhttp/wsclient.py`. → `/api/ws/*`, `renderWsPanel()` in `features.js`.
+  - [ ] Not done: compression (permessage-deflate), proxies, history entries for sessions,
+    WebSocket steps in runs and monitors, MCP tools.
+- [x] **Saved example responses.** The pin button in the response bar keeps the response on
+  screen with its request (Examples tab): listed in the documentation export, carried by
+  exports and Git sync, and each one can become a mock route ("Routes from requests" also
+  prefers a request's first example over its last history entry). Stored in the request's
+  `options.examples`; the editor's autosave leaves them out and the server keeps them.
+  → `/api/requests/{id}/examples*`, `mock.route_from_example()`.
+- [x] **Compare two responses from the response strip** (⇄ Compare, when a request has two
+  or more responses). Uses the history compare view on the responses in memory, so the whole
+  body takes part. It is the same unified diff, not two columns. The send endpoints and run
+  results now return `history_id`. → `compareResults()` / `showCompare()`.
+- [x] **Request notes with Markdown preview**: already there (Details → Preview,
+  `mdToHtml()`); the item was stale.
+- [x] **Secrets outside the database.** Settings → General → "Keep 🔒 values in the system
+  keychain" (off by default) moves the values of secret variables to Windows Credential
+  Manager, the macOS Keychain (`security`) or the Secret Service (`secret-tool`); the database
+  keeps a marker. No extra package. → `pyhttp/secretstore.py`, `db._seal/_unseal`.
+  - [ ] Only the Windows backend has run against the real store. The macOS and Linux backends
+    are written from the tools' documentation and are **untested**: try them on those systems.
+- [x] **Docs export as HTML** (one self-contained page in the app's theme, rendered from the
+  Markdown) and **Export documentation** in the folder ⋯ menu. Also fixes a crash in the
+  Markdown export for GraphQL bodies with variables. → `docs.to_html()`.
+- [x] **Response views: folder-level views** (folder ⋯ → Settings; every request inside shows
+  them after its own) **and the whole body** for responses over 64 KB (kept in full in
+  `outputs/_bodies/<history id>.body`, removed with the history entry). → `db.inherited()`,
+  `runner.full_body()`.
+- [x] **Git sync looks at the remote on a timer** (5 minutes by default; Settings → Git).
+  Quiet when the remote cannot be reached. → `gitsync.Syncer.poll()`.
+- [x] **Incremental tree render.** `renderList` patches the sidebar in place: rows are keyed
+  by id and keep their DOM node while what they show is unchanged.
+- [x] **Virtualised JSON tree.** A document with more than 4 000 values is drawn as a window
+  of rows; expand/collapse, the path filter and search (over the document, not the DOM) work
+  on all of it. The viewer can now load the whole body of a cut response.
+  → `jsonTreeVirtual()` in `viewer.js`, `GET /api/history/{id}/body`.
+- [x] **Accessibility**: tab strips follow the ARIA tabs pattern (`role=tab`, `aria-selected`,
+  arrow keys, one tab stop); the modal is a `role=dialog` that takes focus, traps Tab and
+  gives focus back. → `bindTabs()`, `openModal()`.
+- [x] **Per-project database objects.** `db.Database` holds a connection and its lock;
+  `db.open(path)` with `with db.using(other):` runs code against a second project while the
+  app's own stays open. No "compare projects" UI yet: this is the groundwork for it.
+- [x] `pyhttp doctor --vacuum`. → `tools.vacuum_db()`.
+- [~] **WebKit CI job**: `ui-webkit` in `build.yml` runs the UI tests in WebKit on macOS for
+  every push, non-blocking for now. The fold-marker click that failed in WebKit is now aimed
+  at the gutter cell with the real mouse (`click_fold()` in `tests/test_ui.py`); that passes
+  in Chromium but **has not run in WebKit** (no WebKit on the machine this was written on).
+  Make the job blocking once it has been green.
+- [x] Pushes to `main` only run the tests; installers are built for a release tag or a manual
+  run. A late answer to an older sidebar search no longer overwrites the list.
+
 ## Shipped on 2026-11-12
 
 - [x] **Response views.** A request can name HTML pages (files or addresses) that draw its
@@ -11,8 +68,6 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   and fetches it; "Create a starter view" writes a working page (chart, table, raw data).
   → `/api/views/*`, `/view/<id>/…`, `/response/<name>/<id>`, `mountViews()` in `features.js`,
   `static/view-starter.html`.
-- [ ] Response views: folder-level views (every request in a folder), and the full body for
-  responses over 512 KB (the viewer and history keep a cut copy, which is what a view gets).
 
 - [x] **Git sync.** Top bar → Git: the project's definitions (requests, folders, environments,
   variables, mocks, monitors) as one JSON file each in a Git repository, committed and pushed
@@ -24,8 +79,6 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   project pointed at an existing repository loads it; the two cases that need a person (the
   folder holds another project, both sides changed the same request) are asked in the Git tab.
   → `gitsync.Syncer._catch_up/_adopt/_merge`, `db.apply_definitions()`, `/api/git/resolve`.
-- [ ] Git sync: look at the remote on a timer too. Today a teammate's push arrives with the
-  next edit, at app start or with “Sync now”.
 
 ## Shipped on 2026-11-06 (second pass)
 
@@ -73,37 +126,14 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   ➤ button.
 - [x] FastAPI `on_event` → `lifespan` (removes the deprecation warning printed by every test run).
 
-## Performance
+## Open
 
-- [ ] **Incremental tree render.** `renderList` rebuilds the whole `<ul>`; patch rows in
-  place (keyed by id) so a rename does not recreate hundreds of nodes. Less urgent now that
-  the list payload is light and autosave rarely triggers it.
-- [ ] **Virtualised JSON tree** in the response viewer for multi-megabyte bodies (render
-  only the visible rows; keep the path filter and search working on the full tree).
-
-## Features
-
-- [ ] **Saved example responses** per request (Postman "examples"): pin a response, show it
-  in the docs export, and let mocks be generated from it.
-- [ ] **WebSocket client** (connect, send frames, log messages) — the most asked-for
-  protocol after HTTP; SSE is already covered by streaming.
-- [ ] **Diff two body responses side by side** right from the response strip. Needs the
-  send endpoints to return the history id of the entry they wrote (they do not today), then
-  the history compare view can be reused as is.
-- [ ] **Request-level notes with Markdown preview** in Details (a small renderer, no
-  dependency; the docs export already emits Markdown).
-- [ ] **Secrets outside the database**: an opt-in keyring backend for 🔒 variables.
-- [ ] Docs export as HTML (same content as the Markdown, with the project's theme) and a
-  per-folder entry in the folder ⋯ menu.
-
-## Quality and maintenance
-
-- [ ] `role=tab` / `aria-selected` on the tab strips and a focus trap in dialogs (labels on
-  icon buttons are done).
-- [ ] Replace the single-connection `db` module with per-project connections held by an
-  object, so two projects could be open at once (needed before any "compare projects" UI).
-- [ ] **WebKit CI job**: run `PYHTTP_UI_BROWSER=webkit` in CI on macOS. One pre-existing
-  failure to fix first: `test_editor_comment_toggle_and_json_status` cannot click the
-  CodeMirror fold-gutter marker in WebKit (the fold itself works by hand; the marker is
-  probably not hit-testable at the position Playwright computes).
-- [ ] `pyhttp doctor --vacuum` to compact databases after large history deletions.
+- [ ] WebSocket follow-ups: permessage-deflate, proxies, sessions in the history, WebSocket
+  steps in runs and monitors, MCP tools.
+- [ ] Try the keychain switch on macOS and Linux (see above); move OAuth client secrets and
+  tokens typed straight into a request there too (today only 🔒 variables move).
+- [ ] WebKit CI: confirm `ui-webkit` is green, then drop `continue-on-error`.
+- [ ] A "compare projects" view, on top of `db.using()`.
+- [ ] Side-by-side (two column) diff as an alternative to the unified one.
+- [ ] Example responses: edit an example's body in place; pick which example "Routes from
+  requests" uses.

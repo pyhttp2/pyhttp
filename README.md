@@ -156,6 +156,23 @@ only on `127.0.0.1`.
   JSON files in a Git repository, committed and pushed automatically on every change, and
   pulled back in when a teammate pushes — share a collection without a cloud account. See
   *Git sync* below.
+- **WebSocket client**: give a request a `ws://` or `wss://` address and Send becomes
+  **Connect**. The response area turns into a console: a live log of messages in both
+  directions (click a JSON message to pretty-print it), a filter, Ping, and a box to send
+  from (Ctrl/Cmd+Enter). The request's query parameters, headers, auth and `{{variables}}`
+  are used for the connection, and a `Sec-WebSocket-Protocol` header names the subprotocols
+  to offer. Compression (permessage-deflate) and proxies are not supported.
+- **Example responses**: the pin button in the response bar saves the response on screen
+  with its request (**Examples** tab). Examples go into the documentation export, travel
+  with exports and Git sync, and each one can become the answer of a mock route.
+- **Compare two responses**: after sending two or more bodies (or iterations), **⇄ Compare**
+  in the response strip shows the body, headers and request of any two as a diff.
+- **Large responses**: the viewer shows the first 512 KB and offers *Load the whole body*;
+  a big JSON document is then drawn as a window of rows, so 100 000 items scroll, expand,
+  filter by path and search as smoothly as ten.
+- **Secrets in the system keychain** (Settings → General, off by default): the values of 🔒
+  variables are kept in Windows Credential Manager, the macOS Keychain or the Secret Service
+  (`secret-tool`) instead of the project database. They stay on that computer.
 - Native desktop window using the OS webview (WebView2 / WKWebView / WebKitGTK),
   with native save/open dialogs for export and import.
 - No Node, no Electron, no build step to run it. Python 3.10+ only (the editor is a
@@ -175,13 +192,16 @@ runner uses the active project, or `pyhttp run --project "Shop API" …` for ano
 From a terminal: `pyhttp projects` lists them, `pyhttp projects create NAME [--use]`,
 `use NAME`, `rename OLD NEW` and `delete NAME` manage them. `pyhttp doctor` checks every
 project's database (integrity, row counts), reports run output sizes and orphan folders,
-and `pyhttp doctor --clean-outputs 30` deletes run folders older than 30 days.
+`pyhttp doctor --clean-outputs 30` deletes run folders older than 30 days, and
+`pyhttp doctor --vacuum` compacts the databases (worth it after deleting a lot of history;
+close pyhttp first).
 
 **Export ▾ → pyhttp JSON** writes the whole project (collection, environments, variables,
 mocks, monitors) to one file that imports into another project or machine; monitors and
 "send this request first" links are kept. **Export ▾ → Documentation** writes the
-collection as Markdown: folders, requests, parameters, headers (credential-looking values
-masked), auth, example bodies and tests.
+collection as Markdown, or as one self-contained HTML page in the app's theme: folders,
+requests, parameters, headers (credential-looking values masked), auth, example bodies,
+pinned example responses and tests. A folder's ⋯ menu exports just that folder.
 
 ## Git sync
 
@@ -223,9 +243,10 @@ mocks/shop.json
   replaces yours under the same id, new ones appear, deleted ones go, and the window reloads
   to show it. Commits you make by hand in the folder are read back the same way. Edits to
   the files that are *not committed* are overwritten by the next sync.
-- **When a pull happens:** with your next edit, when the app starts, or when you press *Sync
-  now*. The remote is not checked on a timer, so a teammate's push does not show up while
-  the app sits idle.
+- **When a pull happens:** with your next edit, when the app starts, when you press *Sync
+  now*, and on a timer: the remote is looked at every 5 minutes (Settings → Git, 1 minute to
+  an hour, or never), so a teammate's push shows up while you are only reading. A remote
+  that cannot be reached is skipped quietly by the timer; the next real sync reports it.
 - **What a pull keeps:** request and folder ids (history and "send this request first" links
   still point at the right request), and the local value of every 🔒 variable whose value
   was left out of the file. A mock server whose route list changed gets the new list as a
@@ -289,8 +310,12 @@ and the page reads the address from its own URL and fetches it:
   server or opened from disk can fetch them too. The ids are random and short-lived: pyhttp
   keeps the last 80 responses handed to views in memory, and an old link answers 404 after
   that or after a restart — open the view again.
-- A view gets the body the viewer has: up to 512 KB for a fresh response, 64 KB for a history
-  entry. The View tab says so when a response was cut.
+- A view gets the whole body, also when the response is larger than what the viewer
+  (512 KB) and the history (64 KB) keep: bodies above 64 KB are saved in full next to the
+  run outputs (`outputs/_bodies/`, up to 64 MB each) and removed with their history entry.
+  Calls made before this was added only have the cut copy.
+- **Views on a folder**: a folder's ⋯ menu → Settings takes views too. Every request inside
+  (also in subfolders) shows them in its View tab, after its own.
 - Views are saved with the request (so they travel with exports and Git sync) as the path
   you typed; on another computer the file must exist at the same path, or use a page address.
 
@@ -444,6 +469,7 @@ data/
       02_create-user__valid-user.body.json
       02_list-users.json
       02_list-users.body.json
+    _bodies/                     # whole bodies of large responses, one file per history entry
 ```
 
 Use `--data-dir` to put this somewhere else.
@@ -574,10 +600,14 @@ Developer ID (with notarization).
 pyhttp/
   __main__.py     entry point: native window (pywebview) or browser/server mode
   app.py          FastAPI routes (/api/...) + static UI
-  db.py           SQLite access (requests, folders, environments, cookies, history, runs)
+  db.py           SQLite access (requests, folders, environments, cookies, history, runs); one
+                  Database object per open project, see db.using()
   runner.py       httpx execution (auth, cookies, redirects, proxy, body types), RunManager, file output
   mock.py         mock servers: route matching and templated answers under /mock/<name>/
   gitsync.py      Git sync: definitions as JSON files, commit / pull / push, reading changes back
+  wsclient.py     WebSocket client (handshake and framing on asyncio streams) behind the console
+  secretstore.py  secret values in the OS credential store (Credential Manager, Keychain, Secret Service)
+  docs.py         documentation export: Markdown, and the same as a standalone HTML page
   templating.py   {{variable}}, {{prev.*}}, {{data.*}} and {{$dynamic}} substitution
   jsonc.py        strips // and /* */ comments from JSON bodies
   assertions.py   code-free tests and value extraction
