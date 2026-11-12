@@ -797,6 +797,7 @@ function renderResponsePanels(result) {
       ${(req.files || []).length ? `<div class="muted small">Files: ${req.files.map((f) => `${esc(f.field)} = ${esc(f.filename)} (${fmtBytes(f.size)})`).join(', ')}</div>` : ''}
       ${req.body ? `<pre class="rv-pre mono">${esc(req.body)}</pre>` : '<div class="muted small">No body</div>'}
     </div>`;
+  afterResponseForViews(result);
   $('#r-save').disabled = !resp;
 }
 
@@ -852,6 +853,7 @@ async function loadHistoryList(before = null) {
 function openHistoryMenu(hid, anchor, at) {
   openMenu('h:' + hid, anchor, at, [
     { act: 'view', icon: '👁', label: 'View response', run: () => openHistoryEntry(hid) },
+    { act: 'views', icon: '◧', label: 'Open its views in the browser', run: () => openHistoryViews(hid) },
     { act: 'resend', icon: '↻', label: 'Send again', run: () => resendHistory(hid) },
     { act: 'compare', icon: '⇄', label: 'Compare with…', run: () => pickCompare(hid) },
     { act: 'restore', icon: '↩', label: 'Open as new request', run: () => restoreHistory(hid) },
@@ -897,12 +899,18 @@ async function openHistoryEntry(hid) {
       <button id="h-compare" class="small" title="Pick another history entry to compare with">⇄ Compare with…</button>
       <button id="h-restore" class="small">Open as new request</button></div>
     ${h.error ? `<pre class="mono">${esc(h.error)}</pre>` : ''}
+    <div class="detail-section" id="h-views-sec" hidden><h4>Views</h4><div id="h-views" class="vw-host"></div></div>
     <div class="detail-section"><h4>Response body</h4><div id="h-viewer"></div></div>
     ${(d.tests || []).length ? `<div class="detail-section"><h4>Tests</h4><ul class="test-results">${d.tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul></div>` : ''}
     <div class="detail-section"><h4>Response headers</h4><pre class="mono">${esc(((d.response || {}).headers || []).map(([k, v]) => `${k}: ${v}`).join('\n'))}</pre></div>
     <div class="detail-section"><h4>Request as sent</h4><pre class="mono">${esc(formatRequest(d.request))}</pre></div>
   `, [{ label: 'Close', onClick: closeModal }]);
   if (d.response) mountViewer($('#h-viewer'), d.response); else $('#h-viewer').innerHTML = '<div class="muted small">No response</div>';
+  if (d.response) historyViews(h).then((views) => {
+    if (!views.length || !$('#h-views')) return;
+    $('#h-views-sec').hidden = false;
+    mountViews($('#h-views'), { result: historyResult(h), views, name: h.request_name || 'response' });
+  });
   $('#h-restore').addEventListener('click', () => { closeModal(); restoreHistory(hid, h); });
   $('#h-compare').addEventListener('click', () => { closeModal(); pickCompare(hid); });
   $('#h-resend').addEventListener('click', async (e) => {
@@ -1893,6 +1901,7 @@ function initFeatures() {
   initMonitors();
   initMocks();
   initGit();
+  initViews();
 }
 
 // ============================================================== monitors
@@ -2431,6 +2440,207 @@ function initMocks() {
   $('#btn-mocks').addEventListener('click', openMocksModal);
   loadMocks(false);
   mocks.timer = setInterval(() => loadMocks(true), 30000);   // renders only while the dialog is open
+}
+
+// ========================================================= response views
+// A request can name HTML pages that draw its response their own way (a chart, a table, a
+// map…). pyhttp keeps the response under a short-lived address and opens each page with
+// ?api=<that address>; the page reads it from its URL and fetches it. Views show in the View
+// tab of a response and in a history entry, one at a time or all side by side, and open in the
+// browser too.
+const viewUi = { sessions: new WeakMap() };   // result -> { view file: { url, api } }
+const VIEW_ICON = '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 17v-3M12 17v-5M16 17v-2"/></g></svg>';
+const viewsOf = (req) => ((req && req.options && req.options.views) || []);
+const newViewId = () => 'v' + Math.random().toString(36).slice(2, 9);
+
+async function viewSession(result, view, name) {
+  let per = viewUi.sessions.get(result);
+  if (!per) { per = {}; viewUi.sessions.set(result, per); }
+  if (!per[view.file]) {
+    const resp = result.response || {};
+    per[view.file] = await api('/views/open', { method: 'POST', body: { file: view.file, name, sent_at: result.ts || null, result: {
+      status: result.status, status_code: result.status_code, reason: result.reason, error: result.error,
+      duration_ms: result.duration_ms, body_name: result.body_name,
+      request: { method: (result.request || {}).method, url: (result.request || {}).url },
+      response: { headers: resp.headers, content_type: resp.content_type, size: resp.size, body_text: resp.body_text,
+                  body_base64: resp.body_base64, truncated: resp.truncated } } } });
+  }
+  return per[view.file];
+}
+
+// Draw the views of one response into `box`. ctx: { result, views, name, onEdit?, onStarter? }
+function mountViews(box, ctx) {
+  const { result, views, name } = ctx;
+  if (!views.length) {
+    box.innerHTML = `<div class="vw-empty">${VIEW_ICON}
+      <h4>See this response your way</h4>
+      <p>Attach an HTML page to this request and pyhttp opens it with the response: a chart, a table, a dashboard,
+        a receipt, whatever the data deserves. Attach several and look at them side by side.</p>
+      <div class="vw-actions"><button class="primary" data-act="starter">Create a starter view</button><button data-act="edit">Choose HTML files…</button></div>
+      <p class="muted small">The page finds the response in its own address: <code>new URLSearchParams(location.search).get('api')</code>, then <code>fetch(api)</code>.</p></div>`;
+    $('[data-act="starter"]', box).addEventListener('click', ctx.onStarter);
+    $('[data-act="edit"]', box).addEventListener('click', ctx.onEdit);
+    return;
+  }
+  if (!result || !result.response) { box.innerHTML = '<div class="muted small">There is no response to show in a view.</div>'; return; }
+  let sel = box.dataset.sel;
+  if (!(sel === 'all' && views.length > 1) && !views.some((v) => v.id === sel)) sel = views[0].id;
+  const draw = () => {
+    box.dataset.sel = sel;
+    const shown = sel === 'all' ? views : views.filter((v) => v.id === sel);
+    const many = shown.length > 1;
+    box.innerHTML = `<div class="vw-bar">
+        <div class="vw-chips" role="tablist">${views.length > 1 ? `<button class="vw-chip ${sel === 'all' ? 'on' : ''}" data-v="all" title="Show every view side by side">All ${views.length}</button>` : ''}${
+          views.map((v) => `<button class="vw-chip ${sel === v.id ? 'on' : ''}" data-v="${esc(v.id)}" title="${esc(v.file)}">${esc(v.name)}</button>`).join('')}</div>
+        <span class="grow"></span>
+        <button class="link small" data-act="reload" title="Load the page${many ? 's' : ''} again, for example after editing the HTML file">↻ Reload</button>
+        <button class="link small" data-act="open" title="Open ${many ? 'every view' : 'this view'} in your browser">↗ Open${many ? ' all' : ''} in browser</button>
+        ${ctx.onEdit ? '<button class="link small" data-act="edit" title="Add, rename or remove the HTML pages of this request">Edit views…</button>' : ''}
+      </div>
+      ${result.response.truncated ? '<div class="vw-note small">This response was cut short when it was stored, so a view may get incomplete data.</div>' : ''}
+      <div class="vw-grid ${many ? 'many' : ''}">${shown.map((v) => `<div class="vw-frame" data-id="${esc(v.id)}">
+        ${many ? `<div class="vw-title"><b>${esc(v.name)}</b><button class="link small" data-one="${esc(v.id)}" title="Show only this view">Expand</button></div>` : ''}
+        <iframe title="${esc(v.name)}" sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" referrerpolicy="no-referrer"></iframe>
+        <div class="vw-err small" hidden></div></div>`).join('')}</div>`;
+    $$('.vw-chip', box).forEach((b) => b.addEventListener('click', () => { sel = b.dataset.v; draw(); }));
+    $$('[data-one]', box).forEach((b) => b.addEventListener('click', () => { sel = b.dataset.one; draw(); }));
+    const load = (v, fresh) => {
+      const cell = $(`.vw-frame[data-id="${CSS.escape(v.id)}"]`, box);
+      if (!cell) return Promise.resolve(null);
+      if (fresh) delete (viewUi.sessions.get(result) || {})[v.file];
+      return viewSession(result, v, name).then((s) => {
+        $('.vw-err', cell).hidden = true;
+        $('iframe', cell).hidden = false;
+        $('iframe', cell).src = `${s.url}&theme=${document.documentElement.getAttribute('data-theme') || 'dark'}`;
+        return s;
+      }).catch((e) => {
+        $('iframe', cell).hidden = true;
+        $('.vw-err', cell).hidden = false;
+        $('.vw-err', cell).textContent = `${v.name}: ${e.message}`;
+        return null;
+      });
+    };
+    shown.forEach((v) => load(v, false));
+    $('[data-act="reload"]', box).addEventListener('click', () => shown.forEach((v) => load(v, true)));
+    $('[data-act="open"]', box).addEventListener('click', () => openViewsOutside(result, shown, name));
+    if (ctx.onEdit) $('[data-act="edit"]', box).addEventListener('click', ctx.onEdit);
+  };
+  draw();
+}
+
+async function openViewsOutside(result, views, name) {
+  for (const v of views) {
+    try { openExternal((await viewSession(result, v, name)).url); } catch (e) { toast(`${v.name}: ${e.message}`, 'error'); }
+  }
+}
+
+// ---- the View tab of the response
+function renderRespView() {
+  const box = $('#r-view');
+  if (!box || !state.current) return;
+  mountViews(box, { result: lastResult, views: viewsOf(state.current), name: state.current.name,
+    onEdit: openViewsDialog, onStarter: () => addStarterView() });
+}
+function setViews(views, viewFirst) {
+  const opts = { ...(state.current.options || {}), views };
+  if (viewFirst === true) opts.view_first = true; else if (viewFirst === false) delete opts.view_first;
+  state.current.options = opts;
+  scheduleSave();
+  updateViewTab();
+  renderRespView();
+}
+function updateViewTab() {
+  const n = viewsOf(state.current).length;
+  $('#n-r-view').textContent = n ? String(n) : '';
+}
+async function addStarterView() {
+  try {
+    const made = await api('/views/starter', { method: 'POST', body: { name: state.current.name } });
+    const views = [...viewsOf(state.current), { id: newViewId(), name: viewsOf(state.current).length ? 'Starter' : 'Overview', file: made.file }];
+    if ($('#vw-rows')) return made;   // called from the dialog: it adds the row itself
+    setViews(views);
+    toast('Starter view created. Edit the file to make it yours', 'ok', { label: 'Show file', onClick: () => api('/open-path', { method: 'POST', body: { path: made.file } }).catch(() => {}) });
+    return made;
+  } catch (e) { toast(e.message, 'error'); return null; }
+}
+// called whenever another response is shown
+function afterResponseForViews(result) {
+  if (!state.current) return;
+  updateViewTab();
+  const views = viewsOf(state.current);
+  const onView = !$('#r-view').hidden;
+  if (views.length && result.response && (state.current.options || {}).view_first && !onView) { showTab($('#resp-tabs'), 'view'); return; }
+  if (onView) renderRespView();
+}
+
+function openViewsDialog() {
+  const rows = viewsOf(state.current).map((v) => ({ ...v }));
+  if (!rows.length) rows.push({ id: newViewId(), name: '', file: '' });
+  const canPick = !!(native() && native().pick_file);
+  openModal('Response views', `
+    <p class="muted small set-intro">HTML pages that show this request's response their own way. Give the full path of a file on this computer,
+      or the address of a page (<code>http://localhost:5173/chart.html</code>). pyhttp opens each one with <code>?api=…</code> pointing at the response.</p>
+    <div class="vw-head muted small"><span>Name</span><span>HTML file or page address</span><span></span></div>
+    <div id="vw-rows"></div>
+    <div class="vw-actions"><button id="vw-add">+ Add a view</button><button id="vw-starter" title="Writes a working page (chart, table, raw data) you can edit">Create a starter view</button></div>
+    <label class="switch-row" style="margin-top:14px"><span class="txt"><b>Show the view first</b><span class="muted small">When a response arrives, open the View tab instead of the body.</span></span><span class="switch"><input type="checkbox" id="vw-first" ${state.current.options && state.current.options.view_first ? 'checked' : ''}><span></span></span></label>
+    <details class="vw-how"><summary>How a page reads the response</summary>
+<pre class="mono small">const api = new URLSearchParams(location.search).get('api');
+const data = await fetch(api).then((r) => r.json());   // the body, as the API sent it
+// ?meta=… gives { name, method, url, status, duration_ms, headers, body, json }</pre></details>`,
+  [{ label: 'Cancel', onClick: closeModal },
+   { label: 'Save', cls: 'primary', onClick: () => {
+     const views = rows.map((r) => ({ id: r.id, name: r.name.trim() || fileLabel(r.file), file: r.file.trim() })).filter((r) => r.file);
+     const first = $('#vw-first').checked;
+     closeModal();
+     setViews(views, first && views.length > 0);
+     if (views.length) showTab($('#resp-tabs'), 'view');
+   } }]);
+  const fileLabel = (f) => (f.split(/[\\/]/).pop() || 'View').replace(/\.html?$/i, '').replace(/[?#].*$/, '') || 'View';
+  const draw = () => {
+    const box = $('#vw-rows');
+    box.innerHTML = rows.map((r, i) => `<div class="vw-row"><input data-i="${i}" data-k="name" value="${esc(r.name)}" placeholder="Sales chart"><input class="mono" data-i="${i}" data-k="file" value="${esc(r.file)}" placeholder="C:\\views\\sales.html" spellcheck="false">${canPick ? `<button data-browse="${i}">Browse…</button>` : ''}<button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove this view">✕</button></div>`).join('');
+    $$('input', box).forEach((inp) => inp.addEventListener('input', () => { rows[inp.dataset.i][inp.dataset.k] = inp.value; }));
+    $$('[data-del]', box).forEach((b) => b.addEventListener('click', () => { rows.splice(Number(b.dataset.del), 1); draw(); }));
+    $$('[data-browse]', box).forEach((b) => b.addEventListener('click', async () => {
+      const path = await native().pick_file().catch(() => null);
+      if (path) { rows[b.dataset.browse].file = path; if (!rows[b.dataset.browse].name) rows[b.dataset.browse].name = fileLabel(path); draw(); }
+    }));
+  };
+  draw();
+  $('#vw-add').addEventListener('click', () => { rows.push({ id: newViewId(), name: '', file: '' }); draw(); $$('#vw-rows input[data-k="name"]').pop().focus(); });
+  $('#vw-starter').addEventListener('click', async () => {
+    const made = await addStarterView();
+    if (!made) return;
+    const empty = rows.find((r) => !r.file.trim());
+    if (empty) { empty.file = made.file; empty.name = empty.name || 'Overview'; } else rows.push({ id: newViewId(), name: 'Starter', file: made.file });
+    draw();
+    toast('Starter view created in ' + made.folder, 'ok');
+  });
+}
+
+// ---- views of a history entry
+function historyResult(h) {
+  const d = h.detail || {};
+  return { status: h.status, status_code: h.status_code, reason: d.reason, duration_ms: h.duration_ms, error: h.error,
+    body_name: h.body_name, ts: h.ts, request: d.request, response: d.response };
+}
+async function historyViews(h) {
+  let views = viewsOf(h.snapshot);
+  if (!views.length && h.request_id) views = viewsOf(await api('/requests/' + h.request_id).catch(() => null));
+  return views;
+}
+async function openHistoryViews(hid) {
+  const h = await api('/history/' + hid).catch(() => null);
+  if (!h) return;
+  const views = await historyViews(h);
+  if (!views.length) { toast('This request has no views yet. Add one in the View tab of its response.', 'error'); return; }
+  if (!(h.detail || {}).response) { toast('This entry has no response to show', 'error'); return; }
+  openViewsOutside(historyResult(h), views, h.request_name || 'response');
+}
+
+function initViews() {
+  $('#resp-tabs button[data-tab="view"]').addEventListener('click', renderRespView);
 }
 
 // ============================================================== git sync

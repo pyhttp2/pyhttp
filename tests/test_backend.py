@@ -1805,3 +1805,54 @@ def test_git_sync_joining_an_existing_repository(client, tmp_path):
     assert st["state"] == "ok", st
     assert (two / "collection" / "Local only.json").exists() and not (two / "collection" / "Shared.json").exists()
     assert [x["name"] for x in client.get("/api/requests").json()] == ["Local only"]
+
+
+# ------------------------------------------------------------ response views
+def test_response_views(client, tmp_path):
+    from urllib.parse import parse_qs, urlsplit
+
+    # a request keeps its views (HTML files or page addresses); entries without a file are dropped
+    r = client.post("/api/requests", json={"name": "Sales report", "url": "http://x/sales", "options": {
+        "view_first": True, "views": [{"name": "Chart", "file": " C:/views/chart.html "}, {"name": "", "file": "http://localhost:5173/t.html"},
+                                      {"name": "empty", "file": ""}]}}).json()
+    views = r["options"]["views"]
+    assert [(v["name"], v["file"]) for v in views] == [("Chart", "C:/views/chart.html"), ("View", "http://localhost:5173/t.html")]
+    assert all(v["id"] for v in views) and r["options"]["view_first"] is True
+    assert "views" not in client.post("/api/requests", json={"name": "Plain"}).json()["options"]
+
+    # the starter is a working page written to the data folder, never over an existing file
+    one = client.post("/api/views/starter", json={"name": "Sales report"}).json()
+    two = client.post("/api/views/starter", json={"name": "Sales report"}).json()
+    page = Path(one["file"])
+    assert page.name == "Sales-report.html" and Path(two["file"]).name == "Sales-report-2.html"
+    assert "URLSearchParams(location.search)" in page.read_text(encoding="utf-8")
+    (page.parent / "helper.js").write_text("window.ok = 1;", encoding="utf-8")
+    (page.parent.parent / "secret.txt").write_text("no", encoding="utf-8")
+
+    # opening a view keeps the response and says where the page opens, with ?api= pointing at it
+    result = {"status": "ok", "status_code": 200, "reason": "OK", "duration_ms": 12.5, "request": {"method": "GET", "url": "http://x/sales"},
+              "response": {"headers": [["content-type", "application/json"]], "content_type": "application/json", "size": 21,
+                           "body_text": '{"rows": [{"a": 1}]}'}}
+    out = client.post("/api/views/open", json={"file": str(page), "name": "Sales report", "result": result}).json()
+    parts = urlsplit(out["url"])
+    q = parse_qs(parts.query)
+    assert parts.path == f"/view/{out['id']}/Sales-report.html" and q["api"] == [out["api"]] and q["meta"] == [out["api"] + "/meta"]
+    assert urlsplit(out["api"]).path == f"/response/sales-report/{out['id']}"
+    got = client.get(parts.path)
+    assert got.status_code == 200 and "text/html" in got.headers["content-type"] and got.headers["access-control-allow-origin"] == "*"
+    assert client.get(f"/view/{out['id']}/helper.js").text == "window.ok = 1;"            # files beside the page load too
+    assert client.get(f"/view/{out['id']}/../secret.txt").status_code == 404              # nothing above its folder
+    assert client.get(f"/view/{out['id']}/%2e%2e/secret.txt").status_code == 404
+    body = client.get(urlsplit(out["api"]).path)
+    assert body.json() == {"rows": [{"a": 1}]} and body.headers["content-type"].startswith("application/json")
+    assert body.headers["access-control-allow-origin"] == "*"                              # a file:// page may read it
+    meta = client.get(urlsplit(out["meta"]).path).json()
+    assert meta["name"] == "Sales report" and meta["status"] == 200 and meta["method"] == "GET" and meta["duration_ms"] == 12.5
+    assert meta["json"] == {"rows": [{"a": 1}]} and meta["headers"] == {"content-type": "application/json"}
+
+    # a page served elsewhere gets the same query on its own address
+    ext = client.post("/api/views/open", json={"file": "http://localhost:5173/t.html?x=1", "result": result}).json()
+    assert ext["url"].startswith("http://localhost:5173/t.html?x=1&api=http")
+    assert client.post("/api/views/open", json={"file": str(tmp_path / "missing.html"), "result": result}).status_code == 404
+    assert client.post("/api/views/open", json={"file": "", "result": result}).status_code == 400
+    assert client.get("/response/x/nope").status_code == 404

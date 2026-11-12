@@ -362,6 +362,16 @@ def normalize_options(data: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             ttl = 0
         out["depends"] = {"request_id": str(dep["request_id"]), "ttl": ttl, "retry_on_auth": bool(dep.get("retry_on_auth", True))}
+    # response views: HTML files (or URLs) that draw this request's response their own way
+    views = []
+    for v in d.get("views") if isinstance(d.get("views"), list) else []:
+        if isinstance(v, dict) and str(v.get("file") or "").strip():
+            views.append({"id": str(v.get("id") or "") or uuid.uuid4().hex[:8],
+                          "name": str(v.get("name") or "").strip()[:60] or "View", "file": str(v["file"]).strip()})
+    if views:
+        out["views"] = views[:12]
+        if d.get("view_first") is True:   # show the View tab, not the body, when a response arrives
+            out["view_first"] = True
     return out
 
 

@@ -191,6 +191,33 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 .git-status { line-height: 1.5; min-height: 18px; user-select: text; overflow-wrap: anywhere; }
 .git-status.err { color: var(--danger); }
 .git-conflict { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+/* Response views: the user's own HTML pages drawing a response (View tab, history entry) */
+.vw-host { display: flex; flex-direction: column; min-width: 0; }
+.vw-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.vw-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.vw-chip { padding: 3px 11px; border-radius: 99px; font-size: 12px; background: none; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vw-chip:hover { color: var(--text); }
+.vw-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.vw-grid { display: grid; grid-template-columns: 1fr; gap: 10px; flex: 1; min-height: 0; }
+.vw-grid.many { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+.vw-frame { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-2); }
+.vw-frame iframe { border: 0; width: 100%; height: 62vh; min-height: 320px; background: transparent; display: block; }
+.vw-grid.many .vw-frame iframe { height: 380px; }
+.modal .vw-frame iframe { height: 46vh; }
+.vw-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.vw-err { padding: 14px; color: var(--danger); overflow-wrap: anywhere; }
+.vw-note { color: var(--warn); margin-bottom: 8px; }
+.vw-empty { max-width: 520px; margin: 26px auto; text-align: center; color: var(--muted); }
+.vw-empty svg { opacity: .6; }
+.vw-empty h4 { margin: 8px 0 6px; font-size: 15px; color: var(--text); text-transform: none; letter-spacing: 0; }
+.vw-empty p { margin: 0 0 14px; line-height: 1.5; }
+.vw-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+.modal .vw-actions { justify-content: flex-start; }
+.vw-head, .vw-row { display: grid; grid-template-columns: 170px 1fr auto 28px; gap: 6px; margin-bottom: 6px; align-items: center; }
+.vw-head { padding: 0 2px; }
+.vw-row input { min-width: 0; padding: 5px 8px; }
+.vw-row .kv-del { grid-column: 4; }
+.vw-how { margin-top: 14px; } .vw-how summary { cursor: pointer; color: var(--muted); font-size: 12px; } .vw-how pre { margin-top: 8px; }
 .cert-head { display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 28px; gap: 6px; margin-bottom: 4px; padding: 0 2px; }
 #set-certs .cert-row { margin-bottom: 6px; }
 .md { font-size: 13px; line-height: 1.5; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; }

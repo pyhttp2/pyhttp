@@ -2531,6 +2531,7 @@ function updateCopyButton() {
   const label = { body: 'response body', headers: 'response headers', request: 'request as sent', cookies: 'cookies', tests: 'test results' }[view] || 'response';
   $('#r-copy').title = `Copy the ${label}`;
   $('#r-save').hidden = view !== 'body';
+  $('#r-copy').hidden = view === 'view';   // a view is a page of its own: nothing here to copy
 }
 function responseTextFor(view) {
   const r = lastResult;

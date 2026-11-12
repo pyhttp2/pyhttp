@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Response view</title>
+<!--
+  A pyhttp response view. pyhttp opens this file as
+
+      this-file.html?api=http://127.0.0.1:PORT/response/<request>/<id>&meta=<the same>/meta
+
+  api   the response body, exactly as the API sent it        fetch(api).then(r => r.json())
+  meta  { name, method, url, status, duration_ms, headers, body, json, ... }
+  theme "dark" or "light": the theme pyhttp is in, so the page can match it
+
+  Everything below is yours to change: keep the two fetches in load(), replace draw() with your
+  own chart, table, map… Files next to this one (scripts, styles, images) can be loaded with
+  relative paths. Press Reload in pyhttp after saving.
+-->
+<style>
+  :root { --bg: #0f1419; --panel: #171d25; --line: #263040; --text: #e6edf3; --muted: #8b98a8; --accent: #3b82f6; --ok: #22c55e; --bad: #ef4444; }
+  :root[data-theme="light"] { --bg: #f6f8fa; --panel: #fff; --line: #d8dee6; --text: #1b2430; --muted: #5d6b7c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  .pill { padding: 1px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--line); }
+  .pill.ok { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+  .pill.bad { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+  .muted { color: var(--muted); font-size: 12px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; overflow: auto; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .bar { display: grid; grid-template-columns: minmax(60px, 28%) 1fr auto; gap: 10px; align-items: center; margin: 5px 0; }
+  .bar span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar i { display: block; height: 14px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  .bar b { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .card b { display: block; font-size: 17px; overflow: hidden; text-overflow: ellipsis; }
+  pre { margin: 0; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Response view</h1><span id="status" class="pill"></span><span id="info" class="muted"></span></header>
+<main id="out"><section>Loading…</section></main>
+<script>
+const query = new URLSearchParams(location.search);
+const api = query.get('api');      // the response body
+const meta = query.get('meta');    // status, headers, timing…
+document.documentElement.dataset.theme = query.get('theme')
+  || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function load() {
+  if (!api) throw new Error('Open this file from pyhttp: the address needs ?api=…');
+  const info = meta ? await fetch(meta).then((r) => r.json()) : {};
+  const text = await fetch(api).then((r) => { if (!r.ok) throw new Error('pyhttp no longer keeps this response; open the view again'); return r.text(); });
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { data, info };
+}
+
+// the first list of objects in the data: the data itself, or a list one or two levels down
+function findRows(data, depth = 0) {
+  if (Array.isArray(data) && data.length && data.every((x) => x && typeof x === 'object' && !Array.isArray(x))) return data;
+  if (!data || typeof data !== 'object' || depth > 2) return null;
+  for (const value of Object.values(data)) { const rows = findRows(value, depth + 1); if (rows) return rows; }
+  return null;
+}
+
+function draw({ data, info }) {
+  document.getElementById('title').textContent = info.name || 'Response view';
+  const st = document.getElementById('status');
+  st.textContent = info.status ?? '';
+  st.className = 'pill ' + (info.status >= 200 && info.status < 400 ? 'ok' : 'bad');
+  document.getElementById('info').textContent = [info.method, info.url, info.duration_ms != null ? Math.round(info.duration_ms) + ' ms' : ''].filter(Boolean).join(' · ');
+  const out = document.getElementById('out');
+  const rows = findRows(data);
+  let html = '';
+  if (rows) {
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))].slice(0, 12);
+    const label = cols.find((c) => rows.some((r) => typeof r[c] === 'string')) || cols[0];
+    const value = cols.find((c) => c !== label && !/(^|_)id$/i.test(c) && rows.every((r) => typeof r[c] === 'number'));
+    if (value) {   // a bar per row: the first text column against the first number column
+      const top = rows.slice(0, 20), max = Math.max(...top.map((r) => Math.abs(r[value])), 1);
+      html += `<section><h2>${esc(value)} by ${esc(label)}</h2>${top.map((r) => `<div class="bar"><span title="${esc(r[label])}">${esc(r[label])}</span><i style="width:${Math.abs(r[value]) / max * 100}%"></i><b>${esc(r[value].toLocaleString())}</b></div>`).join('')}</section>`;
+    }
+    html += `<section><h2>${rows.length} row${rows.length === 1 ? '' : 's'}</h2><table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${
+      rows.slice(0, 200).map((r) => `<tr>${cols.map((c) => { const v = r[c]; return `<td class="${typeof v === 'number' ? 'num' : ''}" title="${esc(typeof v === 'object' ? JSON.stringify(v) : v)}">${esc(typeof v === 'object' && v !== null ? JSON.stringify(v) : v)}</td>`; }).join('')}</tr>`).join('')}</tbody></table></section>`;
+  } else if (data && typeof data === 'object') {   // one object: its plain values as cards
+    const plain = Object.entries(data).filter(([, v]) => v === null || typeof v !== 'object');
+    if (plain.length) html += `<section><h2>Values</h2><div class="cards">${plain.map(([k, v]) => `<div class="card"><span class="muted">${esc(k)}</span><b title="${esc(v)}">${esc(v)}</b></div>`).join('')}</div></section>`;
+  }
+  html += `<section><h2>Raw</h2><pre>${esc(typeof data === 'string' ? data : JSON.stringify(data, null, 2)).slice(0, 20000)}</pre></section>`;
+  out.innerHTML = html;
+}
+
+load().then(draw).catch((e) => { document.getElementById('out').innerHTML = `<section>${esc(e.message)}</section>`; });
+</script>
+</body>
+</html>

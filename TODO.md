@@ -5,6 +5,15 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
 
 ## Shipped on 2026-11-12
 
+- [x] **Response views.** A request can name HTML pages (files or addresses) that draw its
+  response: the View tab of a response and a history entry show them, one at a time or all
+  side by side, and open them in the browser. The page gets `?api=<address of the response>`
+  and fetches it; "Create a starter view" writes a working page (chart, table, raw data).
+  → `/api/views/*`, `/view/<id>/…`, `/response/<name>/<id>`, `mountViews()` in `features.js`,
+  `static/view-starter.html`.
+- [ ] Response views: folder-level views (every request in a folder), and the full body for
+  responses over 512 KB (the viewer and history keep a cut copy, which is what a view gets).
+
 - [x] **Git sync.** Top bar → Git: the project's definitions (requests, folders, environments,
   variables, mocks, monitors) as one JSON file each in a Git repository, committed and pushed
   a few seconds after every change. Automatic commit and push are the default and can be

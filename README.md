@@ -149,6 +149,9 @@ only on `127.0.0.1`.
 - **Settings**: follow redirects, max redirects, proxy with bypass list, client
   certificates per host, default timeout, User-Agent (default `pyhttp/<version>`), editor font size, response
   below or beside the request, and in-app updates (the Windows builds and Homebrew installs update themselves, see *Updates* below).
+- **Response views**: attach your own HTML pages to a request and see its response as a
+  chart, a table, a dashboard — in the **View** tab, side by side, or in the browser. See
+  *Response views* below.
 - **Git sync** (topbar → Git): the project's requests, environments, mocks and monitors as
   JSON files in a Git repository, committed and pushed automatically on every change, and
   pulled back in when a teammate pushes — share a collection without a cloud account. See
@@ -238,6 +241,56 @@ mocks/shop.json
   wins for that request.
 - In a repository shared with code, *Pull automatically* merges the remote branch into the
   branch that is checked out, code included. Turn it off there if you would rather pull yourself.
+
+## Response views
+
+JSON is not always the best way to look at an answer. A request can carry **views**: HTML
+pages of your own that draw its response as a chart, a table, a dashboard, a receipt.
+
+1. Send the request and open the **View** tab of the response.
+2. Press **Create a starter view** — pyhttp writes a working page (a bar chart and a table for
+   lists, cards for single objects, the raw data) into `<data folder>/views/` and shows it at
+   once. Or press **Choose HTML files…** and give the path of a page you already have, or the
+   address of one (`http://localhost:5173/chart.html`).
+3. Edit the file, press **↻ Reload**.
+
+A request can have **several views**. The chips above the page switch between them, **All**
+shows every one side by side, and **↗ Open in browser** opens the one shown (or all of them)
+in your browser. *Show the view first* (in **Edit views…**) opens the View tab instead of the
+body whenever a response arrives. **History** works the same way: an entry in *Request
+history* shows the views with the response it holds, and its ⋯ menu has *Open its views in
+the browser*.
+
+**How a page gets the response.** pyhttp opens the page as
+
+```
+your-page.html?api=http://127.0.0.1:8765/response/<request-name>/<id>&meta=<the same>/meta&theme=dark
+```
+
+and the page reads the address from its own URL and fetches it:
+
+```html
+<script type="module">
+  const query = new URLSearchParams(location.search);
+  const data = await fetch(query.get('api')).then((r) => r.json());   // the body, as the API sent it
+  const info = await fetch(query.get('meta')).then((r) => r.json());  // name, method, url, status, duration_ms, headers, body, json
+  document.body.textContent = `${info.name}: ${data.rows.length} rows`;
+</script>
+```
+
+- `api` answers with the response body and its original content type; `meta` is JSON about
+  the response (and carries the body as `body` and, parsed, as `json`).
+- Files next to the HTML file (scripts, styles, images) load with relative paths. Nothing
+  above the file's folder is served.
+- Inside pyhttp a view runs in a sandboxed frame: it can read the response it was given and
+  nothing else of the app. Both addresses allow cross-origin reads, so a page on your own dev
+  server or opened from disk can fetch them too. The ids are random and short-lived: pyhttp
+  keeps the last 80 responses handed to views in memory, and an old link answers 404 after
+  that or after a restart — open the view again.
+- A view gets the body the viewer has: up to 512 KB for a fresh response, 64 KB for a history
+  entry. The View tab says so when a response was cut.
+- Views are saved with the request (so they travel with exports and Git sync) as the path
+  you typed; on another computer the file must exist at the same path, or use a page address.
 
 ## Mock servers
 

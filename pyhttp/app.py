@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import collections
 import contextlib
 import csv
 import io
@@ -11,8 +13,10 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -250,7 +254,7 @@ class DataFileIn(BaseModel):
 
 # Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
 # schedule a sync. Variables a script sets while sending go out with the next edit.
-_GIT_QUIET = ("/api/git", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+_GIT_QUIET = ("/api/git", "/api/views", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
               "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
 
 
@@ -1499,6 +1503,108 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             return req
         req["folder_id"] = body.folder_id
         return db.create_request(req)
+
+    # --------------------------------------------------------- response views
+    # A request can name HTML files that draw its response their own way (a chart, a table, a
+    # map…). Opening one hands the response to this app under a short-lived id and loads
+    #     /view/<id>/<file>.html?api=http://127.0.0.1:<port>/response/<request-name>/<id>
+    # The page reads ``api`` from its query string and fetches it: the answer is the response
+    # body exactly as the API sent it (``…/meta`` adds status, headers and timing as JSON).
+    # Files next to the HTML file (scripts, styles, images) load from /view/<id>/ as well.
+    # Both routes answer with CORS open, so a page served from elsewhere (a file:// page, a dev
+    # server) can read them too; the ids are random and are not listed anywhere.
+    view_store: collections.OrderedDict[str, dict[str, Any]] = collections.OrderedDict()
+    VIEW_KEEP, VIEW_BYTES = 80, 96 * 1024 * 1024
+    open_cors = {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"}
+
+    def _view_entry(rid: str) -> dict[str, Any]:
+        entry = view_store.get(rid)
+        if not entry:
+            raise HTTPException(404, "This response is no longer kept. Open the view again from pyhttp.")
+        return entry
+
+    @app.post("/api/views/open")
+    def view_open(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        """Keep one response for a view and say where the view opens. ``file`` is the HTML file
+        (or an http(s) URL of a page); ``result`` is a send result as the UI holds it."""
+        file = str(body.get("file") or "").strip()
+        result = body.get("result") if isinstance(body.get("result"), dict) else {}
+        resp = result.get("response") if isinstance(result.get("response"), dict) else {}
+        req = result.get("request") if isinstance(result.get("request"), dict) else {}
+        if not file:
+            raise HTTPException(400, "Choose an HTML file for this view")
+        external = file.lower().startswith(("http://", "https://"))
+        path = None if external else Path(file).expanduser()
+        if path is not None and not path.is_file():
+            raise HTTPException(404, f"File not found: {file}")
+        try:
+            content = base64.b64decode(resp["body_base64"]) if resp.get("body_base64") else str(resp.get("body_text") or "").encode("utf-8")
+        except (ValueError, TypeError):
+            content = b""
+        name = str(body.get("name") or result.get("request_name") or "response")
+        rid = uuid.uuid4().hex[:20]
+        headers = {str(h[0]): str(h[1]) for h in resp.get("headers") or [] if isinstance(h, (list, tuple)) and len(h) == 2}
+        view_store[rid] = {
+            "content": content, "content_type": str(resp.get("content_type") or "") or "text/plain; charset=utf-8",
+            "dir": path.parent.resolve() if path else None,
+            "meta": {"name": name, "body_name": result.get("body_name"), "method": req.get("method"), "url": req.get("url"),
+                     "status": result.get("status_code"), "reason": result.get("reason"), "ok": result.get("status") == "ok",
+                     "error": result.get("error"), "duration_ms": result.get("duration_ms"), "size": resp.get("size"),
+                     "content_type": resp.get("content_type"), "headers": headers, "truncated": bool(resp.get("truncated")),
+                     "sent_at": body.get("sent_at")},
+        }
+        while len(view_store) > VIEW_KEEP or sum(len(e["content"]) for e in view_store.values()) > VIEW_BYTES:
+            if len(view_store) == 1:
+                break
+            view_store.popitem(last=False)
+        origin = _own_origin(request)
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "response"
+        api_url = f"{origin}/response/{slug}/{rid}"
+        page = file if external else f"{origin}/view/{rid}/{quote(path.name)}"   # type: ignore[union-attr]
+        url = f"{page}{'&' if '?' in page else '?'}api={quote(api_url, safe='')}&meta={quote(api_url + '/meta', safe='')}"
+        return {"id": rid, "url": url, "api": api_url, "meta": api_url + "/meta"}   # the UI adds &theme=dark|light
+
+    @app.get("/response/{name}/{rid}", include_in_schema=False)
+    def view_response(name: str, rid: str) -> Response:
+        """The response body, with the content type the API gave it."""
+        entry = _view_entry(rid)
+        return Response(content=entry["content"], media_type=entry["content_type"], headers=open_cors)
+
+    @app.get("/response/{name}/{rid}/meta", include_in_schema=False)
+    def view_response_meta(name: str, rid: str) -> JSONResponse:
+        """What surrounds the body: request name, method, URL, status, timing, headers; plus the
+        body as text and, when it is JSON, parsed."""
+        entry = _view_entry(rid)
+        text = entry["content"].decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        return JSONResponse({**entry["meta"], "body": text, "json": parsed}, headers=open_cors)
+
+    @app.get("/view/{rid}/{path:path}", include_in_schema=False)
+    def view_file(rid: str, path: str) -> FileResponse:
+        """The view's HTML file and whatever sits next to it (never anything above its folder)."""
+        base = _view_entry(rid)["dir"]
+        if base is None:
+            raise HTTPException(404, "File not found")
+        target = (base / path).resolve()
+        if not target.is_relative_to(base) or not target.is_file():
+            raise HTTPException(404, "File not found")
+        return FileResponse(target, headers=open_cors)
+
+    @app.post("/api/views/starter", status_code=201)
+    def view_starter(body: dict[str, Any]) -> dict[str, Any]:
+        """Write a ready-made view (table, chart, raw data) to the data folder and return its
+        path: something that works at once and can be edited into the view that is wanted."""
+        folder = data_dir / "views"
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = re.sub(r"[^\w-]+", "-", str(body.get("name") or "view")).strip("-")[:40] or "view"
+        target, n = folder / f"{stem}.html", 2
+        while target.exists():
+            target, n = folder / f"{stem}-{n}.html", n + 1
+        target.write_bytes((STATIC_DIR / "view-starter.html").read_bytes())
+        return {"file": str(target), "folder": str(folder)}
 
     # ------------------------------------------------------------- utilities
     @app.get("/api/path-exists")

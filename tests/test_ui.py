@@ -1227,6 +1227,51 @@ def test_send_one_body_button_keeps_checkboxes(page, servers):
     assert page.locator("#body-list .body-item .bsend").nth(0).is_hidden()
 
 
+def test_response_views_tab_and_history(page, servers, tmp_path):
+    app_url, echo_url = servers
+    new_request(page, echo_url, "views demo")
+    page.click("#btn-send")
+    page.wait_for_selector("#r-status.ok")
+    # the View tab explains itself and makes a working view in one click
+    page.click("#resp-tabs button[data-tab=view]")
+    page.wait_for_selector("#r-view .vw-empty")
+    page.click("#r-view [data-act=starter]")
+    frame = page.frame_locator("#r-view iframe")
+    frame.locator("#title").wait_for()
+    assert frame.locator("#title").inner_text() == "views demo"            # the page fetched ?meta=…
+    assert "200" in frame.locator("#status").inner_text()
+    assert "/echo" in frame.locator("#out").inner_text()                   # …and ?api=…, the body itself
+    assert page.locator("#n-r-view").inner_text() == "1"
+    # a second view of the user's own, added in the dialog: both show side by side under "All"
+    mine = tmp_path / "mine.html"
+    mine.write_text("<body><h1 id=x>…</h1><script>const u = new URLSearchParams(location.search).get('api');"
+                    "fetch(u).then(r => r.json()).then(d => { document.getElementById('x').textContent = 'method ' + d.method; });</script>",
+                    encoding="utf-8")
+    page.click("#r-view [data-act=edit]")
+    page.click("#vw-add")
+    page.locator("#vw-rows .vw-row").nth(1).locator("input[data-k=name]").fill("Mine")
+    page.locator("#vw-rows .vw-row").nth(1).locator("input[data-k=file]").fill(str(mine))
+    page.click("#modal-foot button.primary")
+    page.wait_for_selector("#r-view .vw-chip[data-v=all]")
+    page.click("#r-view .vw-chip:has-text('Mine')")
+    assert page.frame_locator("#r-view iframe").locator("#x").inner_text(timeout=10000) == "method GET"
+    page.click("#r-view .vw-chip[data-v=all]")
+    assert page.locator("#r-view iframe").count() == 2
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    # the next response lands in the views that are showing
+    page.click("#btn-send")
+    page.wait_for_function("document.querySelectorAll('#r-view iframe').length === 2")
+    assert not page.locator("#r-view").is_hidden()
+    # a history entry shows the same views with the response it holds
+    page.click("#sb-runs") if page.locator("#runs-panel").is_hidden() else None
+    page.click("#runs-tabs button[data-tab=requests]")
+    page.locator("#history-list .h-item").first.click()
+    page.wait_for_selector("#h-views .vw-chip[data-v=all]")
+    page.click("#h-views .vw-chip:has-text('Mine')")
+    assert page.frame_locator("#h-views iframe").locator("#x").inner_text(timeout=10000) == "method GET"
+    page.click("#modal-close")
+
+
 def test_git_sync_from_topbar(page, servers, tmp_path):
     import shutil
     import subprocess
