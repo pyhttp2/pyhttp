@@ -315,7 +315,26 @@ def test_websocket_console(page, servers, ws_url):
     page.fill("#f-url", echo_url + "/echo")
     page.wait_for_function("document.querySelector('#btn-send').textContent === 'Send'")
     assert not page.locator("#ws-panel").is_visible()
+
+    # the address may come from a variable: {{sock}}/room is a WebSocket request when sock holds ws://…
+    page.fill("#f-url", "{{sock}}/room")
     page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    assert page.locator("#btn-send").text_content() == "Send"               # no such variable yet
+    env = page.request.post(app_url + "/api/environments", data={"name": "Sockets", "variables": [{"key": "sock", "value": url}]}).json()
+    page.evaluate("(id) => loadEnvironments().then(() => setActiveEnv(id))", env["id"])
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Connect'")
+    page.wait_for_selector("#req-list .req-item .m-WS")
+    assert page.locator("#req-tabs .req-tab.active .method").text_content() == "WS"
+    page.click("#btn-send")
+    page.wait_for_function(log_has, arg="hello /room")
+    page.click("#btn-send")
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Connect'")
+    # ...and stops being one when the environment is switched off
+    page.evaluate("setActiveEnv(null)")
+    page.wait_for_function("document.querySelector('#btn-send').textContent === 'Send'")
+    assert page.locator("#req-list .req-item .m-WS").count() == 0
+    page.request.delete(f"{app_url}/api/environments/{env['id']}")
+    page.evaluate("loadEnvironments()")
     forget(page, app_url, "Socket")
 
 

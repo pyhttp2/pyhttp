@@ -156,8 +156,8 @@ only on `127.0.0.1`.
   JSON files in a Git repository, committed and pushed automatically on every change, and
   pulled back in when a teammate pushes — share a collection without a cloud account. See
   *Git sync* below.
-- **WebSocket client**: give a request a `ws://` or `wss://` address and Send becomes
-  **Connect**. The response area turns into a console: a live log of messages in both
+- **WebSocket client**: give a request a `ws://` or `wss://` address (written out, or through a
+  variable such as `{{events_url}}/orders`) and Send becomes **Connect**. The response area turns into a console: a live log of messages in both
   directions (click a JSON message to pretty-print it), a filter, Ping, and a box to send
   from (Ctrl/Cmd+Enter). The request's query parameters, headers, auth and `{{variables}}`
   are used for the connection, and a `Sec-WebSocket-Protocol` header names the subprotocols

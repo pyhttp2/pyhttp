@@ -5,6 +5,10 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
 
 ## Shipped on 2026-11-13
 
+- [x] **2.1.0**: a WebSocket address may start with a variable (`{{events_url}}/orders`): the
+  request is recognised as a WebSocket one when the variable holds a `ws://` address, and follows
+  the active environment. → `isWsUrl()` / `wsRefresh()` in `features.js`.
+
 - [x] **WebSocket client.** A request with a `ws://` / `wss://` address connects instead of
   sending: Send becomes Connect, the response area becomes a console (live log, filter, Ping,
   a box to send from). Query parameters, headers, auth and `{{variables}}` of the request are

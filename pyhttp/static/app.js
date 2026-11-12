@@ -1893,7 +1893,7 @@ function requestRow(r, depth) {
   const tags = r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('');
   li.innerHTML =
     `<input type="checkbox" ${isSelected(r.id) ? 'checked' : ''} title="Select for run">` +
-    (/^\s*wss?:\/\//i.test(r.url || '') ? '<span class="method m-WS" title="WebSocket">WS</span>' : `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>`) +
+    (typeof isWsUrl === 'function' && isWsUrl(r.url) ? '<span class="method m-WS" title="WebSocket">WS</span>' : `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>`) +
     `<div style="min-width:0"><div class="name">${esc(r.name)}${sendCount(r) > 1 ? `<span class="bcount" title="Checked bodies">×${sendCount(r)}</span>` : ''}</div><div class="sub">${tags}${esc(r.url)}</div></div>` +
     '<button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button>';
   $('.more', li).addEventListener('click', (e) => { e.stopPropagation(); openReqMenu(r, e.currentTarget); });
@@ -1937,7 +1937,7 @@ function folderRow(f, depth, list, open) {
 // of everything it shows. A row whose signature is unchanged keeps its DOM node, so renaming one
 // request (or ticking one checkbox) touches one <li> instead of rebuilding hundreds.
 function requestSig(r, depth) {
-  return JSON.stringify([r.name, r.method, r.url, r.tags, r.folder_id || '', depth, sendCount(r),
+  return JSON.stringify([r.name, r.method, r.url, typeof isWsUrl === 'function' && isWsUrl(r.url), r.tags, r.folder_id || '', depth, sendCount(r),
     !!(state.current && state.current.id === r.id), isSelected(r.id), state.kbId === r.id]);
 }
 function folderSig(f, depth, list, open) {
@@ -2206,6 +2206,7 @@ async function loadEnvironments() {
   state.envs = data.environments;
   state.activeEnvId = data.active_id;
   renderEnvSelect();
+  if (typeof wsRefresh === 'function') wsRefresh();   // an environment variable may hold a ws:// address
   return data;
 }
 // ------------------------------------------------------------- projects

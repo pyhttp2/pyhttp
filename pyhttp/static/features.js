@@ -1411,8 +1411,8 @@ function renderReqTabs() {
   box.hidden = tabs.list.length === 0;
   const items = tabs.list.map((t) => {
     const r = t.id === 'draft' ? state.current : (cur === t.id ? state.current : state.requests.find((x) => x.id === t.id));
-    const url = cur === t.id ? $('#f-url').value : r && r.url;
-    return r ? { key: t.id, name: r.name || 'Untitled', method: /^\s*wss?:\/\//i.test(url || '') ? 'WS' : r.method, active: t.id === cur } : null;
+    const ws = cur === t.id ? isWsRequest() : !!r && isWsUrl(r.url);
+    return r ? { key: t.id, name: r.name || 'Untitled', method: ws ? 'WS' : r.method, active: t.id === cur } : null;
   }).filter(Boolean);
   const sig = JSON.stringify(items);
   if (sig !== tabsSignature) {
@@ -1643,6 +1643,7 @@ async function refreshInherited() {
   renderInheritedHeaders();
   updateTabCounts();
   if (typeof updateViewTab === 'function') updateViewTab();   // the folders' views count too
+  wsRefresh();   // ...and a folder variable may hold the ws:// address this request starts with
 }
 
 // ============================================================ reorder DnD
@@ -2925,6 +2926,8 @@ function gitChanged(redraw = false) {
 // "waiting to be committed" state altogether. Ask again right after the edit instead.
 const GIT_QUIET = /^\/(git|send|ws|resolve|views|history|runs|console|oauth|cookies|open-path|update|import\/(detect|parse))/;
 function gitNudge(path) {
+  if (/^\/(variables|import)/.test(path || '')) wsLoadGlobals();   // global variables changed
+  else if (/^\/(environments|folders)/.test(path || '')) setTimeout(wsRefresh, 0);
   if (!gitSync.info || gitSync.info.state === 'off' || GIT_QUIET.test(path || '')) return;
   clearTimeout(gitSync.nudge);
   gitSync.nudge = setTimeout(loadGit, 300);
@@ -3048,9 +3051,37 @@ document.addEventListener('DOMContentLoaded', initFeatures);
 // A request whose address starts with ws:// or wss:// is a WebSocket: Send becomes Connect, and
 // the response area becomes a console (a live log of messages, and a box to send one). The
 // connection itself is held by the server (see wsclient.py); the log arrives through a long poll.
-const wsUi = { byKey: {}, shown: null, rendered: 0, filter: '', mode: false };
-const isWsUrl = (u) => /^\s*wss?:\/\//i.test(u || '');
-const isWsRequest = () => !!state.current && isWsUrl($('#f-url').value);
+const wsUi = { byKey: {}, shown: null, rendered: 0, filter: '', mode: false, globals: null };
+// An address is a WebSocket one when it starts with ws:// or wss://, written out or through a
+// variable: {{events_url}}/orders counts when events_url holds a ws:// address. The value is looked
+// up the way the server does (environment over folder over global). `folderVars` are the variables
+// of the folders above the request, known for the request on screen only.
+function wsVariable(name, folderVars) {
+  const env = (state.envs || []).find((e) => e.id === state.activeEnvId);
+  const row = env && (env.variables || []).find((v) => v.enabled !== false && (v.key || '').trim() === name);
+  if (row) return row.value || '';
+  if (folderVars && Object.prototype.hasOwnProperty.call(folderVars, name)) return folderVars[name] || '';
+  return (wsUi.globals && wsUi.globals[name]) || '';
+}
+function isWsUrl(u, folderVars = null) {
+  const url = (u || '').trim();
+  if (/^wss?:\/\//i.test(url)) return true;
+  const m = /^\{\{\s*([^{}\s]+)\s*\}\}/.exec(url);
+  return !!m && /^wss?:\/\//i.test(wsVariable(m[1], folderVars).trim());
+}
+const isWsRequest = () => !!state.current && isWsUrl($('#f-url').value, state.current.folder_id && inheritedInfo ? inheritedInfo.variables : null);
+// Variables changed (another environment, an edit, the folder's variables arrived): the request on
+// screen and the badges in the sidebar and the tabs may have turned into, or out of, WebSocket ones.
+function wsRefresh() {
+  if (!state.current) { renderList(); return; }
+  if (isWsRequest() !== wsUi.mode) { renderSendButton(); renderResponseArea(); }
+  tabsSignature = '';
+  renderList();
+}
+async function wsLoadGlobals() {
+  try { wsUi.globals = await api('/variables'); } catch { return; }
+  wsRefresh();
+}
 function wsSession() { return wsUi.byKey[responseKey()] || null; }
 const wsLive = (s) => !!s && (s.state === 'open' || s.state === 'connecting');
 
@@ -3187,3 +3218,4 @@ function initWs() {
   });
 }
 document.addEventListener('DOMContentLoaded', initWs);
+document.addEventListener('DOMContentLoaded', wsLoadGlobals);
