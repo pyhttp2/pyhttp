@@ -9,11 +9,13 @@ import csv
 import io
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -24,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
+from . import (USER_AGENT, __version__, cloudsync, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
                projects, runner, templating, updater)
 from .templating import build_context, render
 
@@ -468,6 +470,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     current = {"id": project_id}   # the project this app instance has open
     git_payload: dict[str, Any] = {}   # "fn": the export function, defined further down
     git = gitsync.Syncer(lambda: git_payload["fn"]())
+    cloud = cloudsync.Syncer(data_dir, lambda: db.current().path)   # idle until the user signs in and links a project
     sockets = wsclient.Manager()
 
     @contextlib.asynccontextmanager
@@ -475,11 +478,13 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         scheduler.start()
         git.touch()   # catch up on anything that was not committed or pushed last time
         git.start()   # and look at the remote on a timer from here on
+        cloud.start()   # the same for the pyhttp cloud, when this computer is signed in
         try:
             yield
         finally:
             scheduler.stop()
             git.stop()
+            cloud.stop()
             await sockets.close_all()
             await asyncio.to_thread(git.flush)
 
@@ -1579,6 +1584,73 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         git.sync(force=True, interactive=True, prefer=body["use"])
         return _git_status()
 
+    # ------------------------------------------------------------ cloud sync
+    # Sign this computer in to a pyhttp account and keep the open project in step with a
+    # project there (cloudsync.py). Signing in happens in the system browser: it comes back
+    # to /api/cloud/callback on this very port with a code that works once.
+    def _cloudy(call: Any) -> Any:
+        try:
+            return call()
+        except cloudsync.CloudError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/cloud")
+    def cloud_status() -> dict[str, Any]:
+        return cloud.status()
+
+    @app.post("/api/cloud/login")
+    def cloud_login(request: Request) -> dict[str, Any]:
+        port = int((request.scope.get("server") or ("", 0))[1] or request.url.port or 0)
+        url = cloud.login_url(port, platform.node() or "this computer")
+        webbrowser.open(url)
+        return {"url": url}
+
+    @app.get("/api/cloud/callback", include_in_schema=False)
+    def cloud_callback(code: str = "", state: str = "") -> HTMLResponse:
+        try:
+            user = cloud.login_finish(code, state)
+            title, text = "pyhttp is signed in", f"Signed in as {user.get('email', '')}. You can close this tab and go back to pyhttp."
+        except cloudsync.CloudError as exc:
+            title, text = "Sign-in did not work", str(exc)
+        esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")  # noqa: E731
+        return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>{esc(title)}</title><body style=\"font:16px system-ui;"
+                            f"max-width:28rem;margin:20vh auto;text-align:center\"><h1 style=\"font-size:1.4rem\">{esc(title)}</h1><p>{esc(text)}</p>")
+
+    @app.post("/api/cloud/logout")
+    def cloud_logout() -> dict[str, Any]:
+        cloud.logout()
+        return cloud.status()
+
+    @app.get("/api/cloud/projects")
+    def cloud_projects() -> dict[str, Any]:
+        return {"projects": _cloudy(cloud.remote_projects)}
+
+    @app.post("/api/cloud/link")
+    def cloud_link(body: dict[str, Any]) -> dict[str, Any]:
+        """``mode`` "upload": this project becomes a new one in the cloud. "load": the cloud project
+        ``cloud_id`` replaces what this project holds."""
+        name = str(body.get("name") or current_project()["name"])
+        return _cloudy(lambda: cloud.link(str(body.get("mode") or ""), str(body.get("cloud_id") or ""), name))
+
+    @app.post("/api/cloud/unlink")
+    def cloud_unlink() -> dict[str, Any]:
+        cloud.unlink()
+        return cloud.status()
+
+    @app.post("/api/cloud/sync")
+    def cloud_sync() -> dict[str, Any]:
+        return _cloudy(cloud.sync)
+
+    @app.post("/api/cloud/resolve")
+    def cloud_resolve(body: dict[str, Any]) -> dict[str, Any]:
+        return _cloudy(lambda: cloud.resolve(str(body.get("id") or ""), str(body.get("keep") or "")))
+
+    @app.put("/api/cloud/settings")
+    def cloud_settings(body: dict[str, Any]) -> dict[str, Any]:
+        if "include_secrets" in body:
+            cloud.set_include_secrets(bool(body["include_secrets"]))
+        return cloud.status()
+
     @app.get("/api/export/docs")
     def export_docs(folder_id: str = Query(""), name: str = Query(""), format: str = Query("md")) -> dict[str, Any]:
         """The collection (or one folder) as documentation: Markdown, or with ``format=html`` a
@@ -1830,6 +1902,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         if (request.method in ("POST", "PUT", "PATCH", "DELETE") and response.status_code < 400
                 and path.startswith("/api/") and not path.startswith(_GIT_QUIET)):
             git.touch()   # something was edited: Git sync commits it once the edits stop
+            if not path.startswith("/api/cloud"):
+                cloud.touch()   # and cloud sync sends it, for a linked project
         if path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         elif path == "/":

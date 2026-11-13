@@ -762,3 +762,9 @@ button:not(:disabled):active { transform: translateY(1px) scale(.96); }
 .jv-vrow.cur { background: rgba(245,158,11,.16); }
 .jv-vrow .jv-toggle.shut { transform: rotate(-90deg); }
 .rv-note.top { margin: 0 0 8px; }
+
+/* cloud sync dialog: a row with a name and its buttons (a conflict, a project to load) */
+.cloud-conflict { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.cloud-conflict .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.error-text { color: var(--danger); }
+

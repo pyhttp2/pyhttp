@@ -156,6 +156,13 @@ only on `127.0.0.1`.
   JSON files in a Git repository, committed and pushed automatically on every change, and
   pulled back in when a teammate pushes — share a collection without a cloud account. See
   *Git sync* below.
+- **Cloud sync** (topbar → Cloud, optional): sign in with GitHub or Google in your browser and
+  link a project to your pyhttp account. Edits go up a few seconds after the last one, and what
+  you change on another computer or in the web app at `app.pyhttp.com` comes down. A request
+  changed on both sides is never overwritten: you choose *Keep mine* or *Take the cloud's*.
+  Requests, folders, environments, variables, mocks, cookies and history sync; settings,
+  monitors and run results stay on the computer. Values of 🔒 variables stay local unless you
+  switch *Include secret values* on. Nothing is sent anywhere until you sign in and link a project.
 - **WebSocket client**: give a request a `ws://` or `wss://` address (written out, or through a
   variable such as `{{events_url}}/orders`) and Send becomes **Connect**. The response area turns into a console: a live log of messages in both
   directions (click a JSON message to pretty-print it), a filter, Ping, and a box to send

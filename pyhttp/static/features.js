@@ -2067,6 +2067,7 @@ function initFeatures() {
   initMonitors();
   initMocks();
   initGit();
+  initCloud();
   initViews();
 }
 
@@ -3219,3 +3220,147 @@ function initWs() {
 }
 document.addEventListener('DOMContentLoaded', initWs);
 document.addEventListener('DOMContentLoaded', wsLoadGlobals);
+
+// ------------------------------------------------------------------ cloud sync
+// Sign this computer in to a pyhttp account (in the browser) and link the open project to a
+// project there: edits go up a few seconds after the last one, changes made elsewhere come
+// down, and a request changed on both sides is shown as a conflict to settle.
+const cloud = { status: null, seen: null, timer: null };
+
+function paintCloud() {
+  const s = cloud.status || {};
+  const dot = $('#cloud-dot');
+  const bad = s.linked && (s.error || (s.conflicts || []).length);
+  dot.hidden = !s.signed_in || !s.linked;
+  dot.className = 'git-dot ' + (bad ? 'err' : 'ok');
+  $('#btn-cloud').title = !s.signed_in ? 'Cloud sync: sign in to keep this project on your other computers and on the web'
+    : !s.linked ? 'Cloud sync: signed in; this project is not synced'
+      : bad ? `Cloud sync: ${s.error || 'a change needs your decision'}` : `Cloud sync: in step with “${s.project_name}”`;
+}
+
+// Rows of this project were changed outside this window (another computer or the web app,
+// through cloud sync). ``rows`` is [{t: table, k: primary key as JSON}]. The lists are read
+// again; the request that is open is read again too, unless an edit to it is still unsaved.
+async function remoteChanged(rows) {
+  const has = (table) => rows.some((r) => r.t === table);
+  if (has('requests') || has('folders')) await loadRequests();
+  if (has('environments')) loadEnvironments();
+  if (has('variables') && typeof wsLoadGlobals === 'function') wsLoadGlobals();
+  if ((has('environments') || has('folders')) && typeof wsRefresh === 'function') wsRefresh();
+  const open = state.current && state.current.id;
+  if (!open || open === 'draft' || !rows.some((r) => r.t === 'requests' && JSON.parse(r.k)[0] === open)) return;
+  if (autosave.dirty || autosave.inFlight) {
+    toast('This request was changed on another device', '', { label: 'Reload', onClick: () => location.reload() });
+    return;
+  }
+  try {
+    state.current = await api('/requests/' + open);
+    renderEditor();
+    renderList();
+  } catch { location.reload(); }   // it was deleted there
+}
+
+async function refreshCloud() {
+  try { cloud.status = await api('/cloud'); } catch { return cloud.status; }
+  paintCloud();
+  const at = cloud.status.applied_at || 0;
+  if (cloud.seen !== null && at > cloud.seen) remoteChanged(cloud.status.applied_rows || []);
+  cloud.seen = at;
+  // this app's own backend, on this computer: asking every two seconds while a project is linked costs nothing
+  const every = cloud.status.linked ? 2000 : 20000;
+  if (every !== cloud.every) {
+    clearInterval(cloud.timer);
+    cloud.every = every;
+    cloud.timer = setInterval(refreshCloud, every);
+  }
+  return cloud.status;
+}
+
+function cloudWhen(ts) {
+  if (!ts) return 'not yet';
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  return s < 90 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} minutes ago` : new Date(ts * 1000).toLocaleString();
+}
+
+async function openCloud() {
+  const s = await refreshCloud() || {};
+  const act = async (fn, okMsg) => {
+    try { await fn(); if (okMsg) toast(okMsg, 'ok'); } catch (e) { toast(e.message, 'error'); }
+    if (!$('#modal').hidden && $('#cloud-box')) openCloud();
+  };
+  let body;
+  if (!s.signed_in) {
+    body = `<p>Sign in to keep this project in step with your pyhttp account: on your other computers, and in the browser at <code>${esc((s.server || '').replace(/^https?:\/\//, ''))}</code>.</p>
+      <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Nothing leaves this computer until you link a project.</p>
+      <div class="set-actions"><button id="cloud-login" class="primary">Sign in with your browser</button></div>`;
+  } else if (!s.linked) {
+    body = `<p>Signed in as <b>${esc(s.user.email)}</b>. This project is not synced yet.</p>
+      <div class="set-section"><h4>Put this project in the cloud</h4>
+        <p class="muted small">It becomes a new project in your account. Values of 🔒 variables stay on this computer unless you switch that on afterwards.</p>
+        <div class="set-actions"><button id="cloud-upload" class="primary">Upload this project</button></div></div>
+      <div class="set-section"><h4>Or load a project from the cloud</h4>
+        <p class="muted small">It replaces the requests, folders, environments, variables, mocks, cookies and history of the project that is open now.</p>
+        <div id="cloud-remote" class="muted small">Looking at your account…</div></div>`;
+  } else {
+    const conflicts = (s.conflicts || []).map((c) => `<div class="cloud-conflict" data-id="${esc(c.id)}">
+        <span class="grow"><b>${esc(c.name)}</b> <span class="muted small">${esc(c.table.replace('_', ' '))}${c.deleted_in_cloud ? ' · deleted in the cloud' : ''}${c.deleted_here ? ' · deleted here' : ''}</span></span>
+        <button data-keep="mine">Keep mine</button><button data-keep="cloud">Take the cloud's</button></div>`).join('');
+    body = `<p>Signed in as <b>${esc(s.user.email)}</b>. This project syncs with <b>${esc(s.project_name)}</b>.</p>
+      ${s.error ? `<p class="error-text">${esc(s.error)}</p>` : ''}
+      <p class="muted small">Last sync: ${esc(cloudWhen(s.last_sync))}${s.pending ? ` · ${s.pending} change${s.pending === 1 ? '' : 's'} waiting to go up` : ''}</p>
+      ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
+      <label class="switch-row"><span class="txt"><b>Include secret values</b><span class="muted small">Off: values of 🔒 variables go up empty and stay on this computer. On: they are stored in your account, so the web version can use them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
+      <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button><button id="cloud-unlink">Stop syncing this project</button></div>`;
+  }
+  const foot = [{ label: 'Close', onClick: closeModal }];
+  if (s.signed_in) foot.unshift({ label: 'Sign out', onClick: () => act(() => api('/cloud/logout', { method: 'POST' }), 'Signed out. Your projects stay as they are') });
+  openModal('Cloud sync (beta)', `<div id="cloud-box">${body}</div>`, foot);
+
+  if (!s.signed_in) {
+    $('#cloud-login').addEventListener('click', async () => {
+      try { await api('/cloud/login', { method: 'POST' }); } catch (e) { toast(e.message, 'error'); return; }
+      $('#cloud-login').disabled = true;
+      $('#cloud-login').textContent = 'Waiting for your browser…';
+      const until = Date.now() + 5 * 60 * 1000;
+      const wait = setInterval(async () => {
+        const now = await refreshCloud();
+        if ((now && now.signed_in) || Date.now() > until || !$('#cloud-box')) {
+          clearInterval(wait);
+          if ($('#cloud-box')) openCloud();
+        }
+      }, 2000);
+    });
+  } else if (!s.linked) {
+    $('#cloud-upload').addEventListener('click', () => act(() => api('/cloud/link', { method: 'POST', body: { mode: 'upload' } }), 'This project is now in your account'));
+    api('/cloud/projects').then(({ projects }) => {
+      const box = $('#cloud-remote');
+      if (!box) return;
+      box.classList.remove('muted', 'small');
+      box.innerHTML = projects.length ? projects.map((p) => `<div class="cloud-conflict"><span class="grow">${esc(p.name)}</span><button data-load="${esc(p.id)}" data-name="${esc(p.name)}">Load into this project</button></div>`).join('')
+        : '<span class="muted small">Your account has no projects yet.</span>';
+      $$('[data-load]', box).forEach((b) => b.addEventListener('click', async () => {
+        const ok = await confirmDialog('Load from the cloud', `“${b.dataset.name}” replaces what is in the project that is open now. This cannot be undone.`, { okLabel: 'Replace and load', danger: true });
+        if (ok) act(async () => { await api('/cloud/link', { method: 'POST', body: { mode: 'load', cloud_id: b.dataset.load } }); location.reload(); });
+      }));
+    }).catch((e) => { if ($('#cloud-remote')) $('#cloud-remote').textContent = e.message; });
+  } else {
+    $('#cloud-sync').addEventListener('click', () => act(() => api('/cloud/sync', { method: 'POST' }), 'Synced'));
+    $('#cloud-unlink').addEventListener('click', async () => {
+      const ok = await confirmDialog('Stop syncing', 'This project stays as it is, here and in the cloud. They are just no longer kept in step.', { okLabel: 'Stop syncing' });
+      if (ok) act(() => api('/cloud/unlink', { method: 'POST' }), 'Sync is off for this project');
+    });
+    $('#cloud-secrets').addEventListener('change', (e) => act(() => api('/cloud/settings', { method: 'PUT', body: { include_secrets: e.target.checked } })));
+    $$('.cloud-conflict [data-keep]').forEach((b) => b.addEventListener('click', () => act(async () => {
+      await api('/cloud/resolve', { method: 'POST', body: { id: b.closest('.cloud-conflict').dataset.id, keep: b.dataset.keep } });
+      if (b.dataset.keep === 'cloud') location.reload();
+    })));
+  }
+}
+
+function initCloud() {
+  const btn = $('#btn-cloud');
+  if (!btn) return;
+  btn.addEventListener('click', openCloud);
+  refreshCloud();   // it sets its own timer: every two seconds for a linked project, otherwise every twenty
+}
+
