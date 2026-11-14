@@ -107,3 +107,37 @@ def test_an_app_that_never_signed_in_does_nothing(tmp_path: Path) -> None:
     syncer.start()
     assert syncer._timer is None and syncer._poller is None and not (tmp_path / "cloud.json").exists()
     assert syncer.status()["signed_in"] is False
+
+
+def signing_in(tmp_path: Path, **choice: bool) -> cloudsync.Syncer:
+    """A computer that signs in, with the server and the keychain played by the test."""
+    import httpx
+
+    def server(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/auth/device/token"
+        return httpx.Response(200, json={"token": "t0ken", "user": {"id": "u1", "email": "ada@example.com"}})
+
+    syncer = cloudsync.Syncer(tmp_path, lambda: tmp_path / "pyhttp.db", transport=httpx.MockTransport(server))
+    syncer.start = lambda: None   # no threads: only what is written down matters here
+    state = dict(p.split("=") for p in syncer.login_url(8765, "Test Mac", **choice).split("?")[1].split("&"))["state"]
+    syncer.login_finish("c0de", state)
+    return syncer
+
+
+def test_a_new_sign_in_syncs_secret_values_unless_that_was_switched_off(tmp_path: Path, monkeypatch) -> None:
+    class NoKeychain:
+        SecretStoreError = cloudsync.secretstore.SecretStoreError
+
+        @staticmethod
+        def put(name: str, value: str) -> None:
+            raise cloudsync.secretstore.SecretStoreError("no keychain in the test")
+
+    monkeypatch.setattr(cloudsync, "secretstore", NoKeychain)
+    assert signing_in(tmp_path / "default").status()["include_secrets"] is True
+    assert signing_in(tmp_path / "opted-out", include_secrets=False).status()["include_secrets"] is False
+
+    # a computer that signed in before the choice existed: nothing goes up that did not before
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "cloud.json").write_text(json.dumps({"server": "https://x", "user": {"id": "u1"}, "token": "t"}), encoding="utf-8")
+    assert cloudsync.Syncer(old, lambda: old / "pyhttp.db").status()["include_secrets"] is False

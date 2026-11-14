@@ -3302,7 +3302,8 @@ async function openCloud() {
   let body;
   if (!s.signed_in) {
     body = `<p>Sign in to keep your projects in step with your pyhttp account: on your other computers, and in the browser at <code>${esc((s.server || '').replace(/^https?:\/\//, ''))}</code>.</p>
-      <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Once signed in, every project on this computer is uploaded to your account and kept in step, and projects already in your account appear here. Values of 🔒 variables stay on this computer unless you switch that on.</p>
+      <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Once signed in, every project on this computer is uploaded to your account and kept in step, and projects already in your account appear here. </p>
+      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of 🔒 variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer. You can change this later, here.</span></span><span class="switch"><input type="checkbox" id="cloud-login-secrets" checked><span></span></span></label>
       <div class="set-actions"><button id="cloud-login" class="primary">Sign in with your browser</button></div>`;
   } else {
     const conflicts = (s.conflicts || []).map((c) => `<div class="cloud-conflict" data-id="${esc(c.id)}">
@@ -3318,7 +3319,7 @@ async function openCloud() {
       ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud (this project)</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
       <div class="set-section"><h4>Projects</h4>${projects || '<span class="muted small">Looking at your account…</span>'}
         <p class="muted small">A project you create, rename or delete here changes in your account and on your other computers too, and the other way round. “Keep only here” takes a project out of your account and leaves it on this computer. A project deleted elsewhere is removed here; a copy of it is kept in the <code>deleted-projects</code> folder of the data folder.</p></div>
-      <label class="switch-row"><span class="txt"><b>Include secret values</b><span class="muted small">Off: values of 🔒 variables go up empty and stay on this computer. On: they are stored in your account, so the web version can use them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
+      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of 🔒 variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer; values already in your account stay there until you change or delete them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
       <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button></div>`;
   }
   const foot = [{ label: 'Close', onClick: closeModal }];
@@ -3327,7 +3328,7 @@ async function openCloud() {
 
   if (!s.signed_in) {
     $('#cloud-login').addEventListener('click', async () => {
-      try { await api('/cloud/login', { method: 'POST' }); } catch (e) { toast(e.message, 'error'); return; }
+      try { await api('/cloud/login', { method: 'POST', body: { include_secrets: $('#cloud-login-secrets').checked } }); } catch (e) { toast(e.message, 'error'); return; }
       $('#cloud-login').disabled = true;
       $('#cloud-login').textContent = 'Waiting for your browser…';
       const until = Date.now() + 5 * 60 * 1000;

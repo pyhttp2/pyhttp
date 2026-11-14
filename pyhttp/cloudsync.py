@@ -408,10 +408,12 @@ class Syncer:
             raise CloudError(str((data or {}).get("detail") or f"The pyhttp cloud answered {response.status_code}"))
         return data
 
-    def login_url(self, port: int, device_name: str) -> str:
-        """Where the browser goes to sign this computer in; it comes back to /api/cloud/callback."""
+    def login_url(self, port: int, device_name: str, include_secrets: bool = True) -> str:
+        """Where the browser goes to sign this computer in; it comes back to /api/cloud/callback.
+        ``include_secrets`` is what the person chose before signing in: values of secret
+        variables sync too (the default), or go up empty and stay on this computer."""
         verifier = secrets.token_urlsafe(48)
-        self._login = {"state": secrets.token_urlsafe(24), "verifier": verifier}
+        self._login = {"state": secrets.token_urlsafe(24), "verifier": verifier, "include_secrets": bool(include_secrets)}
         query = {"port": port, "state": self._login["state"], "challenge": hashlib.sha256(verifier.encode()).hexdigest(), "name": device_name[:80]}
         return f"{self.server()}/api/auth/device?{urlencode(query)}"
 
@@ -420,7 +422,10 @@ class Syncer:
         if not pending or not secrets.compare_digest(pending.get("state", ""), state or ""):
             raise CloudError("That sign-in did not start here. Click Sign in again.")
         data = self._call("POST", "/api/auth/device/token", {"code": code, "verifier": pending["verifier"]}, authed=False)
-        account: dict[str, Any] = {"server": self.server(), "user": data["user"]}
+        # (an account file written before this choice existed has no "include_secrets": that
+        # computer keeps its secret values to itself until the switch is turned on by hand)
+        account: dict[str, Any] = {"server": self.server(), "user": data["user"],
+                                   "include_secrets": bool(pending.get("include_secrets", True))}
         try:   # the token belongs in the system keychain; a plain file only when there is none
             secretstore.put(self.keychain_name, data["token"])
             account["keychain"] = True
@@ -511,7 +516,8 @@ class Syncer:
                     conn.commit()
                 else:
                     enqueue_everything(conn)
-                set_meta(conn, project=cloud_id, project_name=project_name, cursor=0, secrets="0", error="")
+                set_meta(conn, project=cloud_id, project_name=project_name, cursor=0, error="",
+                         secrets="1" if self.account().get("include_secrets") else "0")
             finally:
                 conn.close()
             self.start()

@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1642,9 +1642,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         return cloud.status(full)
 
     @app.post("/api/cloud/login")
-    def cloud_login(request: Request) -> dict[str, Any]:
+    def cloud_login(request: Request, body: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
         port = int((request.scope.get("server") or ("", 0))[1] or request.url.port or 0)
-        url = cloud.login_url(port, platform.node() or "this computer")
+        # secret values sync unless the person switched that off before signing in
+        url = cloud.login_url(port, platform.node() or "this computer", include_secrets=bool((body or {}).get("include_secrets", True)))
         webbrowser.open(url)
         return {"url": url}
 

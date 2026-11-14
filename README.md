@@ -166,7 +166,10 @@ only on `127.0.0.1`.
   account and leaves it on this computer. A request changed on both sides is never
   overwritten: you choose *Keep mine* or *Take the cloud's*. Requests, folders, environments,
   variables, mocks, cookies and history sync; settings, monitors and run results stay on the
-  computer. Values of 🔒 variables stay local unless you switch *Include secret values* on.
+  computer. Values of 🔒 variables sync too, so your other computers and the web app can use
+  them; switch *Sync secret values too* off, before signing in or any time after, and they go up
+  empty and stay on the computer. (A computer signed in before this became the default keeps
+  them local until you switch it on.)
   Nothing is sent anywhere until you sign in.
 - **Share with a link**: with cloud sync on, right-click a request or a folder (or open the
   project menu) → *Share link…*. Whoever has the link sees the current version in the browser and
