@@ -2036,6 +2036,7 @@ function openReqMenu(r, anchor, at) {
   openMenu('r:' + r.id, anchor, at, [
     { act: 'dup', icon: '⧉', label: 'Duplicate', run: () => duplicateRequestById(r.id) },
     { act: 'move', icon: '↪', label: 'Move to folder…', run: () => moveRequestDialog(r) },
+    { act: 'share', icon: '🔗', label: 'Share link…', run: () => shareDialog('request', r.id, r.name) },
     '-',
     { act: 'del', icon: '🗑', label: 'Delete', danger: true, run: () => deleteRequestById(r.id, r.name) },
   ]);
@@ -2050,6 +2051,7 @@ function openFolderMenu(f, anchor, at) {
     { act: 'export', icon: '🚀', label: 'Export as Postman collection', run: () => exportPostman(false, f.id) },
     { act: 'docs', icon: '📄', label: 'Export documentation (Markdown)', run: () => exportDocs(f.id) },
     { act: 'docs-html', icon: '🌐', label: 'Export documentation (HTML page)', run: () => exportDocs(f.id, 'html') },
+    { act: 'share', icon: '🔗', label: 'Share link…', run: () => shareDialog('folder', f.id, f.name) },
     '-',
     { act: 'rename', icon: '✎', label: 'Rename', run: () => renameFolder(f) },
     { act: 'move', icon: '↪', label: 'Move to…', run: () => moveFolderDialog(f) },
@@ -2272,6 +2274,7 @@ function openProjectMenu(anchor) {
   const others = projectsInfo.projects.filter((p) => p.id !== cur);
   items.push('-', { act: 'new', icon: '＋', label: 'New project…', run: createProjectDialog });
   items.push({ act: 'rename', icon: '✎', label: `Rename “${currentProject().name}”…`, run: renameProjectDialog });
+  items.push({ act: 'share', icon: '🔗', label: `Share “${currentProject().name}” with a link…`, run: () => shareDialog('project', '', currentProject().name) });
   if (others.length) {
     items.push('-');
     others.forEach((p) => items.push({ act: 'del:' + p.id, icon: '🗑', label: `Delete “${p.name}”…`, danger: true, run: () => deleteProjectDialog(p) }));

@@ -1651,6 +1651,21 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             cloud.set_include_secrets(bool(body["include_secrets"]))
         return cloud.status()
 
+    @app.get("/api/cloud/shares")
+    def cloud_shares() -> dict[str, Any]:
+        """The share links of this project (``available`` is false while it does not sync)."""
+        return _cloudy(cloud.shares)
+
+    @app.post("/api/cloud/shares")
+    def cloud_share(body: dict[str, Any]) -> dict[str, Any]:
+        """A link to ``kind`` (project, folder or request) with the id ``target``."""
+        return _cloudy(lambda: cloud.share(str(body.get("kind") or ""), str(body.get("target") or "")))
+
+    @app.delete("/api/cloud/shares/{token}")
+    def cloud_unshare(token: str) -> dict[str, Any]:
+        _cloudy(lambda: cloud.unshare(token))
+        return {"ok": True}
+
     @app.get("/api/export/docs")
     def export_docs(folder_id: str = Query(""), name: str = Query(""), format: str = Query("md")) -> dict[str, Any]:
         """The collection (or one folder) as documentation: Markdown, or with ``format=html`` a

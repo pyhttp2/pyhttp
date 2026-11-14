@@ -19,6 +19,9 @@ What syncs: requests, folders, environments, variables, mock servers and their r
 cookies and the request history. What does not: settings (they belong to a computer),
 monitors (each side runs its own), run results (their files stay where the run happened).
 
+A synced project, a folder in it or a single request can be shared with a link (``share``):
+whoever has the link sees the current version in the browser and can take a copy.
+
 Values of variables marked secret stay on this computer unless *Include secret values* is
 switched on: they go up empty, and an empty one coming down never overwrites a value here.
 
@@ -83,7 +86,9 @@ def install(conn: sqlite3.Connection) -> None:
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS _cloud_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, tbl TEXT NOT NULL, pk TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS _cloud_meta (k TEXT PRIMARY KEY, v TEXT);"
-        "CREATE TABLE IF NOT EXISTS _cloud_conflicts (id TEXT PRIMARY KEY, tbl TEXT NOT NULL, pk TEXT NOT NULL, cloud TEXT, n INTEGER, at REAL);")
+        "CREATE TABLE IF NOT EXISTS _cloud_conflicts (id TEXT PRIMARY KEY, tbl TEXT NOT NULL, pk TEXT NOT NULL, cloud TEXT, n INTEGER, at REAL);"
+        # what this computer sent and has not yet seen come back: (row id, the change number the cloud gave it)
+        "CREATE TABLE IF NOT EXISTS _cloud_sent (id TEXT PRIMARY KEY, n INTEGER NOT NULL);")
     for table in _tables(conn):
         keys = _key_columns(conn, table)
         new = "json_array(" + ", ".join(f'NEW."{c}"' for c in keys) + ")"
@@ -100,7 +105,7 @@ def uninstall(conn: sqlite3.Connection) -> None:
     """Back to a database that knows nothing of the cloud (the project is no longer linked)."""
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '\\_cloud\\_%' ESCAPE '\\'").fetchall():
         conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
-    for table in ("_cloud_changes", "_cloud_meta", "_cloud_conflicts"):
+    for table in ("_cloud_changes", "_cloud_meta", "_cloud_conflicts", "_cloud_sent"):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.commit()
 
@@ -432,6 +437,28 @@ class Syncer:
                 conn.close()
         self.touch()
 
+    # ------------------------------------------------------------- share links
+    # A link to this project, a folder or one request, readable by whoever has it. Only for a
+    # project that syncs: the link shows what is in the cloud.
+    def _cloud_project(self) -> str:
+        pid = self._linked_project()[0] if self.signed_in() else ""
+        if not pid:
+            raise CloudError("Sharing works for a project that syncs with the cloud. Open Cloud sync, sign in and upload this project first.")
+        return pid
+
+    def shares(self) -> dict[str, Any]:
+        if not self.signed_in() or not self._linked_project()[0]:
+            return {"available": False, "shares": []}
+        return self._call("GET", f"/api/sync/{self._cloud_project()}/shares")
+
+    def share(self, kind: str, target: str = "") -> dict[str, Any]:
+        pid = self._cloud_project()
+        self.sync()   # what is shared must be in the cloud, as it is now
+        return self._call("POST", f"/api/sync/{pid}/shares", {"kind": kind, "target": target})
+
+    def unshare(self, token: str) -> None:
+        self._call("DELETE", f"/api/sync/{self._cloud_project()}/shares/{token}")
+
     # -------------------------------------------------------------------- sync
     def sync(self) -> dict[str, Any]:
         """One round for the open project. Errors are kept for the status and raised."""
@@ -461,12 +488,15 @@ class Syncer:
         outgoing = (lambda t, d: d) if secrets_too else without_secrets
         upto, pending = take(conn)
         conflicted = {r["id"] for r in conn.execute("SELECT id FROM _cloud_conflicts")}
+        sent = {r["id"]: r["n"] for r in conn.execute("SELECT id, n FROM _cloud_sent")}
         changed = False
 
         while True:   # what changed elsewhere
             got = self._call("POST", f"/api/sync/{pid}/pull", {"cursor": cursor})
             incoming = []
             for row in got["rows"]:
+                if sent.get(row["id"]) == row["n"]:
+                    continue   # what this computer sent itself, coming back: not news, and no conflict with a later edit here
                 theirs = from_wire(row["d"])
                 mine = pending.get(row["id"])
                 if mine is not None and outgoing(mine["t"], mine["d"]) == theirs:
@@ -488,6 +518,8 @@ class Syncer:
             set_meta(conn, cursor=cursor)
             if not got.get("more"):
                 break
+        conn.execute("DELETE FROM _cloud_sent WHERE n <= ?", (cursor,))
+        conn.commit()
 
         mine = [i for i in pending.values() if i["id"] not in conflicted]   # what changed here
         for start in range(0, len(mine), PUSH_ROWS):
@@ -496,10 +528,17 @@ class Syncer:
                 "cursor": cursor, "rows": [{"t": i["t"], "k": i["k"], "d": to_wire(outgoing(i["t"], i["d"]))} for i in chunk]})
             for c in answer.get("conflicts") or []:   # changed in the cloud between our pull and this push
                 self._conflict(conn, c["id"], c["t"], c["k"], from_wire(c["d"]), c["n"])
+            self._remember_sent(conn, answer)
         if upto:
             conn.execute("DELETE FROM _cloud_changes WHERE seq <= ?", (upto,))
             conn.commit()
         return changed
+
+    @staticmethod
+    def _remember_sent(conn: sqlite3.Connection, answer: dict[str, Any]) -> None:
+        conn.executemany("INSERT OR REPLACE INTO _cloud_sent (id, n) VALUES (?, ?)",
+                         [(a["id"], int(a["n"])) for a in answer.get("accepted") or [] if a.get("n") is not None])
+        conn.commit()
 
     @staticmethod
     def _conflict(conn: sqlite3.Connection, rid: str, table: str, pk: str, cloud: dict[str, Any] | None, n: int) -> None:
@@ -528,8 +567,8 @@ class Syncer:
                 else:
                     outgoing = (lambda t, d: d) if m.get("secrets") == "1" else without_secrets
                     row = outgoing(c["tbl"], _row(conn, c["tbl"], c["pk"]))
-                    self._call("POST", f"/api/sync/{m['project']}/push", {
-                        "cursor": int(m.get("cursor") or 0), "force": [rid], "rows": [{"t": c["tbl"], "k": c["pk"], "d": to_wire(row)}]})
+                    self._remember_sent(conn, self._call("POST", f"/api/sync/{m['project']}/push", {
+                        "cursor": int(m.get("cursor") or 0), "force": [rid], "rows": [{"t": c["tbl"], "k": c["pk"], "d": to_wire(row)}]}))
                 conn.execute("DELETE FROM _cloud_conflicts WHERE id = ?", (rid,))
                 conn.commit()
             finally:

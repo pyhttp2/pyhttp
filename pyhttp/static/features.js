@@ -3360,6 +3360,61 @@ async function openCloud() {
   }
 }
 
+// ------------------------------------------------------------- share links
+// A link to the project, a folder or one request. It needs the project to be in the cloud:
+// on the web it always is, in the desktop app it is once the project syncs.
+async function shareDialog(kind, target, name) {
+  let info;
+  try { info = await api('/cloud/shares'); } catch (e) { toast(e.message, 'error'); return; }
+  const what = kind === 'project' ? 'project' : kind;
+  if (!info.available) {
+    openModal('Share with a link', `<div id="share-box"><p>A link shows what is in the cloud, so sharing works for a project that syncs.</p>
+      <p class="muted small">Open Cloud sync, sign in and upload this project. After that, share the project, a folder or a single request from their menus.</p></div>`,
+    [{ label: 'Open Cloud sync', cls: 'primary', onClick: openCloud }, { label: 'Close', onClick: closeModal }]);
+    return;
+  }
+  const again = () => shareDialog(kind, target, name);
+  const mine = info.shares.find((s) => s.kind === kind && (s.target || '') === (target || ''));
+  const others = info.shares.filter((s) => s !== mine);
+  const row = (s) => `<div class="cloud-conflict"><span class="grow"><b>${esc(s.name || s.kind)}</b> <span class="muted small">${esc(s.kind)}</span></span>
+      <button data-copy-link="${esc(s.url)}">Copy link</button><button data-stop="${esc(s.token)}">Stop sharing</button></div>`;
+  const body = `<div id="share-box">
+    ${mine ? `<p>Anyone with this link can see the ${what} <b>${esc(name)}</b> and take a copy.</p>
+      <div class="share-link"><input id="share-url" readonly value="${esc(mine.url)}"><button id="share-copy" class="primary">Copy link</button></div>
+      <div class="set-actions"><button id="share-stop" class="danger">Stop sharing</button></div>`
+    : `<p>Create a link to the ${what} <b>${esc(name)}</b>. Anyone who has the link can see it in the browser and take a copy, without an account.</p>
+      <div class="set-actions"><button id="share-create" class="primary">Create link</button></div>`}
+    <p class="muted small">The link always shows the current version${kind === 'folder' ? ', with everything inside the folder' : ''}. Values of 🔒 variables are left out.
+      Anything typed straight into a request (a token in a header, a password under Auth) is visible, so keep those in 🔒 variables.${kind === 'project' ? ' Environments and global variables are included; history, cookies, mocks and monitors are not.' : ''}</p>
+    ${others.length ? `<div class="set-section"><h4>Other links in this project</h4>${others.map(row).join('')}</div>` : ''}
+  </div>`;
+  openModal('Share with a link', body, [{ label: 'Close', onClick: closeModal }]);
+  const copy = async (url) => { if (await copyText(url)) toast('Link copied', 'ok'); else toast('Could not copy. Select the link and copy it.', 'error'); };
+  const stop = async (token) => {
+    const ok = await confirmDialog('Stop sharing', 'The link stops working for everyone who has it. Copies people already took stay with them.', { okLabel: 'Stop sharing', danger: true });
+    if (!ok) { again(); return; }
+    try { await api('/cloud/shares/' + encodeURIComponent(token), { method: 'DELETE' }); toast('The link no longer works', 'ok'); } catch (e) { toast(e.message, 'error'); }
+    again();
+  };
+  if (mine) {
+    $('#share-url').addEventListener('focus', (e) => e.target.select());
+    $('#share-copy').addEventListener('click', () => copy(mine.url));
+    $('#share-stop').addEventListener('click', () => stop(mine.token));
+  } else {
+    $('#share-create').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        if (typeof saveNow === 'function') await saveNow();   // the link shows what is saved
+        const made = await api('/cloud/shares', { method: 'POST', body: { kind, target } });
+        if (await copyText(made.url)) toast('Link created and copied', 'ok');
+      } catch (err) { toast(err.message, 'error'); }
+      if ($('#share-box')) again();
+    });
+  }
+  $$('#share-box [data-copy-link]').forEach((b) => b.addEventListener('click', () => copy(b.dataset.copyLink)));
+  $$('#share-box [data-stop]').forEach((b) => b.addEventListener('click', () => stop(b.dataset.stop)));
+}
+
 function initCloud() {
   const btn = $('#btn-cloud');
   if (!btn) return;
