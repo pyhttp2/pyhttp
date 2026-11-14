@@ -1692,7 +1692,12 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     def cloud_settings(body: dict[str, Any]) -> dict[str, Any]:
         if "include_secrets" in body:
             cloud.set_include_secrets(bool(body["include_secrets"]))
-        return cloud.status()
+        if isinstance(body.get("local_only"), dict):   # {project, on}: keep that project on this computer only
+            pid = str(body["local_only"].get("project") or "")
+            if registry.get(pid) is None:
+                raise HTTPException(404, "Project not found")
+            cloud.set_local_only(pid, bool(body["local_only"].get("on")))
+        return cloud.status(True)
 
     @app.get("/api/cloud/shares")
     def cloud_shares() -> dict[str, Any]:

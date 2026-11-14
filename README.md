@@ -162,7 +162,8 @@ only on `127.0.0.1`.
   The list of projects syncs too: create, rename or delete a project on one side and the other
   follows, under the same name (a project deleted elsewhere leaves a copy in `deleted-projects`
   in the data folder). When a project here meets a different one of the same name in the account,
-  this computer's is renamed *Name (computer)*. A request changed on both sides is never
+  this computer's is renamed *Name (computer)*. *Keep only here* takes one project out of the
+  account and leaves it on this computer. A request changed on both sides is never
   overwritten: you choose *Keep mine* or *Take the cloud's*. Requests, folders, environments,
   variables, mocks, cookies and history sync; settings, monitors and run results stay on the
   computer. Values of 🔒 variables stay local unless you switch *Include secret values* on.

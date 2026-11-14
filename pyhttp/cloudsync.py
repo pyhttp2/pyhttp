@@ -32,7 +32,8 @@ another computer appears here, a rename or a delete on one side happens on the o
 two sides always call a project by the same name. When a project here meets a different one
 of the same name in the account (both hold requests), this computer's is renamed
 "Name (computer)". A project deleted elsewhere is removed here after a copy of its database
-is put in ``deleted-projects`` in the data folder.
+is put in ``deleted-projects`` in the data folder. A project can be kept on this computer only
+(``set_local_only``): it is taken out of the account and left alone from then on.
 
 Nothing here runs until the user signs in.
 """
@@ -453,6 +454,7 @@ class Syncer:
             for p in self.projects.list():
                 info = link_info(self.projects.path(p["id"]))
                 listed.append({"id": p["id"], "name": p["name"], "linked": info is not None, "pending": (info or {}).get("pending", 0),
+                               "local_only": p["id"] in self._local_only(),
                                "last_sync": float((info or {}).get("last_sync") or 0), "error": (info or {}).get("error") or ""})
             out["projects"] = listed
         try:
@@ -704,7 +706,11 @@ class Syncer:
         by_id = {r["id"]: r for r in remote}
         mark = self._computer()
         local: dict[str, tuple[dict[str, Any], Path, dict[str, Any] | None]] = {}
+        only_here = self._local_only()
+        kept_names = {p["name"].strip().lower() for p in self.projects.list() if p["id"] in only_here}
         for p in self.projects.list():
+            if p["id"] in only_here:
+                continue   # the user keeps it on this computer
             path = self.projects.path(p["id"])
             info = link_info(path)
             if info and info.get("user") and info["user"] != user_id:   # paired under another account
@@ -724,7 +730,7 @@ class Syncer:
 
         # 2. names: a rename on one side happens on the other
         def names_taken() -> set[str]:
-            return {r["name"].strip().lower() for r in remote} | {q["name"].strip().lower() for q, _, _ in local.values()}
+            return {r["name"].strip().lower() for r in remote} | {q["name"].strip().lower() for q, _, _ in local.values()} | kept_names
 
         for pid, (p, path, info) in local.items():
             if not info or info["project"] not in by_id:
@@ -824,6 +830,27 @@ class Syncer:
             if info and info["project"] == cloud_id:
                 return path, p["id"] == current
         return None
+
+    def _local_only(self) -> set[str]:
+        return {str(p) for p in self.account().get("local_only") or []}
+
+    def set_local_only(self, pid: str, on: bool) -> None:
+        """``on``: the project stays on this computer and leaves the account (and with it the
+        user's other computers and the web). Off: it syncs again, as a project new to the account."""
+        with self._lock:
+            account = dict(self.account())
+            kept = self._local_only()
+            if on and pid not in kept:
+                cloud_id = self.cloud_id_of(pid)
+                if cloud_id:
+                    self._unlink_path(self.projects.path(pid))
+                    account["deleted"] = [*(account.get("deleted") or []), cloud_id]
+                kept.add(pid)
+            elif not on:
+                kept.discard(pid)
+            account["local_only"] = sorted(kept)
+            self._save_account(account)
+        self.touch_projects()
 
     def cloud_id_of(self, pid: str) -> str:
         """The account's id of a project here ("" when it is not paired)."""

@@ -3308,15 +3308,16 @@ async function openCloud() {
     const conflicts = (s.conflicts || []).map((c) => `<div class="cloud-conflict" data-id="${esc(c.id)}">
         <span class="grow"><b>${esc(c.name)}</b> <span class="muted small">${esc(c.table.replace('_', ' '))}${c.deleted_in_cloud ? ' · deleted in the cloud' : ''}${c.deleted_here ? ' · deleted here' : ''}</span></span>
         <button data-keep="mine">Keep mine</button><button data-keep="cloud">Take the cloud's</button></div>`).join('');
-    const state = (p) => (p.error ? `<span class="error-text">${esc(p.error)}</span>`
+    const state = (p) => (p.local_only ? 'only on this computer' : p.error ? `<span class="error-text">${esc(p.error)}</span>`
       : !p.linked ? 'on its way to your account…'
         : p.pending ? `${p.pending} change${p.pending === 1 ? '' : 's'} waiting to go up` : `in step · ${esc(cloudWhen(p.last_sync))}`);
-    const projects = (s.projects || []).map((p) => `<div class="cloud-conflict"><span class="grow"><b>${esc(p.name)}</b></span><span class="muted small">${state(p)}</span></div>`).join('');
+    const projects = (s.projects || []).map((p) => `<div class="cloud-conflict"><span class="grow"><b>${esc(p.name)}</b> <span class="muted small">${state(p)}</span></span>
+        <button data-only="${esc(p.id)}" data-name="${esc(p.name)}" data-on="${p.local_only ? '' : '1'}">${p.local_only ? 'Sync this project' : 'Keep only here'}</button></div>`).join('');
     body = `<p>Signed in as <b>${esc(s.user.email)}</b>. Every project on this computer syncs with your account, by itself.</p>
       ${s.account_error ? `<p class="error-text">${esc(s.account_error)}</p>` : ''}
       ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud (this project)</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
       <div class="set-section"><h4>Projects</h4>${projects || '<span class="muted small">Looking at your account…</span>'}
-        <p class="muted small">A project you create, rename or delete here changes in your account and on your other computers too, and the other way round. A project deleted elsewhere is removed here; a copy of it is kept in the <code>deleted-projects</code> folder of the data folder.</p></div>
+        <p class="muted small">A project you create, rename or delete here changes in your account and on your other computers too, and the other way round. “Keep only here” takes a project out of your account and leaves it on this computer. A project deleted elsewhere is removed here; a copy of it is kept in the <code>deleted-projects</code> folder of the data folder.</p></div>
       <label class="switch-row"><span class="txt"><b>Include secret values</b><span class="muted small">Off: values of 🔒 variables go up empty and stay on this computer. On: they are stored in your account, so the web version can use them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
       <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button></div>`;
   }
@@ -3340,6 +3341,12 @@ async function openCloud() {
     });
   } else {
     $('#cloud-sync').addEventListener('click', () => act(() => api('/cloud/sync', { method: 'POST' }), 'Synced'));
+    $$('#cloud-box [data-only]').forEach((b) => b.addEventListener('click', async () => {
+      const on = Boolean(b.dataset.on);
+      const ok = !on || await confirmDialog('Keep only on this computer', `“${b.dataset.name}” stays here as it is and stops syncing. It is removed from your pyhttp account, from the web app and from your other computers, and its share links stop working.`, { okLabel: 'Keep only here', danger: true });
+      if (ok) act(() => api('/cloud/settings', { method: 'PUT', body: { local_only: { project: b.dataset.only, on } } }), on ? 'This project now stays on this computer' : 'This project syncs again');
+      else openCloud();
+    }));
     $('#cloud-secrets').addEventListener('change', (e) => act(() => api('/cloud/settings', { method: 'PUT', body: { include_secrets: e.target.checked } })));
     $$('.cloud-conflict [data-keep]').forEach((b) => b.addEventListener('click', () => act(async () => {
       await api('/cloud/resolve', { method: 'POST', body: { id: b.closest('.cloud-conflict').dataset.id, keep: b.dataset.keep } });
