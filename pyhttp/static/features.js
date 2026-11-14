@@ -3331,7 +3331,10 @@ async function openCloud() {
       }, 2000);
     });
   } else if (!s.linked) {
-    $('#cloud-upload').addEventListener('click', () => act(() => api('/cloud/link', { method: 'POST', body: { mode: 'upload' } }), 'This project is now in your account'));
+    $('#cloud-upload').addEventListener('click', () => act(async () => {
+      const now = await api('/cloud/link', { method: 'POST', body: { mode: 'upload' } });
+      toast(`This project is now in your account as “${now.project_name || 'a new project'}”. On the web, open that project to see it.`, 'ok');
+    }));
     api('/cloud/projects').then(({ projects }) => {
       const box = $('#cloud-remote');
       if (!box) return;

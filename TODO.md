@@ -1,4 +1,5 @@
 # pyhttp — ideas, optimizations and open work
+- different git repo url for each project
 
 Status: `[x]` done · `[~]` in progress · `[ ]` open. Newest decisions at the top of each
 section. Keep this file honest: when an item ships, tick it and say where (file or release).
