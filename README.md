@@ -157,12 +157,19 @@ only on `127.0.0.1`.
   pulled back in when a teammate pushes — share a collection without a cloud account. See
   *Git sync* below.
 - **Cloud sync** (topbar → Cloud, optional): sign in with GitHub or Google in your browser and
-  link a project to your pyhttp account. Edits go up a few seconds after the last one, and what
-  you change on another computer or in the web app at `app.pyhttp.com` comes down. A request
-  changed on both sides is never overwritten: you choose *Keep mine* or *Take the cloud's*.
-  Requests, folders, environments, variables, mocks, cookies and history sync; settings,
-  monitors and run results stay on the computer. Values of 🔒 variables stay local unless you
-  switch *Include secret values* on. Nothing is sent anywhere until you sign in and link a project.
+  every project syncs with your pyhttp account, by itself. Edits go up a second after the last
+  one, and what you change on another computer or in the web app at `app.pyhttp.com` comes down.
+  The list of projects syncs too: create, rename or delete a project on one side and the other
+  follows, under the same name (a project deleted elsewhere leaves a copy in `deleted-projects`
+  in the data folder). When a project here meets a different one of the same name in the account,
+  this computer's is renamed *Name (computer)*. A request changed on both sides is never
+  overwritten: you choose *Keep mine* or *Take the cloud's*. Requests, folders, environments,
+  variables, mocks, cookies and history sync; settings, monitors and run results stay on the
+  computer. Values of 🔒 variables stay local unless you switch *Include secret values* on.
+  Nothing is sent anywhere until you sign in.
+- **Share with a link**: with cloud sync on, right-click a request or a folder (or open the
+  project menu) → *Share link…*. Whoever has the link sees the current version in the browser and
+  can take a copy; values of 🔒 variables are left out. *Stop sharing* ends the link.
 - **WebSocket client**: give a request a `ws://` or `wss://` address (written out, or through a
   variable such as `{{events_url}}/orders`) and Send becomes **Connect**. The response area turns into a console: a live log of messages in both
   directions (click a JSON message to pretty-print it), a filter, Ping, and a box to send

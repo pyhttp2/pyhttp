@@ -3222,20 +3222,21 @@ document.addEventListener('DOMContentLoaded', initWs);
 document.addEventListener('DOMContentLoaded', wsLoadGlobals);
 
 // ------------------------------------------------------------------ cloud sync
-// Sign this computer in to a pyhttp account (in the browser) and link the open project to a
-// project there: edits go up a few seconds after the last one, changes made elsewhere come
-// down, and a request changed on both sides is shown as a conflict to settle.
-const cloud = { status: null, seen: null, timer: null };
+// Sign this computer in to a pyhttp account (in the browser). From then on every project
+// syncs: edits go up a second after the last one, changes made elsewhere come down, projects
+// made, renamed or deleted on one side follow on the other, and a request changed on both
+// sides is shown as a conflict to settle.
+const cloud = { status: null, seen: null, timer: null, projectsAt: null };
 
 function paintCloud() {
   const s = cloud.status || {};
   const dot = $('#cloud-dot');
-  const bad = s.linked && (s.error || (s.conflicts || []).length);
-  dot.hidden = !s.signed_in || !s.linked;
+  const bad = s.account_error || (s.linked && (s.error || (s.conflicts || []).length));
+  dot.hidden = !s.signed_in;
   dot.className = 'git-dot ' + (bad ? 'err' : 'ok');
-  $('#btn-cloud').title = !s.signed_in ? 'Cloud sync: sign in to keep this project on your other computers and on the web'
-    : !s.linked ? 'Cloud sync: signed in; this project is not synced'
-      : bad ? `Cloud sync: ${s.error || 'a change needs your decision'}` : `Cloud sync: in step with “${s.project_name}”`;
+  $('#btn-cloud').title = !s.signed_in ? 'Cloud sync: sign in to keep your projects on your other computers and on the web'
+    : bad ? `Cloud sync: ${s.account_error || s.error || 'a change needs your decision'}`
+      : !s.linked ? 'Cloud sync: signed in; this project is on its way to your account' : 'Cloud sync: your projects are in step with your account';
 }
 
 // Rows of this project were changed outside this window (another computer or the web app,
@@ -3263,11 +3264,19 @@ async function remoteChanged(rows) {
 async function refreshCloud() {
   try { cloud.status = await api('/cloud'); } catch { return cloud.status; }
   paintCloud();
+  // sync created, renamed or removed a project here: the menu shows it; when the open one is gone, start over
+  const listAt = cloud.status.projects_at || 0;
+  if (cloud.projectsAt !== null && listAt > cloud.projectsAt) {
+    const was = projectsInfo.current;
+    await loadProjects();
+    if (projectsInfo.current !== was) { location.reload(); return cloud.status; }
+  }
+  cloud.projectsAt = listAt;
   const at = cloud.status.applied_at || 0;
   if (cloud.seen !== null && at > cloud.seen) remoteChanged(cloud.status.applied_rows || []);
   cloud.seen = at;
   // this app's own backend, on this computer: asking every two seconds while a project is linked costs nothing
-  const every = cloud.status.linked ? 2000 : 20000;
+  const every = cloud.status.signed_in ? 2000 : 20000;
   if (every !== cloud.every) {
     clearInterval(cloud.timer);
     cloud.every = every;
@@ -3283,34 +3292,33 @@ function cloudWhen(ts) {
 }
 
 async function openCloud() {
-  const s = await refreshCloud() || {};
+  await refreshCloud();
+  let s = cloud.status || {};
+  if (s.signed_in) { try { s = await api('/cloud?full=1'); } catch { /* the short status will do */ } }
   const act = async (fn, okMsg) => {
     try { await fn(); if (okMsg) toast(okMsg, 'ok'); } catch (e) { toast(e.message, 'error'); }
     if (!$('#modal').hidden && $('#cloud-box')) openCloud();
   };
   let body;
   if (!s.signed_in) {
-    body = `<p>Sign in to keep this project in step with your pyhttp account: on your other computers, and in the browser at <code>${esc((s.server || '').replace(/^https?:\/\//, ''))}</code>.</p>
-      <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Nothing leaves this computer until you link a project.</p>
+    body = `<p>Sign in to keep your projects in step with your pyhttp account: on your other computers, and in the browser at <code>${esc((s.server || '').replace(/^https?:\/\//, ''))}</code>.</p>
+      <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Once signed in, every project on this computer is uploaded to your account and kept in step, and projects already in your account appear here. Values of 🔒 variables stay on this computer unless you switch that on.</p>
       <div class="set-actions"><button id="cloud-login" class="primary">Sign in with your browser</button></div>`;
-  } else if (!s.linked) {
-    body = `<p>Signed in as <b>${esc(s.user.email)}</b>. This project is not synced yet.</p>
-      <div class="set-section"><h4>Put this project in the cloud</h4>
-        <p class="muted small">It becomes a new project in your account. Values of 🔒 variables stay on this computer unless you switch that on afterwards.</p>
-        <div class="set-actions"><button id="cloud-upload" class="primary">Upload this project</button></div></div>
-      <div class="set-section"><h4>Or load a project from the cloud</h4>
-        <p class="muted small">It replaces the requests, folders, environments, variables, mocks, cookies and history of the project that is open now.</p>
-        <div id="cloud-remote" class="muted small">Looking at your account…</div></div>`;
   } else {
     const conflicts = (s.conflicts || []).map((c) => `<div class="cloud-conflict" data-id="${esc(c.id)}">
         <span class="grow"><b>${esc(c.name)}</b> <span class="muted small">${esc(c.table.replace('_', ' '))}${c.deleted_in_cloud ? ' · deleted in the cloud' : ''}${c.deleted_here ? ' · deleted here' : ''}</span></span>
         <button data-keep="mine">Keep mine</button><button data-keep="cloud">Take the cloud's</button></div>`).join('');
-    body = `<p>Signed in as <b>${esc(s.user.email)}</b>. This project syncs with <b>${esc(s.project_name)}</b>.</p>
-      ${s.error ? `<p class="error-text">${esc(s.error)}</p>` : ''}
-      <p class="muted small">Last sync: ${esc(cloudWhen(s.last_sync))}${s.pending ? ` · ${s.pending} change${s.pending === 1 ? '' : 's'} waiting to go up` : ''}</p>
-      ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
+    const state = (p) => (p.error ? `<span class="error-text">${esc(p.error)}</span>`
+      : !p.linked ? 'on its way to your account…'
+        : p.pending ? `${p.pending} change${p.pending === 1 ? '' : 's'} waiting to go up` : `in step · ${esc(cloudWhen(p.last_sync))}`);
+    const projects = (s.projects || []).map((p) => `<div class="cloud-conflict"><span class="grow"><b>${esc(p.name)}</b></span><span class="muted small">${state(p)}</span></div>`).join('');
+    body = `<p>Signed in as <b>${esc(s.user.email)}</b>. Every project on this computer syncs with your account, by itself.</p>
+      ${s.account_error ? `<p class="error-text">${esc(s.account_error)}</p>` : ''}
+      ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud (this project)</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
+      <div class="set-section"><h4>Projects</h4>${projects || '<span class="muted small">Looking at your account…</span>'}
+        <p class="muted small">A project you create, rename or delete here changes in your account and on your other computers too, and the other way round. A project deleted elsewhere is removed here; a copy of it is kept in the <code>deleted-projects</code> folder of the data folder.</p></div>
       <label class="switch-row"><span class="txt"><b>Include secret values</b><span class="muted small">Off: values of 🔒 variables go up empty and stay on this computer. On: they are stored in your account, so the web version can use them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
-      <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button><button id="cloud-unlink">Stop syncing this project</button></div>`;
+      <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button></div>`;
   }
   const foot = [{ label: 'Close', onClick: closeModal }];
   if (s.signed_in) foot.unshift({ label: 'Sign out', onClick: () => act(() => api('/cloud/logout', { method: 'POST' }), 'Signed out. Your projects stay as they are') });
@@ -3330,28 +3338,8 @@ async function openCloud() {
         }
       }, 2000);
     });
-  } else if (!s.linked) {
-    $('#cloud-upload').addEventListener('click', () => act(async () => {
-      const now = await api('/cloud/link', { method: 'POST', body: { mode: 'upload' } });
-      toast(`This project is now in your account as “${now.project_name || 'a new project'}”. On the web, open that project to see it.`, 'ok');
-    }));
-    api('/cloud/projects').then(({ projects }) => {
-      const box = $('#cloud-remote');
-      if (!box) return;
-      box.classList.remove('muted', 'small');
-      box.innerHTML = projects.length ? projects.map((p) => `<div class="cloud-conflict"><span class="grow">${esc(p.name)}</span><button data-load="${esc(p.id)}" data-name="${esc(p.name)}">Load into this project</button></div>`).join('')
-        : '<span class="muted small">Your account has no projects yet.</span>';
-      $$('[data-load]', box).forEach((b) => b.addEventListener('click', async () => {
-        const ok = await confirmDialog('Load from the cloud', `“${b.dataset.name}” replaces what is in the project that is open now. This cannot be undone.`, { okLabel: 'Replace and load', danger: true });
-        if (ok) act(async () => { await api('/cloud/link', { method: 'POST', body: { mode: 'load', cloud_id: b.dataset.load } }); location.reload(); });
-      }));
-    }).catch((e) => { if ($('#cloud-remote')) $('#cloud-remote').textContent = e.message; });
   } else {
     $('#cloud-sync').addEventListener('click', () => act(() => api('/cloud/sync', { method: 'POST' }), 'Synced'));
-    $('#cloud-unlink').addEventListener('click', async () => {
-      const ok = await confirmDialog('Stop syncing', 'This project stays as it is, here and in the cloud. They are just no longer kept in step.', { okLabel: 'Stop syncing' });
-      if (ok) act(() => api('/cloud/unlink', { method: 'POST' }), 'Sync is off for this project');
-    });
     $('#cloud-secrets').addEventListener('change', (e) => act(() => api('/cloud/settings', { method: 'PUT', body: { include_secrets: e.target.checked } })));
     $$('.cloud-conflict [data-keep]').forEach((b) => b.addEventListener('click', () => act(async () => {
       await api('/cloud/resolve', { method: 'POST', body: { id: b.closest('.cloud-conflict').dataset.id, keep: b.dataset.keep } });
@@ -3368,8 +3356,8 @@ async function shareDialog(kind, target, name) {
   try { info = await api('/cloud/shares'); } catch (e) { toast(e.message, 'error'); return; }
   const what = kind === 'project' ? 'project' : kind;
   if (!info.available) {
-    openModal('Share with a link', `<div id="share-box"><p>A link shows what is in the cloud, so sharing works for a project that syncs.</p>
-      <p class="muted small">Open Cloud sync, sign in and upload this project. After that, share the project, a folder or a single request from their menus.</p></div>`,
+    openModal('Share with a link', `<div id="share-box"><p>A link shows what is in the cloud, so sharing works once this computer is signed in.</p>
+      <p class="muted small">Open Cloud sync and sign in: your projects sync by themselves. After that, share a project, a folder or a single request from their menus.</p></div>`,
     [{ label: 'Open Cloud sync', cls: 'primary', onClick: openCloud }, { label: 'Close', onClick: closeModal }]);
     return;
   }

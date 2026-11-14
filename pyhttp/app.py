@@ -470,7 +470,46 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     current = {"id": project_id}   # the project this app instance has open
     git_payload: dict[str, Any] = {}   # "fn": the export function, defined further down
     git = gitsync.Syncer(lambda: git_payload["fn"]())
-    cloud = cloudsync.Syncer(data_dir, lambda: db.current().path)   # idle until the user signs in and links a project
+    class CloudProjects:
+        """The list of projects, as cloud sync changes it (see cloudsync.Syncer)."""
+
+        @staticmethod
+        def list() -> list[dict[str, Any]]:
+            return [{"id": p["id"], "name": p["name"]} for p in registry.list()]
+
+        @staticmethod
+        def path(pid: str) -> Path:
+            return registry.paths(pid)[0]
+
+        @staticmethod
+        def current() -> str:
+            return current["id"]
+
+        @staticmethod
+        def create(name: str) -> dict[str, Any]:
+            made = registry.create(name)
+            db.seed_database(registry.paths(made["id"])[0], db.app_settings_rows())
+            return made
+
+        @staticmethod
+        def rename(pid: str, name: str) -> None:
+            registry.rename(pid, name)
+
+        @staticmethod
+        def delete(pid: str) -> None:
+            if pid == current["id"]:
+                raise ValueError("the open project cannot be deleted")
+            registry.delete(pid)
+
+        @staticmethod
+        def activate(pid: str) -> None:
+            if registry.get(pid) is None or manager.any_active():
+                raise ValueError("cannot switch projects now")
+            if pid != current["id"]:
+                open_project(pid)
+            registry.set_active(pid)
+
+    cloud = cloudsync.Syncer(data_dir, lambda: db.current().path, CloudProjects)   # idle until the user signs in
     sockets = wsclient.Manager()
 
     @contextlib.asynccontextmanager
@@ -536,7 +575,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         settings = db.app_settings_rows() if body.get("copy_settings", True) else None
         db.seed_database(registry.paths(p["id"])[0], settings)
         if body.get("switch", True):
-            return activate_project(p["id"])
+            answer = activate_project(p["id"])
+            cloud.touch_projects()
+            return answer
+        cloud.touch_projects()
         return {**projects_payload(), "created": p}
 
     @app.post("/api/projects/{pid}/activate")
@@ -558,6 +600,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(404, "Project not found") from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        cloud.touch_projects()
         return projects_payload()
 
     @app.delete("/api/projects/{pid}")
@@ -565,7 +608,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         if pid == current["id"]:
             raise HTTPException(409, "Switch to another project before deleting this one")
         try:
-            registry.delete(pid)
+            cloud.delete_project(pid, lambda: registry.delete(pid))   # with cloud sync on, the account follows
         except KeyError as exc:
             raise HTTPException(404, "Project not found") from exc
         except ValueError as exc:
@@ -1595,8 +1638,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/cloud")
-    def cloud_status() -> dict[str, Any]:
-        return cloud.status()
+    def cloud_status(full: bool = Query(False)) -> dict[str, Any]:
+        return cloud.status(full)
 
     @app.post("/api/cloud/login")
     def cloud_login(request: Request) -> dict[str, Any]:
@@ -1639,7 +1682,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     @app.post("/api/cloud/sync")
     def cloud_sync() -> dict[str, Any]:
-        return _cloudy(cloud.sync)
+        return _cloudy(cloud.sync_all)
 
     @app.post("/api/cloud/resolve")
     def cloud_resolve(body: dict[str, Any]) -> dict[str, Any]:

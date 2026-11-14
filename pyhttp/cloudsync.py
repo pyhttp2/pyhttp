@@ -25,7 +25,16 @@ whoever has the link sees the current version in the browser and can take a copy
 Values of variables marked secret stay on this computer unless *Include secret values* is
 switched on: they go up empty, and an empty one coming down never overwrites a value here.
 
-Nothing here runs until the user signs in and links a project.
+Every project syncs. Once this computer is signed in, each project here is paired with a
+project in the account and kept in step with it, and the list of projects is kept in step
+too (``_reconcile``): a project made here appears in the account, one made on the web or on
+another computer appears here, a rename or a delete on one side happens on the other. The
+two sides always call a project by the same name. When a project here meets a different one
+of the same name in the account (both hold requests), this computer's is renamed
+"Name (computer)". A project deleted elsewhere is removed here after a copy of its database
+is put in ``deleted-projects`` in the data folder.
+
+Nothing here runs until the user signs in.
 """
 from __future__ import annotations
 
@@ -33,6 +42,8 @@ import base64
 import hashlib
 import json
 import os
+import platform
+import re
 import secrets
 import sqlite3
 import threading
@@ -52,6 +63,9 @@ KEYCHAIN_NAME = "pyhttp-cloud-token"
 DELAY = 1.0          # seconds of quiet after an edit before it is sent
 POLL_SECONDS = 60.0
 PUSH_ROWS = 200
+DEFAULT_PROJECT = "default"
+NAME_LENGTH = 60        # a project name both sides accept
+KEPT_COPIES = 20        # of projects deleted elsewhere
 
 
 class CloudError(Exception):
@@ -118,6 +132,71 @@ def linked(path: Path) -> bool:
         return conn.execute("SELECT 1 FROM _cloud_meta WHERE k = 'project' AND v <> ''").fetchone() is not None
     finally:
         conn.close()
+
+
+def link_info(path: Path) -> dict[str, Any] | None:
+    """The link of the project database at ``path`` (its _cloud_meta plus ``pending``: how many
+    rows wait to go up), or None when it is not linked."""
+    if not Path(path).is_file():
+        return None
+    conn = _connect(path)
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = '_cloud_meta'").fetchone():
+            return None
+        found: dict[str, Any] = meta(conn)
+        if not found.get("project"):
+            return None
+        found["pending"] = conn.execute("SELECT COUNT(DISTINCT tbl || pk) FROM _cloud_changes").fetchone()[0]
+        return found
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def content_items(path: Path) -> int:
+    """How much a project holds: folders, and requests that have an address."""
+    if not Path(path).is_file():
+        return 0
+    conn = _connect(path)
+    try:
+        return int(conn.execute("SELECT (SELECT COUNT(*) FROM requests WHERE url <> '') + (SELECT COUNT(*) FROM folders)").fetchone()[0])
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+
+def marked_name(name: str, mark: str, taken: set[str]) -> str:
+    """``Name (mark)``, short enough for a project name and not in ``taken`` (lower case)."""
+    number = 1
+    while True:
+        suffix = f" ({mark})" if number == 1 else f" ({mark} {number})"
+        wanted = name[:NAME_LENGTH - len(suffix)].rstrip() + suffix
+        if wanted.lower() not in taken:
+            return wanted
+        number += 1
+
+
+class _OneProject:
+    """The list of projects for a Syncer that was given only the open project's path."""
+
+    def __init__(self, path: Callable[[], Path]) -> None:
+        self._path = path
+
+    def list(self) -> list[dict[str, Any]]:
+        return [{"id": DEFAULT_PROJECT, "name": "Default"}]
+
+    def path(self, _pid: str) -> Path:
+        return self._path()
+
+    def current(self) -> str:
+        return DEFAULT_PROJECT
+
+    def _no(self, *_a: Any) -> Any:
+        raise ValueError("this app has one project")
+
+    create = rename = delete = activate = _no
 
 
 def meta(conn: sqlite3.Connection) -> dict[str, str]:
@@ -231,8 +310,18 @@ def from_wire(row: dict[str, Any] | None) -> dict[str, Any] | None:
 class Syncer:
     """One per app. ``project_path`` answers the database file of the open project."""
 
-    def __init__(self, data_dir: Path, project_path: Callable[[], Path], transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, data_dir: Path, project_path: Callable[[], Path], projects: Any = None,
+                 transport: httpx.BaseTransport | None = None) -> None:
+        """``projects`` is the app's list of projects: ``list()`` of {id, name}, ``path(id)``,
+        ``current()``, ``create(name)`` -> {id, name}, ``rename(id, name)``, ``delete(id)`` and
+        ``activate(id)`` (the last four raise ValueError when they cannot). With it, every
+        project syncs; without it, only the open one, once it is linked by hand."""
         self.file = Path(data_dir) / "cloud.json"
+        self.projects = projects or _OneProject(project_path)
+        self.auto = projects is not None
+        self.projects_at = 0.0                # when a sync last changed the list of projects (the UI reads it again)
+        self.error = ""                       # what went wrong with the account as a whole
+        self._projects_dirty = True           # the list of projects must be compared with the cloud's
         # one keychain entry per data folder: a second copy of pyhttp on the same computer
         # (another --data-dir) signs in and out on its own
         self.keychain_name = f"{KEYCHAIN_NAME}-{hashlib.sha256(str(Path(data_dir).resolve()).encode()).hexdigest()[:10]}"
@@ -300,12 +389,14 @@ class Syncer:
             headers["Authorization"] = f"Bearer {token}"
         return httpx.Client(base_url=self.server(), headers=headers, timeout=30, transport=self._transport)
 
-    def _call(self, method: str, path: str, body: Any = None, authed: bool = True) -> Any:
+    def _call(self, method: str, path: str, body: Any = None, authed: bool = True, allow: tuple[int, ...] = ()) -> Any:
         try:
             with self._http(authed) as client:
                 response = client.request(method, path, json=body)
         except httpx.HTTPError as exc:
             raise CloudError(f"The pyhttp cloud could not be reached ({type(exc).__name__})") from exc
+        if response.status_code in allow:
+            return None
         if response.status_code == 401:
             raise CloudError("This computer is no longer signed in. Sign in again.")
         try:
@@ -351,9 +442,19 @@ class Syncer:
     def _open(self) -> sqlite3.Connection:
         return _connect(self.project_path())
 
-    def status(self) -> dict[str, Any]:
+    def status(self, full: bool = False) -> dict[str, Any]:
+        """``full`` adds ``projects``: every project here with the state of its sync."""
         out: dict[str, Any] = {"signed_in": self.signed_in(), "user": self.account().get("user"), "server": self.server(),
-                               "linked": False, "syncing": self.syncing, "applied_at": self.applied_at, "applied_rows": self.applied_rows}
+                               "linked": False, "syncing": self.syncing, "applied_at": self.applied_at, "applied_rows": self.applied_rows,
+                               "auto": self.auto, "projects_at": self.projects_at, "account_error": self.error,
+                               "include_secrets": bool(self.account().get("include_secrets"))}
+        if full and out["signed_in"]:
+            listed = []
+            for p in self.projects.list():
+                info = link_info(self.projects.path(p["id"]))
+                listed.append({"id": p["id"], "name": p["name"], "linked": info is not None, "pending": (info or {}).get("pending", 0),
+                               "last_sync": float((info or {}).get("last_sync") or 0), "error": (info or {}).get("error") or ""})
+            out["projects"] = listed
         try:
             path = self.project_path()
             if not linked(path):
@@ -424,18 +525,25 @@ class Syncer:
 
     def set_include_secrets(self, on: bool) -> None:
         with self._lock:
-            conn = self._open()
-            try:
-                set_meta(conn, secrets="1" if on else "0")
-                if on:   # values held back so far go up now
-                    for table in SECRET_COLUMNS:
-                        if table in _tables(conn):
-                            current = "json_array(" + ", ".join(f'"{c}"' for c in _key_columns(conn, table)) + ")"
-                            conn.execute(f"INSERT INTO _cloud_changes (tbl, pk) SELECT '{table}', {current} FROM \"{table}\"")
-                    conn.commit()
-            finally:
-                conn.close()
-        self.touch()
+            paths = [self.project_path()]
+            if self.auto:   # one switch for the account: every project follows it
+                self._save_account({**self.account(), "include_secrets": bool(on)})
+                paths = [self.projects.path(p["id"]) for p in self.projects.list()]
+            for path in paths:
+                if not linked(path):
+                    continue
+                conn = _connect(path)
+                try:
+                    set_meta(conn, secrets="1" if on else "0")
+                    if on:   # values held back so far go up now
+                        for table in SECRET_COLUMNS:
+                            if table in _tables(conn):
+                                current = "json_array(" + ", ".join(f'"{c}"' for c in _key_columns(conn, table)) + ")"
+                                conn.execute(f"INSERT INTO _cloud_changes (tbl, pk) SELECT '{table}', {current} FROM \"{table}\"")
+                        conn.commit()
+                finally:
+                    conn.close()
+        self.touch_projects()
 
     # ------------------------------------------------------------- share links
     # A link to this project, a folder or one request, readable by whoever has it. Only for a
@@ -443,7 +551,7 @@ class Syncer:
     def _cloud_project(self) -> str:
         pid = self._linked_project()[0] if self.signed_in() else ""
         if not pid:
-            raise CloudError("Sharing works for a project that syncs with the cloud. Open Cloud sync, sign in and upload this project first.")
+            raise CloudError("Sharing works once this project is in your account. Open Cloud sync and sign in; it syncs by itself.")
         return pid
 
     def shares(self) -> dict[str, Any]:
@@ -462,17 +570,20 @@ class Syncer:
     # -------------------------------------------------------------------- sync
     def sync(self) -> dict[str, Any]:
         """One round for the open project. Errors are kept for the status and raised."""
+        self._sync_path(self.project_path())
+        return self.status()
+
+    def _sync_path(self, path: Path, is_open: bool = True) -> None:
         with self._lock:
-            path = self.project_path()
             if not self.signed_in() or not linked(path):
-                return self.status()
+                return
             self.syncing = True
             conn = _connect(path)
             try:
                 install(conn)   # a table added by an update gets its triggers
-                changed = self._round(conn)
+                changed = self._round(conn, is_open)
                 set_meta(conn, last_sync=time.time(), error="")
-                if changed:
+                if changed and is_open:
                     self.applied_at = time.time()
             except CloudError as exc:
                 set_meta(conn, error=str(exc))
@@ -480,9 +591,272 @@ class Syncer:
             finally:
                 conn.close()
                 self.syncing = False
-            return self.status()
 
-    def _round(self, conn: sqlite3.Connection) -> bool:
+    # ------------------------------------------------------- every project
+    def sync_all(self) -> dict[str, Any]:
+        """Bring the list of projects in step with the account, then every project."""
+        if not self.auto:
+            return self.sync()
+        with self._lock:
+            if not self.signed_in():
+                return self.status(full=True)
+            self._projects_dirty = False
+            self.syncing = True
+            try:
+                self._sync_projects(self._reconcile())
+                self.error = ""
+            except CloudError as exc:
+                self.error = str(exc)
+                self._projects_dirty = True
+                raise
+            finally:
+                self.syncing = False
+            return self.status(full=True)
+
+    @staticmethod
+    def _computer() -> str:
+        name = re.sub(r"[^\w .-]+", "", (platform.node() or "").split(".")[0]).strip()
+        return name[:24] or "this computer"
+
+    @staticmethod
+    def _set(path: Path, **values: Any) -> None:
+        conn = _connect(path)
+        try:
+            set_meta(conn, **values)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _unlink_path(path: Path) -> None:
+        conn = _connect(path)
+        try:
+            uninstall(conn)
+        finally:
+            conn.close()
+
+    def _link_path(self, path: Path, cloud_id: str, name: str, mode: str, user_id: str) -> None:
+        """Pair the project at ``path`` with ``cloud_id``. ``upload`` and ``merge``: everything
+        here goes up (``merge``: after what the cloud holds came down). ``load``: what is here
+        makes way for the cloud's."""
+        conn = _connect(path)
+        try:
+            uninstall(conn)
+            install(conn)
+            if mode == "load":
+                for table in _tables(conn):
+                    conn.execute(f'DELETE FROM "{table}"')
+                conn.execute("DELETE FROM _cloud_changes")
+                conn.commit()
+            else:
+                enqueue_everything(conn)
+            set_meta(conn, project=cloud_id, project_name=name, cursor=0, error="", auto=1, user=user_id,
+                     secrets="1" if self.account().get("include_secrets") else "0")
+        finally:
+            conn.close()
+
+    def _keep_copy(self, path: Path, name: str) -> None:
+        """A copy of a project that is about to be removed here because it was deleted elsewhere."""
+        folder = self.file.parent / "deleted-projects"
+        folder.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^\w.-]+", "_", name).strip("_")[:40] or "project"
+        source, copy = sqlite3.connect(str(path)), sqlite3.connect(str(folder / f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}.db"))
+        try:
+            source.backup(copy)
+        finally:
+            source.close()
+            copy.close()
+        for old in sorted(folder.glob("*.db"), key=lambda f: f.stat().st_mtime)[:-KEPT_COPIES]:
+            old.unlink(missing_ok=True)
+
+    def _remove_local(self, pid: str, path: Path, name: str) -> bool:
+        try:
+            if self.projects.current() == pid:   # it is open: another one is opened first
+                other = next((p["id"] for p in self.projects.list() if p["id"] != pid), None)
+                if other is None:
+                    return False
+                self.projects.activate(DEFAULT_PROJECT if pid != DEFAULT_PROJECT else other)
+            self._keep_copy(path, name)
+            self.projects.delete(pid)
+        except (ValueError, KeyError, OSError, sqlite3.Error):
+            return False
+        self.projects_at = time.time()
+        return True
+
+    def _reconcile(self) -> list[dict[str, Any]]:
+        """Make the projects here and in the account the same set, under the same names.
+        Returns the account's projects."""
+        account = dict(self.account())
+        user_id = str((account.get("user") or {}).get("id") or "")
+        # projects deleted here: delete them there (kept in a list until it worked)
+        waiting = [str(c) for c in account.get("deleted") or []]
+        for cloud_id in list(waiting):
+            try:
+                self._call("DELETE", f"/api/sync/{cloud_id}", allow=(404,))
+                waiting.remove(cloud_id)
+            except CloudError:
+                pass   # a run is going on there, or no network: the next round tries again
+        if waiting != (account.get("deleted") or []):
+            self._save_account({**account, "deleted": waiting})
+
+        remote = self.remote_projects()
+        if not remote:
+            return []
+        by_id = {r["id"]: r for r in remote}
+        mark = self._computer()
+        local: dict[str, tuple[dict[str, Any], Path, dict[str, Any] | None]] = {}
+        for p in self.projects.list():
+            path = self.projects.path(p["id"])
+            info = link_info(path)
+            if info and info.get("user") and info["user"] != user_id:   # paired under another account
+                self._unlink_path(path)
+                info = None
+            local[p["id"]] = (p, path, info)
+
+        # 1. deleted in the account (on the web or another computer): gone here too, unless edits wait to go up
+        for pid, (p, path, info) in list(local.items()):
+            if not info or info["project"] in by_id or info["project"] in waiting:
+                continue
+            if info["pending"]:
+                self._unlink_path(path)   # it goes up again below, as a new project
+                local[pid] = (p, path, None)
+            elif self._remove_local(pid, path, p["name"]):
+                del local[pid]
+
+        # 2. names: a rename on one side happens on the other
+        def names_taken() -> set[str]:
+            return {r["name"].strip().lower() for r in remote} | {q["name"].strip().lower() for q, _, _ in local.values()}
+
+        for pid, (p, path, info) in local.items():
+            if not info or info["project"] not in by_id:
+                continue
+            there, agreed = by_id[info["project"]], info.get("project_name") or ""
+            try:
+                if info.get("auto") != "1":   # paired by hand in an earlier version: the account's name is taken once
+                    if p["name"] != there["name"]:
+                        self.projects.rename(pid, there["name"])
+                        p["name"] = there["name"]
+                        self.projects_at = time.time()
+                    self._set(path, project_name=there["name"], auto=1, user=user_id)
+                elif p["name"] != agreed and there["name"] == agreed:   # renamed here
+                    try:
+                        self._call("PATCH", f"/api/sync/{there['id']}", {"name": p["name"]})
+                        wanted = p["name"]
+                    except CloudError:   # the account has another project of that name
+                        wanted = marked_name(p["name"], mark, names_taken())
+                        self._call("PATCH", f"/api/sync/{there['id']}", {"name": wanted})
+                        self.projects.rename(pid, wanted)
+                        p["name"] = wanted
+                        self.projects_at = time.time()
+                    there["name"] = wanted
+                    self._set(path, project_name=wanted)
+                elif there["name"] != agreed:   # renamed there (on both sides: the account's wins)
+                    self.projects.rename(pid, there["name"])
+                    p["name"] = there["name"]
+                    self._set(path, project_name=there["name"])
+                    self.projects_at = time.time()
+            except (CloudError, ValueError, KeyError):
+                continue   # the next round tries again
+
+        # 3. projects here that are not in the account yet
+        paired = {info["project"] for _, _, info in local.values() if info}
+        for pid, (p, path, info) in local.items():
+            if info:
+                continue
+            free = {r["name"].strip().lower(): r for r in remote if r["id"] not in paired}
+            same, mine = free.get(p["name"].strip().lower()), content_items(path)
+            try:
+                if same and (not same.get("items") or not mine):
+                    # one of the two is empty: they are the same project
+                    self._link_path(path, same["id"], same["name"], "merge" if mine else "load", user_id)
+                    cloud_id = same["id"]
+                else:
+                    name = p["name"][:NAME_LENGTH]
+                    if same or name.strip().lower() in {r["name"].strip().lower() for r in remote}:
+                        # two different projects of one name: this computer's says where it is from
+                        name = marked_name(p["name"], mark, names_taken())
+                    if name != p["name"]:
+                        self.projects.rename(pid, name)
+                        p["name"] = name
+                        self.projects_at = time.time()
+                    made = self._call("POST", "/api/sync/projects", {"name": name, "exact": True})
+                    self._link_path(path, made["id"], made["name"], "upload", user_id)
+                    remote.append({"id": made["id"], "name": made["name"], "items": mine, "seq": 0})
+                    by_id[made["id"]] = remote[-1]
+                    cloud_id = made["id"]
+            except (CloudError, ValueError, KeyError):
+                continue
+            paired.add(cloud_id)
+
+        # 4. projects in the account that are not here yet
+        for there in remote:
+            if there["id"] in paired or there["id"] in waiting:
+                continue
+            try:
+                made = self.projects.create(there["name"])
+            except (ValueError, KeyError, OSError):
+                continue
+            self._link_path(self.projects.path(made["id"]), there["id"], there["name"], "load", user_id)
+            paired.add(there["id"])
+            self.projects_at = time.time()
+        return remote
+
+    def _sync_projects(self, remote: list[dict[str, Any]]) -> None:
+        """A round for the open project and for every other one that has something to send or fetch."""
+        seqs = {r["id"]: int(r.get("seq") or 0) for r in remote}
+        current = self.projects.current()
+        for p in self.projects.list():
+            path = self.projects.path(p["id"])
+            info = link_info(path)
+            if not info or info["project"] not in seqs:
+                continue
+            if p["id"] == current or info["pending"] or info.get("error") or seqs[info["project"]] > int(info.get("cursor") or 0):
+                try:
+                    self._sync_path(path, p["id"] == current)
+                except CloudError:
+                    pass   # kept with the project; the others still sync
+
+    def _path_of(self, cloud_id: str) -> tuple[Path, bool] | None:
+        """(database, is it the open project) of the project here that is paired with ``cloud_id``."""
+        current = self.projects.current()
+        for p in self.projects.list():
+            path = self.projects.path(p["id"])
+            info = link_info(path)
+            if info and info["project"] == cloud_id:
+                return path, p["id"] == current
+        return None
+
+    def cloud_id_of(self, pid: str) -> str:
+        """The account's id of a project here ("" when it is not paired)."""
+        try:
+            info = link_info(self.projects.path(pid))
+        except (KeyError, OSError):
+            return ""
+        return str(info["project"]) if info else ""
+
+    def forget_project(self, cloud_id: str) -> None:
+        """A project was deleted here (``cloud_id_of`` it, asked before): delete it in the account."""
+        if not cloud_id or not self.auto or not self.signed_in():
+            return
+        account = dict(self.account())
+        account["deleted"] = [*(account.get("deleted") or []), cloud_id]
+        self._save_account(account)
+        self.touch_projects()
+
+    def delete_project(self, pid: str, delete: Callable[[], Any]) -> None:
+        """Run ``delete`` (it removes the project ``pid`` here) and have the account follow. One
+        step as far as sync is concerned: a round that runs meanwhile would see a project that
+        is in the account and not here, and fetch it again."""
+        with self._lock:
+            cloud_id = self.cloud_id_of(pid)
+            delete()
+            self.forget_project(cloud_id)
+
+    def touch_projects(self) -> None:
+        """A project was created, renamed or deleted here."""
+        self._projects_dirty = True
+        self.touch()
+
+    def _round(self, conn: sqlite3.Connection, is_open: bool = True) -> bool:
         m = meta(conn)
         pid, cursor, secrets_too = m["project"], int(m.get("cursor") or 0), m.get("secrets") == "1"
         outgoing = (lambda t, d: d) if secrets_too else without_secrets
@@ -510,9 +884,10 @@ class Syncer:
                         incoming.append({"t": row["t"], "k": row["k"], "d": keeping_local_secrets(row["t"], theirs, here)})
             if incoming:
                 apply(conn, incoming)
-                if not changed:
-                    self.applied_rows = []
-                self.applied_rows = (self.applied_rows + [{"t": i["t"], "k": i["k"]} for i in incoming])[-500:]
+                if is_open:   # the window shows this project: it reads these rows again
+                    if not changed:
+                        self.applied_rows = []
+                    self.applied_rows = (self.applied_rows + [{"t": i["t"], "k": i["k"]} for i in incoming])[-500:]
                 changed = True
             cursor = int(got["cursor"])
             set_meta(conn, cursor=cursor)
@@ -589,8 +964,17 @@ class Syncer:
 
     def _quiet_sync(self) -> None:
         try:
-            self.sync()
+            if self.auto and self._projects_dirty:
+                self.sync_all()
+            else:
+                self.sync()
         except Exception:  # noqa: BLE001 - kept in the status; the next round tries again
+            pass
+
+    def _quiet_all(self) -> None:
+        try:
+            self.sync_all()
+        except Exception:  # noqa: BLE001
             pass
 
     def start(self) -> None:
@@ -607,48 +991,64 @@ class Syncer:
     def _linked_project(self) -> tuple[str, int]:
         """(the cloud project the open project is linked to or "", how far this computer has pulled)."""
         try:
-            path = self.project_path()
-            if not linked(path):
-                return "", 0
-            conn = _connect(path)
-            try:
-                m = meta(conn)
-            finally:
-                conn.close()
-            return m.get("project") or "", int(m.get("cursor") or 0)
+            info = link_info(self.project_path())
         except (sqlite3.Error, OSError, AssertionError):
             return "", 0
+        return (str(info["project"]), int(info.get("cursor") or 0)) if info else ("", 0)
+
+    def _heard(self, line: str) -> None:
+        """A line of the account's stream: {"projects": true} or {"pid": ..., "seq": ...}."""
+        try:
+            message = json.loads(line[5:])
+        except ValueError:
+            return
+        if not isinstance(message, dict) or message.get("projects") or not message.get("pid"):
+            self._quiet_all()
+            return
+        try:
+            found = self._path_of(str(message["pid"]))
+            if found is None:   # a project this computer does not have yet
+                self._quiet_all()
+            else:
+                self._sync_path(*found)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _listen(self) -> None:
-        """One open connection on which the cloud sends a line when the linked project changes
-        (the web app, another computer). Each line is answered with a sync, at once."""
+        """One open connection on which the cloud sends a line when something changes (the web
+        app, another computer). Each line is answered with a sync, at once."""
         wait = 2.0
         while not self._stop.is_set():
-            pid, cursor = self._linked_project()
-            if not pid or not self.signed_in():
+            pid, cursor = ("", 0) if self.auto else self._linked_project()
+            if not self.signed_in() or not (self.auto or pid):
                 if self._stop.wait(5):
                     return
                 continue
+            where, params = ("/api/sync/events", None) if self.auto else (f"/api/sync/{pid}/events", {"cursor": cursor})
             try:
-                with self._http() as client, client.stream("GET", f"/api/sync/{pid}/events", params={"cursor": cursor},
-                                                           timeout=httpx.Timeout(30, read=75)) as stream:
+                with self._http() as client, client.stream("GET", where, params=params, timeout=httpx.Timeout(30, read=75)) as stream:
                     if stream.status_code != 200:
                         raise httpx.HTTPError(f"events answered {stream.status_code}")
                     wait = 2.0
+                    if self.auto:
+                        self._quiet_all()   # whatever happened while the connection was down
                     for line in stream.iter_lines():   # "data: {...}" on a change, ": ping" every 20 seconds
-                        if self._stop.is_set() or self._linked_project()[0] != pid:
+                        if self._stop.is_set() or (not self.auto and self._linked_project()[0] != pid):
                             break   # stopped, or another project was opened: listen for that one
                         if line.startswith("data:"):
-                            self._quiet_sync()
+                            if self.auto:
+                                self._heard(line)
+                            else:
+                                self._quiet_sync()
             except (httpx.HTTPError, CloudError, OSError):
                 wait = min(wait * 2, 60.0)   # no network, or the server restarting: the timer still syncs
             if self._stop.wait(wait):
                 return
 
     def _poll(self) -> None:
-        self._quiet_sync()
+        self._quiet_all()
         while not self._stop.wait(POLL_SECONDS):
-            self._quiet_sync()
+            self._quiet_all()
 
     def stop(self) -> None:
         self._stop.set()

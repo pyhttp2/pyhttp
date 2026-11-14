@@ -2258,7 +2258,7 @@ async function renameProjectDialog() {
   } catch (e) { toast(e.message, 'error'); }
 }
 async function deleteProjectDialog(p) {
-  const ok = await confirmDialog('Delete project', `Delete ${strong(p.name)} with all its requests, environments, history, run outputs, mocks and monitors? This cannot be undone.`, { okLabel: 'Delete project', danger: true });
+  const ok = await confirmDialog('Delete project', `Delete ${strong(p.name)} with all its requests, environments, history, run outputs, mocks and monitors? This cannot be undone.${typeof cloud !== 'undefined' && cloud.status && cloud.status.signed_in ? ' Cloud sync is on: it is deleted from your pyhttp account and your other computers as well.' : ''}`, { okLabel: 'Delete project', danger: true });
   if (!ok) return;
   try {
     projectsInfo = await api(`/projects/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
