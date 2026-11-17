@@ -309,6 +309,134 @@ async def import_curl(command: str, folder: str | None = None) -> dict[str, Any]
     return _request_summary(made)
 
 
+# ------------------------------------------------------------------ mocks
+def _mock_summary(m: dict[str, Any]) -> dict[str, Any]:
+    return {"id": m["id"], "name": m["name"], "slug": m.get("slug"), "url": m.get("url"), "enabled": m.get("enabled"),
+            "routes": [{"id": r["id"], "name": r.get("name") or "", "method": r.get("method"), "path": r.get("path"),
+                        "status_code": r.get("status_code"), "enabled": r.get("enabled", True)} for r in m.get("routes") or []]}
+
+
+async def _mock(mock: str) -> dict[str, Any]:
+    mocks = (await _api("GET", "/mocks"))["mocks"]
+    want = mock.strip().lower()
+    for m in mocks:
+        if want in (m["id"], str(m.get("slug") or "").lower(), str(m.get("name") or "").lower()):
+            return m
+    raise RuntimeError(f"No mock server named {mock!r}. There are: {', '.join(m['name'] for m in mocks) or 'none'}")
+
+
+@server.tool()
+async def list_mocks() -> list[dict[str, Any]]:
+    """Mock servers with their routes. ``url`` is the base address a request calls: url + route path."""
+    return [_mock_summary(m) for m in (await _api("GET", "/mocks"))["mocks"]]
+
+
+@server.tool()
+async def create_mock(name: str, slug: str = "", description: str = "", routes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Create a mock server. routes rows: {"method": "GET"|"POST"|...|"ANY", "path": "/offers",
+    "status_code": 200, "content_type": "application/json", "body": "...", "name": "..."}. A route body
+    is a template: {{req.json.x}}, {{req.body}}, {{req.query.x}}, {{$guid}} read the incoming call."""
+    made = await _api("POST", "/mocks", json_body={"name": name, "slug": slug, "description": description, "routes": routes or []})
+    return _mock_summary(made)
+
+
+@server.tool()
+async def add_mock_route(mock: str, path: str, method: str = "GET", body: str = "", status_code: int = 200,
+                         content_type: str = "application/json", name: str = "") -> dict[str, Any]:
+    """Add a route to a mock server (by name, slug or id). See create_mock for the body template."""
+    m = await _mock(mock)
+    route = await _api("POST", f"/mocks/{m['id']}/routes", json_body={"name": name, "method": method, "path": path, "body": body,
+                                                                     "status_code": status_code, "content_type": content_type})
+    return {"mock": m["name"], "url": m.get("url"), "route": {k: route.get(k) for k in ("id", "method", "path", "status_code")}}
+
+
+@server.tool()
+async def update_mock_route(mock: str, route_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """Change a route of a mock server: patch holds only what changes (method, path, status_code,
+    content_type, body, name, enabled, delay_ms)."""
+    m = await _mock(mock)
+    route = await _api("PATCH", f"/mocks/{m['id']}/routes/{route_id}", json_body=patch)
+    return {k: route.get(k) for k in ("id", "method", "path", "status_code", "enabled")}
+
+
+# ------------------------------------------------------------------ flows
+FLOW_HELP = (
+    "A flow graph is {\"nodes\": [...], \"edges\": [...]}. A node is {\"id\", \"type\", \"x\", \"y\", \"config\"}; an edge "
+    "{\"from\": node id, \"port\": port, \"to\": node id}. Types (ports; config): start (out; trigger 'manual'), "
+    "request (ok, fail; request_id), email (received, timeout; from, subject, contains, to, timeout_s), "
+    "set (out; name, value, pattern, save), if (true, false; left, op, right), delay (out; seconds), log (out; message), "
+    "view (submitted, timeout; data e.g. '{{prev.json.items}}', title, multiple, min, max, field, name='selected', "
+    "timeout_s, html, js: shows the data and waits for the person running the flow to pick; own HTML/JS gets "
+    "pyhttp.data and calls pyhttp.submit(value)), script (ok, fail; code, input, name='result': JavaScript with input, "
+    "vars, prev, email, set(name, value), log(), fail(msg), return value), stop (none; result 'pass'|'fail', message). "
+    "Values are {{templates}}. One start node, id 'start'.")
+
+
+async def _flow(flow: str) -> dict[str, Any]:
+    flows_list = (await _api("GET", "/flows"))["flows"]
+    want = flow.strip().lower()
+    for f in flows_list:
+        if want in (f["id"], str(f.get("name") or "").lower()):
+            return f
+    raise RuntimeError(f"No flow named {flow!r}. There are: {', '.join(f['name'] for f in flows_list) or 'none'}")
+
+
+def _flow_summary(f: dict[str, Any]) -> dict[str, Any]:
+    return {"id": f["id"], "name": f["name"], "folder": f.get("folder") or "", "blocks": len((f.get("graph") or {}).get("nodes") or []),
+            "last_status": f.get("last_status"), "last_run_at": f.get("last_run_at")}
+
+
+@server.tool()
+async def list_flows() -> list[dict[str, Any]]:
+    """Flows (saved requests wired into a small program): id, name, folder, blocks, last result."""
+    return [_flow_summary(f) for f in (await _api("GET", "/flows"))["flows"]]
+
+
+@server.tool(description="The whole flow, graph included (by name or id). " + FLOW_HELP)
+async def get_flow(flow: str) -> dict[str, Any]:
+    return await _api("GET", f"/flows/{(await _flow(flow))['id']}")
+
+
+@server.tool(description="Create a flow. graph may be left out (a flow with only Start). folder: 'A' or 'A/B'. " + FLOW_HELP)
+async def create_flow(name: str, graph: dict[str, Any] | None = None, folder: str = "") -> dict[str, Any]:
+    return await _api("POST", "/flows", json_body={"name": name, "graph": graph, "folder": folder})
+
+
+@server.tool(description="Change a flow (by name or id): a new name, folder, or the whole graph. " + FLOW_HELP)
+async def update_flow(flow: str, name: str | None = None, graph: dict[str, Any] | None = None, folder: str | None = None) -> dict[str, Any]:
+    body = {k: v for k, v in {"name": name, "graph": graph, "folder": folder}.items() if v is not None}
+    return await _api("PUT", f"/flows/{(await _flow(flow))['id']}", json_body=body)
+
+
+@server.tool()
+async def run_flow(flow: str, wait_seconds: float = 20) -> dict[str, Any]:
+    """Run a flow (by name or id) and wait up to wait_seconds for it to end. Returns its state and log.
+    A View block waits for a person to pick in the app: the state stays 'running' with 'waiting' set."""
+    run = await _api("POST", "/flow-runs", json_body={"flow_id": (await _flow(flow))["id"]})
+    return await get_flow_run(run["id"], wait_seconds)
+
+
+@server.tool()
+async def get_flow_run(run_id: str, wait_seconds: float = 0) -> dict[str, Any]:
+    """A flow run's state and whole log; with wait_seconds, waits until it ends (or that long)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, min(wait_seconds, 120.0))
+    after = 0
+    while True:   # the server holds each call until a new line is logged (or 20 s)
+        left = deadline - loop.time()
+        snap = await _api("GET", f"/flow-runs/{run_id}", params={"after": after, "wait": max(0.0, min(left, 20.0))})
+        after = snap.get("last", after)
+        if snap["state"] != "running" or snap.get("waiting") or left <= 0:
+            break
+    snap = await _api("GET", f"/flow-runs/{run_id}", params={"after": 0})   # the whole log
+    waiting = snap.get("waiting")
+    return {"id": snap["id"], "flow": snap["name"], "state": snap["state"], "message": snap.get("message"),
+            "waiting_for_pick": ({"block": waiting["node"], "title": waiting.get("title"),
+                                  "items": len(waiting["data"]) if isinstance(waiting.get("data"), list) else None} if waiting else None),
+            "log": [{"block": e["node"], "port": e["port"], "status": e["status"], "text": e["text"]}
+                    for e in snap.get("events") or [] if e["status"] != "running"]}
+
+
 def main(argv: list[str], default_data_dir: Path) -> None:
     p = argparse.ArgumentParser(prog="pyhttp mcp", description="Serve the pyhttp MCP server on stdio.")
     p.add_argument("--data-dir", type=Path, default=default_data_dir,
