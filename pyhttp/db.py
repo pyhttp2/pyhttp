@@ -199,6 +199,17 @@ CREATE TABLE IF NOT EXISTS flows (
     last_run_at REAL,
     last_status TEXT
 );
+CREATE TABLE IF NOT EXISTS flow_runs (
+    id          TEXT PRIMARY KEY,
+    flow_id     TEXT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    started_at  REAL NOT NULL,
+    ended_at    REAL,
+    state       TEXT NOT NULL,
+    message     TEXT NOT NULL DEFAULT '',
+    started_by  TEXT NOT NULL DEFAULT '',
+    events      TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_flow_runs ON flow_runs(flow_id, started_at);
 """
 
 _JSON_FIELDS = ("tags", "params", "headers", "bodies", "auth", "tests", "extract", "pre_vars", "options")
@@ -1708,6 +1719,50 @@ def update_flow(flow_id: str, **fields: Any) -> dict[str, Any] | None:
             _c().execute(f"UPDATE flows SET {cols} WHERE id = ?", (*fields.values(), flow_id))
             _c().commit()
     return get_flow(flow_id)
+
+
+def add_flow_run(run: dict[str, Any], keep: int = 50) -> None:
+    """Keep a finished run of a flow (a ``Run.snapshot()``), and of each flow only the newest ``keep``."""
+    with _lock:
+        _c().execute(
+            "INSERT OR REPLACE INTO flow_runs (id, flow_id, started_at, ended_at, state, message, started_by, events) VALUES (?,?,?,?,?,?,?,?)",
+            (run["id"], run["flow_id"], run["started_at"], run.get("ended_at"), run["state"], str(run.get("message") or ""),
+             str(run.get("started_by") or ""), json.dumps(run.get("events") or [])))
+        _c().execute(
+            "DELETE FROM flow_runs WHERE flow_id = ? AND id NOT IN "
+            "(SELECT id FROM flow_runs WHERE flow_id = ? ORDER BY started_at DESC LIMIT ?)",
+            (run["flow_id"], run["flow_id"], keep))
+        _c().commit()
+
+
+def _row_to_flow_run(row: sqlite3.Row, with_events: bool) -> dict[str, Any]:
+    d = dict(row)
+    events = json.loads(d.pop("events") or "[]")
+    d["blocks"] = sum(1 for e in events if e.get("node") and e.get("status") != "running")
+    if with_events:
+        d["events"] = events
+        d["last"] = events[-1]["n"] if events else 0
+    return d
+
+
+def list_flow_runs(flow_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Newest first, without their logs."""
+    with _lock:
+        rows = _c().execute("SELECT * FROM flow_runs WHERE flow_id = ? ORDER BY started_at DESC LIMIT ?", (flow_id, limit)).fetchall()
+    return [_row_to_flow_run(r, False) for r in rows]
+
+
+def get_flow_run(run_id: str) -> dict[str, Any] | None:
+    with _lock:
+        row = _c().execute("SELECT * FROM flow_runs WHERE id = ?", (run_id,)).fetchone()
+    return _row_to_flow_run(row, True) if row else None
+
+
+def clear_flow_runs(flow_id: str) -> int:
+    with _lock:
+        cur = _c().execute("DELETE FROM flow_runs WHERE flow_id = ?", (flow_id,))
+        _c().commit()
+    return cur.rowcount
 
 
 def delete_flow(flow_id: str) -> bool:

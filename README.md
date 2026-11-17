@@ -53,6 +53,9 @@ only on `127.0.0.1`.
   `{{email.from}}`, `{{email.text}}` from the last email). A run shows each block's result
   as it finishes; what it sends is in the history. Flows are part of Export / Import and of
   cloud sync.
+  - *History*: every finished run of a flow is kept with its log (the newest 50): when it
+    ran, what started it, how it ended. The History tab next to the run log lists them; a
+    click reads one again, with the blocks marked as they ended.
   - *Which email*: up to four lines (From, Subject, Text, To: each "contains", capitals do
     not matter, an empty line is ignored) and a choice of **ALL of these (and)** or **ANY of
     these (or)**. The block says back in words what it will take, "Try it on my inbox" shows
@@ -69,11 +72,14 @@ only on `127.0.0.1`.
   - Use cases: sign up, wait for the verification mail, send its code on; password reset;
     an order confirmation mail starts a check of the order; create, then poll until ready; a
     smoke test that branches on a status.
-- **Monitors** (topbar → Monitors): picked requests are sent again every N
+- **Monitors** (rail → Monitors, a section with its own page: every monitor at a glance with
+  Pause all / Resume all / Run all now; one monitor with its uptime, average time, the
+  requests it sends and its check history, "Failures only"; the list filters by All /
+  Failing / Paused): picked requests are sent again every N
   minutes while the app is open. A check fails when a request errors, answers
   4xx/5xx or fails a test; failing monitors show in the status bar and can POST
   to a webhook. "Run now" sends a check at once.
-- **Mock servers** (topbar → Mocks): fake endpoints answered by pyhttp itself,
+- **Mock servers** (rail → Mocks): fake endpoints answered by pyhttp itself,
   **on the port it already runs on** — `http://127.0.0.1:8765/mock/<name>/…`, with
   no second process to start. Give a route a method, a path (`/users/:id`), a
   status and a body, and point your front end, a test or another request at it.
@@ -661,7 +667,8 @@ pyhttp/
   updater.py      in-app updates: download + verify + helper script (Windows), brew upgrade (macOS)
   static/         index.html, style.css, features.css, app.js, editor.js (CodeMirror editors),
                   viewer.js (response viewer), codegen.js (snippets), features.js,
-                  flows.js + flows.css (the Flows section), ui.css (the look: colors, density,
+                  flows.js + flows.css (the Flows section), pages.js + pages.css (the Monitors
+                  and Mocks sections), ui.css (the look: colors, density,
                   the navigation rail; loaded last, its rules are written at its top),
                   vendor/codemirror.js (prebuilt CodeMirror 6 bundle, see packaging/editor)
 packaging/        build.py, pyhttp.spec, pyhttp.iss (Windows installer), make_icons.py (desktop builds)

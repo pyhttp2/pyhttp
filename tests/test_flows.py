@@ -389,3 +389,46 @@ def test_flows_travel_with_an_export(client, echo_url):  # noqa: F811
         if got["state"] != "running":
             break
     assert got["state"] == "passed"
+
+
+def test_every_run_is_kept_in_the_flows_history(client, echo_url, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(flows, "KEPT_HISTORY", 3)
+    ok = client.post("/api/requests", json={"name": "ok", "method": "GET", "url": echo_url + "/echo"}).json()
+    bad = client.post("/api/requests", json={"name": "bad", "method": "GET", "url": echo_url + "/status/500"}).json()
+    fid = client.post("/api/flows", json={"name": "kept", "graph": graph([block("request", "r", request_id=ok["id"])], ("start", "out", "r"))}).json()["id"]
+    assert client.get(f"/api/flows/{fid}/runs").json() == {"runs": []}
+
+    def go() -> dict[str, Any]:
+        started = client.post("/api/flow-runs", json={"flow_id": fid}).json()
+        for _ in range(100):
+            got = client.get(f"/api/flow-runs/{started['id']}?after=99&wait=2").json()
+            if got["state"] != "running":
+                return got
+        raise AssertionError("did not end")
+
+    first = go()
+    client.put(f"/api/flows/{fid}", json={"graph": graph([block("request", "r", request_id=bad["id"])], ("start", "out", "r"))})
+    second = go()
+    runs = client.get(f"/api/flows/{fid}/runs").json()["runs"]
+    assert [(r["id"], r["state"], r["blocks"]) for r in runs] == [(second["id"], "failed", 2), (first["id"], "passed", 2)]   # newest first
+    assert "events" not in runs[0] and "500" in runs[0]["message"] and runs[0]["ended_at"] >= runs[0]["started_at"]
+    whole = client.get(f"/api/flows/{fid}/runs/{first['id']}").json()
+    assert [e["text"] for e in whole["events"] if e["status"] != "running"] == ["Started", "GET ok: 200 OK", "Flow passed"]
+    assert client.get(f"/api/flows/{fid}/runs/nope").status_code == 404
+
+    # only the newest are kept; a restart of the app still shows the last one
+    for _ in range(3):
+        go()
+    runs = client.get(f"/api/flows/{fid}/runs").json()["runs"]
+    assert len(runs) == 3 and first["id"] not in [r["id"] for r in runs] and second["id"] not in [r["id"] for r in runs]
+    client.app.state.flow_runs.runs.clear()
+    assert client.get(f"/api/flows/{fid}/last-run").json()["run"]["id"] == runs[0]["id"]
+
+    other = client.post("/api/flows", json={"name": "other"}).json()["id"]
+    assert client.get(f"/api/flows/{other}/runs/{runs[0]['id']}").status_code == 404   # a run belongs to its flow
+    assert client.delete(f"/api/flows/{fid}/runs").json() == {"deleted": 3}
+    assert client.get(f"/api/flows/{fid}/runs").json() == {"runs": []}
+    go()
+    assert client.delete(f"/api/flows/{fid}").json() == {"ok": True}                   # and goes with it
+    from pyhttp import db
+    assert db.list_flow_runs(fid) == []

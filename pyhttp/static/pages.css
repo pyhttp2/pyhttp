@@ -1,0 +1,79 @@
+/* ------------------------------------------- sections as pages: Monitors, Mocks */
+/* Like Flows: with one of these sections chosen in the rail, its list is in the sidebar and
+   its page fills the middle of the window; the runs panel (about requests) steps aside. */
+.page-view { display: none; }
+.layout[data-section] { grid-template-columns: var(--side-w, 320px) minmax(480px, 1fr); }
+.layout[data-section].no-side { grid-template-columns: 1fr; }
+.layout[data-section] .runs { display: none; }
+.layout[data-section] #editor-section { overflow: hidden; padding: 14px 18px; }
+.layout[data-section="monitors"] #editor-section > :not(#monitor-view),
+.layout[data-section="mocks"] #editor-section > :not(#mock-view) { display: none !important; }
+.layout[data-section="monitors"] #monitor-view,
+.layout[data-section="mocks"] #mock-view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 12px; }
+@media (max-width: 1180px) { .layout[data-section] { grid-template-columns: var(--side-w, 280px) minmax(380px, 1fr); } }
+@media (max-width: 960px) { .layout[data-section], .layout[data-section].no-side { grid-template-columns: 1fr; } .page-view { min-height: 80vh; } }
+
+/* ---- the list in the sidebar */
+.page-filter { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); flex: none; }
+.page-filter .chip { padding: 2px 9px; }
+.page-list { list-style: none; margin: 0; padding: 6px 0; overflow: auto; flex: 1; min-height: 0; }
+.page-item { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; padding: 7px 10px 7px 12px; cursor: pointer; border-left: 3px solid transparent; }
+.page-item:hover { background: var(--bg-3); }
+.page-item.active { background: var(--bg-3); border-left-color: var(--primary); }
+.page-item.off .page-item-name { color: var(--muted); }
+.page-item-text { min-width: 0; display: flex; flex-direction: column; }
+.page-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.page-item-meta { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-none { padding: 16px 14px; }
+.page-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bg-4); border: 1px solid var(--border); }
+.page-dot.s-pass { background: var(--ok); border-color: var(--ok); }
+.page-dot.s-fail { background: var(--danger); border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
+.page-dot.s-waiting { background: var(--warn); border-color: var(--warn); }
+
+/* ---- the page */
+.page-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: none; }
+.page-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.page-title h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-back { padding: 0 !important; color: var(--muted) !important; font-size: 13px; }
+.page-back:hover { color: var(--primary) !important; }
+.page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.switch-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; margin-right: 6px; font-weight: 500; }
+.switch-label .switch { margin-top: 0; }
+.page-url { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
+.page-url .mock-url { display: inline-flex; align-items: center; gap: 10px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--text); }
+.page-url .mock-url:hover { border-color: var(--primary); }
+
+.page-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; flex: none; }
+.page-tile { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.pt-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pt-value { font-size: 18px; font-weight: 600; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.page-tile.good .pt-value { color: var(--ok); }
+.page-tile.bad .pt-value { color: var(--danger); }
+
+.page-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.page-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; flex: none; }
+.page-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.page-card-head { display: flex; align-items: center; gap: 10px; }
+.page-card-head h3 { margin-bottom: 10px; }
+.page-card .mon-spark { height: 44px; }
+.page-card .mon-spark i { width: 10px; }
+.page-reqs { display: flex; flex-direction: column; gap: 4px; }
+.page-req { display: grid; grid-template-columns: 18px 54px 1fr; gap: 8px; align-items: center; text-align: left; background: var(--bg-3); border-color: transparent; padding: 5px 8px; }
+.page-req:hover:not(:disabled) { border-color: var(--primary); }
+.page-req-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+
+.page-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
+.page-toolbar input[type=search] { width: 220px; }
+.page-tabs { margin: 0; flex: none; }
+.page-table { font-family: var(--sans); font-size: 13px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; border-collapse: separate; border-spacing: 0; overflow: hidden; }
+.page-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; background: var(--bg-3); }
+.page-table td { padding: 8px 12px; vertical-align: middle; word-break: normal; }
+.page-table tr:last-child td { border-bottom: none; }
+.page-row { cursor: pointer; }
+.page-row:hover td { background: var(--bg-3); }
+.page-row-name { font-weight: 500; }
+.page-row-acts { text-align: right; white-space: nowrap; }
+.page-table .mon-spark { height: 20px; }
+.page-table .mon-spark i { width: 5px; }
+.page-empty { margin: auto; max-width: 560px; }
+.mon-spark i { background: var(--ok); }

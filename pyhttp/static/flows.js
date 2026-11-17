@@ -208,8 +208,16 @@ function renderFlowView() {
       <div id="flow-canvas" class="flow-canvas"><div id="flow-area" class="flow-area"><svg id="flow-wires" class="flow-wires"></svg></div></div>
       <div class="flow-side">
         <div id="flow-config" class="flow-config"></div>
-        <div class="flow-log-head"><strong>Run log</strong> <span id="flow-state"></span><span class="grow"></span><span id="flow-run-by" class="muted small"></span></div>
-        <div id="flow-log" class="flow-log"><p class="muted small">Press Run. Each block reports here as it finishes.</p></div>
+        <div class="flow-log-head">
+          <div class="tabs small" id="flow-log-tabs">
+            <button data-tab="log" class="active" title="What each block of one run said">Run log</button>
+            <button data-tab="history" title="Every finished run of this flow, newest first">History<span class="tab-n" id="flow-history-n"></span></button>
+          </div>
+          <span id="flow-state"></span><span class="grow"></span><span id="flow-run-by" class="muted small"></span></div>
+        <div id="flow-log-panels" class="flow-log-panels">
+          <div id="flow-log" class="flow-log tab-panel" data-panel="log"><p class="muted small">Press Run. Each block reports here as it finishes.</p></div>
+          <div id="flow-history" class="flow-log tab-panel" data-panel="history" hidden></div>
+        </div>
       </div>
     </div>`;
   $('#flow-name').addEventListener('input', (e) => {
@@ -224,8 +232,54 @@ function renderFlowView() {
     if (flowUi.run) { try { await api(`/flow-runs/${flowUi.run}/cancel`, { method: 'POST' }); } catch { /* it ended by itself */ } }
   });
   $('#flow-area').addEventListener('pointerdown', (e) => { if (e.target.id === 'flow-area' || e.target.id === 'flow-wires') selectFlowBlock(null); });
+  bindTabs($('#flow-log-tabs'), $('#flow-log-panels'));
+  $('#flow-log-tabs button[data-tab="history"]').addEventListener('click', () => loadFlowHistory(flow));
   renderFlow();
   renderFlowConfig();
+  loadFlowHistory(flow);
+}
+
+// ---------------------------------------------------------------- history
+// Every finished run of the flow, kept with its log: pick one to read it again.
+async function loadFlowHistory(flow) {
+  let data;
+  try { data = await api(`/flows/${flow.id}/runs`); } catch { return; }
+  const box = $('#flow-history');
+  if (!box || flowUi.flow !== flow) return;
+  $('#flow-history-n').textContent = data.runs.length || '';
+  if (!data.runs.length) {
+    box.innerHTML = '<p class="muted small">No runs yet. Every run of this flow is kept here with its log: when it ran, what started it and how it ended.</p>';
+    return;
+  }
+  const passed = data.runs.filter((r) => r.state === 'passed').length;
+  box.innerHTML = `<div class="flow-history-head muted small"><span>${data.runs.length} run${data.runs.length === 1 ? '' : 's'} kept · ${passed} passed, ${data.runs.length - passed} not</span>
+      <span class="grow"></span><button class="link small danger" id="flow-history-clear">Clear</button></div>`
+    + data.runs.map((r) => {
+      const cls = r.state === 'passed' ? 'ok' : r.state === 'failed' ? 'failed' : 'cancelled';
+      const took = r.ended_at ? fmtMs((r.ended_at - r.started_at) * 1000) : '';
+      return `<button class="flow-run-row" data-id="${esc(r.id)}" title="Show this run's log">
+        <span class="badge ${cls}">${esc(r.state)}</span>
+        <span class="frr-when">${fmtDate(r.started_at)}</span>
+        <span class="frr-meta muted">${r.blocks} block${r.blocks === 1 ? '' : 's'} · ${took}${r.started_by ? ` · ${esc(r.started_by)}` : ''}</span>
+        ${r.message ? `<span class="frr-msg muted">${esc(r.message)}</span>` : ''}</button>`;
+    }).join('');
+  $('#flow-history-clear').addEventListener('click', async () => {
+    if (!await confirmDialog('Clear this flow\'s history?', 'Every kept run and its log is removed. The flow itself stays.', { okLabel: 'Clear', danger: true })) return;
+    try { await api(`/flows/${flow.id}/runs`, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
+    loadFlowHistory(flow);
+  });
+  $$('.flow-run-row', box).forEach((row) => row.addEventListener('click', async () => {
+    if (flowUi.run) { toast('A run is going: its log is on screen. Look at older runs when it ends.', 'error'); return; }
+    let run;
+    try { run = await api(`/flows/${flow.id}/runs/${row.dataset.id}`); } catch (err) { toast(err.message, 'error'); return; }
+    if (flowUi.flow !== flow) return;
+    flowUi.marks = {};
+    $$('.flow-node').forEach((el) => { el.className = el.className.replace(/ r-\w+/g, ''); });
+    $('#flow-log').innerHTML = '';
+    showFlowEvents(run.events);
+    showFlowState(run);
+    showTab($('#flow-log-tabs'), 'log');
+  }));
 }
 
 async function openFlow(flow) {
@@ -621,6 +675,7 @@ async function followFlowRun(flow, run) {
   $('#flow-log').innerHTML = '';
   $('#flow-run').disabled = true;
   $('#flow-stop').hidden = false;
+  showTab($('#flow-log-tabs'), 'log');
   showFlowState({ ...run, state: 'running' });
   renderFlowList();
   let after = 0;
@@ -637,7 +692,8 @@ async function followFlowRun(flow, run) {
     $('#flow-stop').hidden = true;
   }
   renderFlowList();
-  if (typeof loadHistory === 'function') loadHistory();   // the requests it sent are in the history
+  if (flowUi.flow === flow) loadFlowHistory(flow);        // the run that just ended is in the flow's history
+  if (typeof loadHistory === 'function') loadHistory();   // the requests it sent are in the request history
 }
 
 function initFlows() {

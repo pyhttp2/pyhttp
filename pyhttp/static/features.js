@@ -1176,7 +1176,7 @@ async function exampleAction(r, e, act) {
       if (!pick) return;
       const out = await api(base + '/mock', { method: 'POST', body: pick === NEW ? {} : { mock_id: pick } });
       await loadMocks(false);
-      toast(`Route added to “${out.mock.name}”: ${out.route.method} ${out.route.path}`, 'ok', { label: 'Open mocks', onClick: () => openMocksModal() });
+      toast(`Route added to “${out.mock.name}”: ${out.route.method} ${out.route.path}`, 'ok', { label: 'Open mocks', onClick: () => showMocks() });
     }
   } catch (err) { toast(err.message, 'error'); }
 }
@@ -2097,21 +2097,7 @@ async function loadMonitors(render = true) {
   const badge = $('#mon-badge');
   badge.hidden = !data.failing;
   badge.textContent = data.failing || '';
-  if (render && $('#mon-list')) renderMonitors();
-}
-
-// the Monitors dialog (topbar button, or the ⚠ chip in the status bar)
-function openMonitorsModal() {
-  openModal('Monitors', `
-    <div class="mon-bar">
-      <span class="muted small grow">Picked requests are sent again on a schedule while the app is open. A check fails when a request errors, answers 4xx/5xx, or fails a test; failures show in the status bar and can POST to a webhook.</span>
-      <button id="btn-mon-new" class="primary" title="Monitor requests on a schedule">+ Monitor</button>
-    </div>
-    <div id="mon-list" class="mon-list"></div>
-  `, [{ label: 'Done', cls: 'primary', onClick: closeModal }]);
-  $('#btn-mon-new').addEventListener('click', () => monitorDialog());
-  renderMonitors();
-  loadMonitors();   // refresh in the background; renders again when it lands
+  if (render && typeof renderMonitors === 'function') renderMonitors();   // the Monitors section (pages.js)
 }
 
 function monSpark(recent) {
@@ -2120,77 +2106,6 @@ function monSpark(recent) {
   return `<span class="mon-spark">${recent.map((c) =>
     `<i class="${c.ok ? '' : 'bad'}" style="height:${Math.max(18, Math.round((c.duration_ms || 1) / max * 100))}%"` +
     ` title="${new Date(c.ts * 1000).toLocaleString()} · ${c.ok ? 'pass' : `${c.failed} of ${c.total} failed`} · ${fmtMs(c.duration_ms)}"></i>`).join('')}</span>`;
-}
-
-function renderMonitors() {
-  const box = $('#mon-list');
-  if (!box) return;
-  if (!mon.list.length) {
-    box.innerHTML = '<div class="empty"><p>No monitors yet.</p><p class="muted small">A monitor sends picked requests every few minutes and flags failures (errors, 4xx/5xx, failed tests). Press “+ Monitor”.</p></div>';
-    return;
-  }
-  box.innerHTML = mon.list.map((m) => {
-    const st = !m.enabled ? '<span class="badge">off</span>'
-      : m.last_status === 'fail' ? '<span class="badge failed">fail</span>'
-      : m.last_status === 'pass' ? '<span class="badge ok">pass</span>' : '<span class="badge">waiting</span>';
-    const last = m.last_run_at ? `${agoText(m.last_run_at)}` : 'not run yet';
-    return `<div class="mon-item ${m.enabled ? '' : 'off'}" data-id="${m.id}">
-      <div class="mon-head">
-        <label class="switch" title="Pause or resume this monitor"><input type="checkbox" data-act="toggle" ${m.enabled ? 'checked' : ''}><span></span></label>
-        <span class="mon-name">${esc(m.name)}</span>
-        ${st}
-      </div>
-      <div class="mon-meta muted small">${m.request_ids.length} request${m.request_ids.length === 1 ? '' : 's'} · every ${fmtInterval(m.interval_s)} · ${last}${m.webhook_url ? ' · webhook' : ''}</div>
-      ${monSpark(m.recent || [])}
-      <div class="mon-actions">
-        <button class="link small" data-act="results">Results</button>
-        <button class="link small" data-act="run">Run now</button>
-        <button class="link small" data-act="edit">Edit</button>
-        <span class="grow"></span>
-        <button class="link small danger" data-act="del">Delete</button>
-      </div>
-    </div>`;
-  }).join('');
-  $$('.mon-item', box).forEach((el) => {
-    const m = mon.list.find((x) => x.id === el.dataset.id);
-    $('[data-act=toggle]', el).addEventListener('change', async (e) => {
-      try { await api('/monitors/' + m.id, { method: 'PATCH', body: { enabled: e.target.checked } }); } catch (err) { toast(err.message, 'error'); }
-      loadMonitors();
-    });
-    $('[data-act=run]', el).addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span>Running…';
-      try {
-        const chk = await api(`/monitors/${m.id}/run-now`, { method: 'POST' });
-        toast(chk.ok ? `${m.name}: all ${chk.total} passed` : `${m.name}: ${chk.failed} of ${chk.total} failed`, chk.ok ? 'ok' : 'error');
-      } catch (err) { toast(err.message, 'error'); }
-      loadMonitors();
-    });
-    $('[data-act=results]', el).addEventListener('click', () => monitorResults(m));
-    $('[data-act=edit]', el).addEventListener('click', () => monitorDialog(m));
-    $('[data-act=del]', el).addEventListener('click', async () => {
-      if (!await confirmDialog('Delete monitor?', `${strong(m.name)} and its check history will be removed. The requests themselves stay.`, { okLabel: 'Delete', danger: true })) return;
-      try { await api('/monitors/' + m.id, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
-      loadMonitors();
-    });
-  });
-}
-
-async function monitorResults(m) {
-  let checks = [];
-  try { checks = await api(`/monitors/${m.id}/checks?limit=50`); } catch (err) { toast(err.message, 'error'); return; }
-  const rows = checks.map((c) => {
-    const failedNames = (c.results || []).filter((r) => !r.ok)
-      .map((r) => `${esc(r.name)} (${r.status_code ?? esc((r.error || 'error').slice(0, 60))}${r.tests_failed ? `, ${r.tests_failed} tests` : ''})`).join(', ');
-    return `<tr><td>${new Date(c.ts * 1000).toLocaleString()}</td>
-      <td class="${c.ok ? 'ok-text' : 'err-text'}">${c.ok ? 'pass' : `${c.failed}/${c.total} failed`}</td>
-      <td>${fmtMs(c.duration_ms)}</td><td class="mon-fails">${failedNames || ''}</td></tr>`;
-  }).join('');
-  openModal(`Monitor: ${m.name}`, `
-    <p class="muted small">Every ${fmtInterval(m.interval_s)}, newest first. A check fails when a request errors, answers 4xx/5xx, or fails a test.</p>
-    ${checks.length ? `<table class="htable"><tr><th>When</th><th>Result</th><th>Took</th><th>Failures</th></tr>${rows}</table>` : '<p class="muted">No checks yet. “Run now” sends one at once.</p>'}
-  `, [{ label: 'Back to monitors', cls: 'primary', onClick: openMonitorsModal }]);
 }
 
 function monitorDialog(existing = null) {
@@ -2209,17 +2124,19 @@ function monitorDialog(existing = null) {
     <input id="mon-pick-q" type="search" placeholder="Filter requests…" autocomplete="off" style="width:100%;margin-bottom:6px">
     <div id="mon-pick" class="mon-pick">${state.requests.map(reqRow).join('') || '<p class="muted small">No requests yet: create one first.</p>'}</div>
   `, [
-    { label: 'Cancel', onClick: openMonitorsModal },
+    { label: 'Cancel', onClick: closeModal },
     { label: existing ? 'Save' : 'Create monitor', cls: 'primary', onClick: async () => {
       const ids = $$('#mon-pick input:checked').map((i) => i.value);
       const every = Math.max(1, parseInt($('#mon-every').value, 10) || 5) * parseInt($('#mon-unit').value, 10);
       const body = { name: $('#mon-name').value.trim() || 'Monitor', request_ids: ids,
                      interval_s: Math.max(10, every), webhook_url: $('#mon-hook').value.trim() };
       try {
-        if (existing) await api('/monitors/' + existing.id, { method: 'PATCH', body });
-        else await api('/monitors', { method: 'POST', body });
+        const saved = existing ? await api('/monitors/' + existing.id, { method: 'PATCH', body })
+                               : await api('/monitors', { method: 'POST', body });
         toast(existing ? 'Monitor saved' : 'Monitor created: it runs on its schedule while the app is open', 'ok');
-        openMonitorsModal();
+        closeModal();
+        await loadMonitors(false);
+        showMonitors(saved.id);
       } catch (err) { toast(err.message, 'error'); }
     } },
   ]);
@@ -2230,10 +2147,9 @@ function monitorDialog(existing = null) {
 }
 
 function initMonitors() {
-  $('#btn-monitors').addEventListener('click', openMonitorsModal);
-  $('#sb-monitors').addEventListener('click', openMonitorsModal);
-  loadMonitors(false);
-  mon.timer = setInterval(() => loadMonitors(true), 30000);   // renders only while the dialog is open
+  $('#sb-monitors').addEventListener('click', () => showMonitors());   // the ⚠ chip in the status bar
+  loadMonitors(true);
+  mon.timer = setInterval(() => loadMonitors(true), 30000);
 }
 
 // ========================================================== mock servers
@@ -2257,74 +2173,7 @@ async function loadMocks(render = true) {
   $('#btn-mocks').title = data.enabled
     ? `${data.enabled} mock server${data.enabled === 1 ? '' : 's'} answering under ${data.base_url}/`
     : 'Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on';
-  if (render && $('#mock-list')) renderMocks();
-}
-
-// the Mocks dialog (topbar → Mocks)
-function openMocksModal() {
-  openModal('Mock servers', `
-    <div class="mon-bar">
-      <span class="muted small grow">Endpoints answered by pyhttp itself, on the port it already runs on — nothing else to start.
-        Point an app or a request at <code class="mono">${esc(mocks.baseUrl || '/mock')}/&lt;name&gt;/…</code> and it gets your canned answer.</span>
-      <button id="btn-mock-new" class="primary" title="Add a mock server">+ Mock server</button>
-    </div>
-    <div id="mock-list" class="mon-list"></div>
-  `, [{ label: 'Done', cls: 'primary', onClick: closeModal }]);
-  $('#btn-mock-new').addEventListener('click', () => mockDialog());
-  renderMocks();
-  loadMocks();   // refresh in the background; renders again when it lands
-}
-
-function renderMocks() {
-  const box = $('#mock-list');
-  if (!box) return;
-  if (!mocks.list.length) {
-    box.innerHTML = '<div class="empty"><p>No mock servers yet.</p>'
-      + '<p class="muted small">A mock server answers a list of routes under <code>/mock/&lt;name&gt;/</code> on this very port, so a front end or a test '
-      + 'can call an endpoint that does not exist yet. Press “+ Mock server”.</p></div>';
-    return;
-  }
-  box.innerHTML = mocks.list.map((m) => {
-    const all = m.routes || [];
-    const off = all.filter((r) => !r.enabled).length;
-    return `<div class="mon-item mock-item ${m.enabled ? '' : 'off'}" data-id="${m.id}">
-      <div class="mon-head">
-        <label class="switch" title="${m.enabled ? 'Stop answering requests' : 'Start answering requests'}"><input type="checkbox" data-act="toggle" ${m.enabled ? 'checked' : ''}><span></span></label>
-        <span class="mon-name">${esc(m.name)}</span>
-        ${m.enabled ? '<span class="badge ok">live</span>' : '<span class="badge">off</span>'}
-      </div>
-      <button class="mock-url mono" data-act="copy" title="Copy this base URL">${esc(m.url)}<span class="mock-copy">Copy</span></button>
-      <div class="mon-meta muted small">${all.length} route${all.length === 1 ? '' : 's'}${off ? ` (${off} off)` : ''}
-        · ${m.hits} call${m.hits === 1 ? '' : 's'} answered${m.delay_ms ? ` · ${fmtMs(m.delay_ms)} delay` : ''}${m.cors ? ' · CORS' : ''}${m.description ? ` · ${esc(m.description)}` : ''}</div>
-      <div class="mon-actions">
-        <button class="link small" data-act="routes">Routes</button>
-        <button class="link small" data-act="calls">Calls</button>
-        <button class="link small" data-act="edit">Edit</button>
-        <span class="grow"></span>
-        <button class="link small danger" data-act="del">Delete</button>
-      </div>
-    </div>`;
-  }).join('');
-  $$('.mock-item', box).forEach((el) => {
-    const m = mockById(el.dataset.id);
-    $('[data-act=toggle]', el).addEventListener('change', async (e) => {
-      try { await api('/mocks/' + m.id, { method: 'PATCH', body: { enabled: e.target.checked } }); }
-      catch (err) { toast(err.message, 'error'); }
-      loadMocks();
-    });
-    $('[data-act=copy]', el).addEventListener('click', async () => {
-      const ok = await copyText(m.url);
-      toast(ok ? `Copied ${m.url}` : 'Could not copy', ok ? 'ok' : 'error');
-    });
-    $('[data-act=routes]', el).addEventListener('click', () => openMockRoutes(m.id));
-    $('[data-act=calls]', el).addEventListener('click', () => openMockCalls(m.id));
-    $('[data-act=edit]', el).addEventListener('click', () => mockDialog(m));
-    $('[data-act=del]', el).addEventListener('click', async () => {
-      if (!await confirmDialog('Delete mock server?', `${strong(m.name)}, its routes and its call log will be removed. Requests pointing at it stay, but stop getting an answer.`, { okLabel: 'Delete', danger: true })) return;
-      try { await api('/mocks/' + m.id, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
-      loadMocks();
-    });
-  });
+  if (render && typeof renderMocks === 'function') renderMocks();   // the Mocks section (pages.js)
 }
 
 function mockDialog(existing = null) {
@@ -2341,7 +2190,7 @@ function mockDialog(existing = null) {
     <label class="field"><input type="checkbox" id="mk-log" ${m.log_calls ? 'checked' : ''}> Log the calls it answers
       <span class="muted small">(the last 200, with their headers and body)</span></label>
   `, [
-    { label: 'Cancel', onClick: openMocksModal },
+    { label: 'Cancel', onClick: closeModal },
     { label: existing ? 'Save' : 'Create mock server', cls: 'primary', onClick: async () => {
       const body = { name: $('#mk-name').value.trim(), slug: $('#mk-slug').value.trim(),
                      description: $('#mk-desc').value.trim(),
@@ -2353,76 +2202,13 @@ function mockDialog(existing = null) {
         const saved = existing ? await api('/mocks/' + existing.id, { method: 'PATCH', body })
                                : await api('/mocks', { method: 'POST', body });
         await loadMocks(false);
-        if (existing) { openMocksModal(); toast('Mock server saved', 'ok'); }
-        else { openMockRoutes(saved.id); toast(`Answering on ${saved.url}`, 'ok'); }
+        closeModal();
+        showMock(saved.id, 'routes');
+        toast(existing ? 'Mock server saved' : `Answering on ${saved.url}`, 'ok');
       } catch (err) { toast(err.message, 'error'); }
     } },
   ]);
   $('#mk-name').focus();
-}
-
-// ----------------------------------------------------------- routes of one mock
-function openMockRoutes(mockId) {
-  const m = mockById(mockId);
-  if (!m) { openMocksModal(); return; }
-  const routes = m.routes || [];
-  const rows = routes.map((r, i) => `<tr class="mock-route ${r.enabled ? '' : 'off'}" data-id="${r.id}">
-    <td><label class="switch tiny" title="${r.enabled ? 'Turn this route off' : 'Turn this route on'}"><input type="checkbox" data-act="toggle" ${r.enabled ? 'checked' : ''}><span></span></label></td>
-    <td><span class="method m-${esc(r.method)}">${esc(r.method)}</span></td>
-    <td class="mock-path">${esc(r.path)}${r.match_query ? `<span class="muted">?${esc(r.match_query)}</span>` : ''}${r.name ? `<div class="muted small">${esc(r.name)}</div>` : ''}</td>
-    <td class="${r.status_code >= 400 ? 'err-text' : 'ok-text'}">${r.status_code}</td>
-    <td class="muted">${r.hits || 0}</td>
-    <td class="mock-acts">
-      <button class="link small" data-act="up" title="Move up: the first matching route wins" ${i === 0 ? 'disabled' : ''}>↑</button>
-      <button class="link small" data-act="down" title="Move down" ${i === routes.length - 1 ? 'disabled' : ''}>↓</button>
-      <button class="link small" data-act="edit">Edit</button>
-      <button class="link small" data-act="try" title="Open a new request pointing at this route">Try</button>
-      <button class="link small danger" data-act="del" title="Delete this route">✕</button>
-    </td></tr>`).join('');
-  openModal(`Mock: ${m.name}`, `
-    <div class="mon-bar">
-      <span class="muted small grow">Base URL <code class="mono">${esc(m.url)}</code>, or write <code class="mono">{{mock_url}}/${esc(m.slug)}</code> in a request so it follows the port.
-        Exact paths beat <code>:id</code> ones, and a route with a query condition beats one without.</span>
-      <button id="btn-mock-route-new" class="primary">+ Route</button>
-      <button id="btn-mock-seed" title="Add a route per saved request, answering with the response it last gave">From requests…</button>
-    </div>
-    ${routes.length ? `<table class="htable mock-routes"><tr><th></th><th>Method</th><th>Path</th><th>Status</th><th title="Calls this route has answered">Hits</th><th></th></tr>${rows}</table>`
-      : '<div class="empty"><p>No routes yet.</p><p class="muted small">A route is a method, a path and the answer to give back. '
-        + 'Press “+ Route”, or build one per request you already have.</p></div>'}
-  `, [
-    { label: 'Back to mocks', onClick: openMocksModal },
-    { label: 'Calls', onClick: () => openMockCalls(m.id) },
-    { label: 'Done', cls: 'primary', onClick: closeModal },
-  ]);
-  $('#btn-mock-route-new').addEventListener('click', () => mockRouteDialog(m.id));
-  $('#btn-mock-seed').addEventListener('click', () => mockSeedDialog(m.id));
-  $$('.mock-route').forEach((el) => {
-    const r = routes.find((x) => x.id === el.dataset.id);
-    const patch = async (body) => {
-      try { await api(`/mocks/${m.id}/routes/${r.id}`, { method: 'PATCH', body }); } catch (err) { toast(err.message, 'error'); }
-      await loadMocks(false);
-      openMockRoutes(m.id);
-    };
-    const move = async (delta) => {
-      const ids = routes.map((x) => x.id);
-      const at = ids.indexOf(r.id);
-      ids.splice(at + delta, 0, ...ids.splice(at, 1));
-      try { await api(`/mocks/${m.id}/routes/reorder`, { method: 'POST', body: { route_ids: ids } }); } catch (err) { toast(err.message, 'error'); }
-      await loadMocks(false);
-      openMockRoutes(m.id);
-    };
-    $('[data-act=toggle]', el).addEventListener('change', (e) => patch({ enabled: e.target.checked }));
-    $('[data-act=up]', el).addEventListener('click', () => move(-1));
-    $('[data-act=down]', el).addEventListener('click', () => move(1));
-    $('[data-act=edit]', el).addEventListener('click', () => mockRouteDialog(m.id, r));
-    $('[data-act=try]', el).addEventListener('click', () => mockTryRoute(m, r));
-    $('[data-act=del]', el).addEventListener('click', async () => {
-      if (!await confirmDialog('Delete route?', `${strong(`${r.method} ${r.path}`)} will no longer be answered.`, { okLabel: 'Delete', danger: true })) return;
-      try { await api(`/mocks/${m.id}/routes/${r.id}`, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
-      await loadMocks(false);
-      openMockRoutes(m.id);
-    });
-  });
 }
 
 function mockRouteDialog(mockId, existing = null) {
@@ -2451,7 +2237,7 @@ function mockRouteDialog(mockId, existing = null) {
       <code>{{req.headers.x-key}}</code>, <code>{{$guid}}</code> and your own <code>{{variables}}</code></div>
     <textarea id="mr-body" class="mono mock-body" spellcheck="false" rows="9">${esc(r.body)}</textarea>
   `, [
-    { label: 'Cancel', onClick: () => openMockRoutes(mockId) },
+    { label: 'Cancel', onClick: closeModal },
     { label: existing ? 'Save route' : 'Add route', cls: 'primary', onClick: async () => {
       const body = {
         name: $('#mr-name').value.trim(), method: $('#mr-method').value,
@@ -2465,7 +2251,8 @@ function mockRouteDialog(mockId, existing = null) {
         if (existing) await api(`/mocks/${mockId}/routes/${existing.id}`, { method: 'PATCH', body });
         else await api(`/mocks/${mockId}/routes`, { method: 'POST', body });
         await loadMocks(false);
-        openMockRoutes(mockId);
+        closeModal();
+        showMock(mockId, 'routes');
         toast(existing ? 'Route saved' : `Answering ${body.method} ${body.path}`, 'ok');
       } catch (err) { toast(err.message, 'error'); }
     } },
@@ -2494,14 +2281,15 @@ function mockSeedDialog(mockId) {
     <input id="mock-seed-q" type="search" placeholder="Filter requests…" autocomplete="off" style="width:100%;margin-bottom:6px">
     <div id="mock-seed-pick" class="mon-pick">${state.requests.map(reqRow).join('') || '<p class="muted small">No requests yet: create one first.</p>'}</div>
   `, [
-    { label: 'Cancel', onClick: () => openMockRoutes(mockId) },
+    { label: 'Cancel', onClick: closeModal },
     { label: 'Add routes', cls: 'primary', onClick: async () => {
       const ids = $$('#mock-seed-pick input:checked').map((i) => i.value);
       if (!ids.length) { toast('Tick at least one request', 'error'); return; }
       try {
         const out = await api(`/mocks/${mockId}/from-requests`, { method: 'POST', body: { request_ids: ids } });
         await loadMocks(false);
-        openMockRoutes(mockId);
+        closeModal();
+        showMock(mockId, 'routes');
         toast(`Added ${out.added} route${out.added === 1 ? '' : 's'}`, 'ok');
       } catch (err) { toast(err.message, 'error'); }
     } },
@@ -2536,77 +2324,16 @@ async function mockTryRoute(m, r) {
       params,
     } });
     closeModal();
+    showSection('collection');
     await loadRequests();
     await openRequest(created.id);
     toast(`New request pointing at ${method} ${r.path}`, 'ok');
   } catch (err) { toast(err.message, 'error'); }
 }
 
-// ------------------------------------------------------------ the call log
-async function openMockCalls(mockId) {
-  const m = mockById(mockId);
-  if (!m) { openMocksModal(); return; }
-  let calls = [];
-  try { calls = await api(`/mocks/${m.id}/calls?limit=200`); } catch (err) { toast(err.message, 'error'); return; }
-  openModal(`Calls: ${m.name}`, `
-    <div class="mon-bar">
-      <span class="muted small grow">Every request this mock answered, newest first — click one to see the headers and body it arrived with.
-        ${m.log_calls ? 'Refreshes while this is open.' : '<b>Logging is off for this mock</b> (turn it on in Edit).'}</span>
-      <button id="btn-mock-calls-clear" class="danger">Clear</button>
-    </div>
-    <div id="mock-calls-wrap"></div>
-  `, [
-    { label: 'Routes', onClick: () => openMockRoutes(m.id) },
-    { label: 'Back to mocks', onClick: openMocksModal },
-    { label: 'Done', cls: 'primary', onClick: closeModal },
-  ]);
-  $('#btn-mock-calls-clear').addEventListener('click', async () => {
-    if (!await confirmDialog('Clear the call log?', `Every logged call of ${strong(m.name)} is removed. Its routes stay.`, { okLabel: 'Clear', danger: true })) return;
-    try { await api(`/mocks/${m.id}/calls`, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
-    openMockCalls(m.id);
-  });
-  renderMockCalls(m, calls);
-  clearInterval(mocks.callTimer);
-  mocks.callTimer = setInterval(async () => {
-    if (!$('#mock-calls-wrap')) { clearInterval(mocks.callTimer); return; }   // dialog closed or moved on
-    try { renderMockCalls(m, await api(`/mocks/${m.id}/calls?limit=200`)); } catch { /* keep what is on screen */ }
-  }, 2000);
-}
-
-function renderMockCalls(m, calls) {
-  const wrap = $('#mock-calls-wrap');
-  if (!wrap) return;
-  if (!calls.length) {
-    wrap.innerHTML = '<div class="empty"><p>No calls yet.</p><p class="muted small">Point something at '
-      + `<code class="mono">${esc(m.url)}</code> and it shows up here.</p></div>`;
-    return;
-  }
-  wrap.innerHTML = `<table class="htable mock-calls"><tr><th>When</th><th>Method</th><th>Path</th><th>Status</th><th>Took</th><th>Route</th></tr>
-    ${calls.map((c) => `<tr class="mock-call ${c.matched ? '' : 'unmatched'}" data-id="${c.id}" title="Click for the request headers and body">
-      <td>${new Date(c.ts * 1000).toLocaleTimeString()}</td>
-      <td><span class="method m-${esc(c.method)}">${esc(c.method)}</span></td>
-      <td class="mock-path">${esc(c.path)}${c.query ? `<span class="muted">?${esc(c.query)}</span>` : ''}</td>
-      <td class="${c.status_code >= 400 ? 'err-text' : 'ok-text'}">${c.status_code}</td>
-      <td>${fmtMs(c.duration_ms)}</td>
-      <td>${c.matched ? esc(c.route_name) : '<span class="err-text">no route matched</span>'}</td></tr>`).join('')}</table>`;
-  $$('.mock-call', wrap).forEach((el) => el.addEventListener('click', () => {
-    const c = calls.find((x) => x.id === el.dataset.id);
-    const headers = Object.entries(c.req_headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
-    dialog({ title: `${c.method} ${c.path}${c.query ? `?${c.query}` : ''}`, message: `
-      <p class="muted small">${new Date(c.ts * 1000).toLocaleString()} · answered ${c.status_code} in ${fmtMs(c.duration_ms)}
-        · ${c.matched ? `route ${esc(c.route_name)}` : 'no route matched'}</p>
-      <div class="muted small mock-label">Request headers</div>
-      <pre class="mono mock-pre">${esc(headers) || '<span class="muted">none</span>'}</pre>
-      <div class="muted small mock-label">Request body</div>
-      <pre class="mono mock-pre">${esc(c.req_body) || '<span class="muted">empty</span>'}</pre>
-    `, buttons: [{ label: 'Close', value: null, cancel: true, cls: 'primary', primary: true }] });
-  }));
-}
-
 function initMocks() {
-  $('#btn-mocks').addEventListener('click', openMocksModal);
-  loadMocks(false);
-  mocks.timer = setInterval(() => loadMocks(true), 30000);   // renders only while the dialog is open
+  loadMocks(true);
+  mocks.timer = setInterval(() => loadMocks(true), 30000);
 }
 
 // ========================================================= response views

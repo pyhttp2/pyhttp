@@ -787,7 +787,8 @@ def test_history_panel_oauth_secrets_resize_and_openapi(page, servers):
     new_request(page, echo_url, "Hist A")
     # request history lives in the right-hand panel, next to Current run / Run history;
     # the sidebar's own tabs are the requests and the flows
-    assert page.locator("#side-tabs button").all_text_contents() == ["Requests", "Flows"]
+    assert page.locator("#side-tabs button").evaluate_all(
+        "(buttons) => buttons.map((b) => b.dataset.tab)") == ["collection", "flows", "monitors", "mocks"]
     assert page.locator("#runs-tabs button").all_text_contents()[:3] == ["Current run", "Run history", "Request history"]
     page.click("#runs-tabs button[data-tab='requests']")
     count = "document.querySelectorAll('#history-list .h-item').length"
@@ -1287,54 +1288,79 @@ def test_undo_delete_body(page, servers):
     page.wait_for_selector("#body-list .body-item:has-text('only body')")
 
 
-def test_monitors_dialog(page, servers):
+def test_monitors_page(page, servers):
+    """Monitors is a section of the rail: the list in the sidebar, the page in the middle."""
     app_url, echo_url = servers
     new_request(page, echo_url, "Watched")
-    # Monitors opens from the topbar as a dialog
     page.click("#btn-monitors")
-    page.wait_for_selector("#mon-list .empty")
-    # create a monitor over the one request; saving returns to the list
+    page.wait_for_selector("#monitor-view .page-empty")
+    assert not page.is_visible("#editor-form") and not page.is_visible("#runs-panel")
+    # create a monitor over the one request; saving opens its page
     page.click("#btn-mon-new")
     page.fill("#mon-name", "Health")
     page.fill("#mon-every", "5")
-    page.check("#mon-pick input")
+    page.locator("#mon-pick .mon-pick-row", has_text="Watched").locator("input").check()
     page.click("#modal-foot button.primary")
-    page.wait_for_selector(".mon-item")
-    meta = page.locator(".mon-item .mon-meta").text_content()
+    page.wait_for_selector("#monitor-view h2:has-text('Health')")
+    assert page.is_hidden("#modal")
+    meta = page.locator("#mon-list .mon-item .mon-meta").text_content()
     assert "every 5 min" in meta and "1 request" in meta
-    # run now: a passing check appears (badge + sparkline bar)
-    page.click(".mon-item [data-act='run']")
-    page.wait_for_selector(".mon-item .badge.ok")
-    page.wait_for_selector(".mon-spark i:not(.bad)")
+    assert "Watched" in page.inner_text("#monitor-view .page-reqs")
+    # run now: a passing check, in the title, the tiles, the bars and the history table
+    page.click("#monitor-view [data-act='run']")
+    page.wait_for_selector("#monitor-view .page-title .badge.ok")
+    page.wait_for_selector("#monitor-view .mon-spark i:not(.bad)")
+    page.wait_for_selector("#mon-checks td.ok-text")
+    assert "100%" in page.inner_text("#monitor-view .page-tiles")
     assert page.locator("#sb-monitors").is_hidden()
-    # add a request that 404s: the next check fails, the status bar and topbar badge flag it
-    page.keyboard.press("Escape")
+    # add a request that 404s: the next check fails, and the status bar and the rail flag it
+    page.click("#side-tabs button[data-tab='collection']")
     page.click("#btn-new")
     page.fill("#f-name", "Broken")
     page.fill("#f-url", echo_url + "/missing")
     page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
     page.click("#btn-monitors")
-    page.click(".mon-item [data-act='edit']")
+    page.wait_for_selector("#monitor-view h2:has-text('Health')")           # the section remembers what was open
+    page.click("#monitor-view [data-act='edit']")
     page.locator("#mon-pick .mon-pick-row", has_text="Broken").locator("input").check()
     page.click("#modal-foot button.primary")
-    page.wait_for_selector(".mon-item")
-    page.click(".mon-item [data-act='run']")
-    page.wait_for_selector(".mon-item .badge.failed")
+    page.wait_for_selector("#monitor-view .page-reqs >> text=Broken")
+    page.click("#monitor-view [data-act='run']")
+    page.wait_for_selector("#monitor-view .page-title .badge.failed")
     page.wait_for_selector("#sb-monitors:not([hidden])")
     page.wait_for_selector("#mon-badge:not([hidden])")
-    # the results view lists what failed, and "Back to monitors" returns to the list
-    page.click(".mon-item [data-act='results']")
-    page.wait_for_selector("#modal .htable")
-    assert "Broken" in page.locator("#modal .mon-fails").first.text_content()
-    page.click("#modal-foot button.primary")
-    page.wait_for_selector(".mon-item")
-    # pause: the failing flag clears
-    page.locator(".mon-item .switch span").click()
+    page.wait_for_selector("#mon-list .mon-item .page-dot.s-fail")
+    # the history says what failed; "Failures only" leaves just those checks
+    page.wait_for_selector("#mon-checks .mon-fails:has-text('Broken')")
+    assert page.locator("#mon-checks tr").count() == 3                       # the heading and two checks
+    page.check("#mon-fail-only")
+    assert page.locator("#mon-checks tr").count() == 2
+    # the list filters by state
+    page.click("#mon-filter .chip[data-filter='fail']")
+    assert page.locator("#mon-list .mon-item").count() == 1
+    page.click("#mon-filter .chip[data-filter='off']")
+    assert page.locator("#mon-list .mon-item").count() == 0
+    page.click("#mon-filter .chip[data-filter='all']")
+    # back to all monitors: the table, the numbers, and pausing everything at once
+    page.click("#monitor-view [data-act='back']")
+    page.wait_for_selector("#monitor-view .page-table .page-row")
+    assert "failing" in page.inner_text("#monitor-view .page-tiles").lower()
+    page.click("#monitor-view [data-act='pause-all']")
     page.wait_for_selector("#sb-monitors[hidden]", state="attached")
-    page.wait_for_selector(".mon-item.off")
-    # the ⚠ status chip opens the same dialog
-    page.keyboard.press("Escape")
-    page.wait_for_selector("#modal", state="hidden")
+    page.wait_for_selector("#mon-list .mon-item.off")
+    page.wait_for_selector("#monitor-view .page-row .badge:has-text('paused')")
+    # the switch in the list resumes one; its row opens its page again
+    page.locator("#mon-list .mon-item .switch span").click()
+    page.wait_for_selector("#mon-list .mon-item:not(.off)")
+    # the ⚠ chip in the status bar leads to this section from anywhere
+    page.click("#side-tabs button[data-tab='collection']")
+    page.wait_for_selector("#sb-monitors:not([hidden])")
+    page.click("#sb-monitors")
+    page.wait_for_selector("#monitor-view .page-head")
+    for m in page.request.get(app_url + "/api/monitors").json()["monitors"]:
+        page.request.delete(f"{app_url}/api/monitors/{m['id']}")
+    page.click("#side-tabs button[data-tab='collection']")
+    forget(page, app_url, "Watched", "Broken")
 
 
 def test_streaming_send(page, servers):
@@ -1372,17 +1398,19 @@ def test_settings_mcp_tab(page, servers):
     assert '"mcpServers"' in cfg and '"pyhttp"' in cfg
 
 
-def test_mocks_dialog(page, servers):
-    """Mock servers: create one, add a route, call it from the page, see it in the call log."""
+def test_mocks_page(page, servers):
+    """Mock servers as a section: create one, add a route, call it from the page, see it in the call log."""
     app_url, _echo = servers
     page.click("#btn-mocks")
-    page.wait_for_selector("#mock-list .empty")
+    page.wait_for_selector("#mock-view .page-empty")
     page.click("#btn-mock-new")
     page.fill("#mk-name", "Payments API")
     page.click("#modal-foot button.primary")
-    # creating a mock goes straight to its (empty) routes
+    # creating a mock opens its page, on its (empty) routes
     page.wait_for_selector("#btn-mock-route-new")
-    assert "/mock/payments-api" in page.locator("#modal-body code.mono").first.text_content()
+    assert page.is_hidden("#modal")
+    assert "/mock/payments-api" in page.locator("#mock-view .mock-url").text_content()
+    assert "Payments API" in page.inner_text("#mock-list .mock-item")
 
     page.click("#btn-mock-route-new")
     page.wait_for_selector("#mr-path")
@@ -1393,13 +1421,22 @@ def test_mocks_dialog(page, servers):
     assert "/mock/payments-api/users/:id" in page.locator("#mr-preview").text_content()
     page.click("#modal-foot button.primary")
     page.wait_for_selector(".mock-route")
+    # a second route, and the filter over them
+    page.click("#btn-mock-route-new")
+    page.fill("#mr-path", "/orders")
+    page.click("#modal-foot button.primary")
+    page.wait_for_function("document.querySelectorAll('.mock-route').length === 2")
+    page.fill("#mock-route-q", "orders")
+    assert page.locator(".mock-route").count() == 1
+    page.fill("#mock-route-q", "")
+    assert page.locator(".mock-route").count() == 2
 
     # call it from the page itself: same origin, same port, no second server
     body = page.evaluate("fetch('/mock/payments-api/users/7').then(r => r.text())")
     assert json.loads(body) == {"id": "7"}
     page.evaluate("fetch('/mock/payments-api/missing')")
 
-    page.click("#modal-foot button:has-text('Calls')")
+    page.click("#mock-tabs button[data-tab='calls']")
     page.wait_for_selector(".mock-call")
     rows = page.locator(".mock-call")
     assert rows.count() == 2
@@ -1410,21 +1447,36 @@ def test_mocks_dialog(page, servers):
     page.wait_for_selector(".dialog-backdrop")
     assert "user-agent" in page.locator(".dialog-msg").text_content()
     page.click(".dialog-foot button")
+    # only the calls nothing answered
+    page.check("#mock-unmatched")
+    assert page.locator(".mock-call").count() == 1 and "/missing" in page.locator(".mock-call").first.text_content()
+    page.uncheck("#mock-unmatched")
 
-    # back on the list the hits are counted and the mock reads as live
-    page.click("#modal-foot button:has-text('Back to mocks')")
-    page.wait_for_selector(".mock-item .badge.ok")
-    page.wait_for_selector(".mock-item .mon-meta:has-text('2 calls answered')")
-    assert "/mock/payments-api" in page.locator(".mock-item .mock-url").text_content()
+    # the page counts the hits and reads as live; so do the list and the rail
+    page.wait_for_selector("#mock-view .page-title .badge.ok")
+    page.wait_for_selector("#mock-list .mock-item .mon-meta:has-text('2 calls')")
     page.wait_for_selector("#mock-badge:not([hidden])")
+    page.click("#mock-view [data-act='back']")
+    page.wait_for_selector("#mock-view .page-row:has-text('Payments API')")
+    assert "/mock/payments-api" in page.inner_text("#mock-view .page-table")
+    page.click("#mock-view .page-row")
+    page.wait_for_selector("#mock-tabs")
 
-    # turning it off stops the answers and clears the topbar badge
-    page.locator(".mock-item .switch span").click()
-    page.wait_for_selector(".mock-item.off")
+    # turning it off stops the answers and clears the badge on the rail
+    page.locator("#mock-view .switch-label .switch span").click()
+    page.wait_for_selector("#mock-list .mock-item.off")
     page.wait_for_selector("#mock-badge[hidden]", state="attached")
     assert page.evaluate("fetch('/mock/payments-api/users/7').then(r => r.status)") == 503
-    page.keyboard.press("Escape")
-    page.wait_for_selector("#modal", state="hidden")
+    # "Try" on a route makes a request for it and goes to the Requests section
+    page.click("#mock-tabs button[data-tab='routes']")
+    page.locator(".mock-route [data-act='try']").first.click()
+    page.wait_for_function("document.querySelector('#f-url') && document.querySelector('#f-url').value.includes('{{mock_url}}/payments-api')")
+    assert page.is_visible("#req-list") and not page.is_visible("#mock-view")
+    for m in page.request.get(app_url + "/api/mocks").json()["mocks"]:
+        page.request.delete(f"{app_url}/api/mocks/{m['id']}")
+    for r in page.request.get(app_url + "/api/requests?fields=list").json():
+        if "{{mock_url}}" in (r.get("url") or ""):
+            page.request.delete(f"{app_url}/api/requests/{r['id']}")
     # the 404 and 503 fetched on purpose above each log a console error; the rest must be clean
     page.errors[:] = [e for e in page.errors if "Failed to load resource" not in e]
 
@@ -1724,6 +1776,16 @@ def test_flows_are_a_tab_of_the_sidebar(page, servers):
     page.wait_for_selector("#flow-state .badge.ok", timeout=15000)
     lines = page.locator("#flow-log .flow-line").all_inner_texts()
     assert "status 200" in lines[-2] and lines[-1] == "Flow passed"
+    # every run is kept: the History tab lists them, and a click reads one again
+    page.click("#flow-run")
+    page.wait_for_function("document.querySelector('#flow-history-n').textContent === '2'")
+    page.click("#flow-log-tabs button[data-tab='history']")
+    page.wait_for_selector("#flow-history .flow-run-row")
+    assert page.locator("#flow-history .flow-run-row").count() == 2
+    assert "2 runs kept" in page.inner_text("#flow-history") and "4 blocks" in page.inner_text("#flow-history .flow-run-row >> nth=0")
+    page.locator("#flow-history .flow-run-row").nth(1).click()
+    page.wait_for_selector("#flow-log:visible .flow-line")
+    assert page.locator("#flow-log .flow-line").last.inner_text() == "Flow passed"
     assert page.locator("#flow-list .flow-item.active .flow-dot.ok").count() == 1
     # the request editor is untouched behind it, and the flow is still open on coming back
     page.click("#side-tabs button[data-tab='collection']")
@@ -1740,8 +1802,8 @@ def test_flows_are_a_tab_of_the_sidebar(page, servers):
 def test_the_rail_is_the_navigation(page, servers):
     """Sections and tools are on the left rail; the top bar keeps the project, the environment
     and the app's own actions."""
-    rail = [b.strip() for b in page.locator(".rail button").all_text_contents()]
-    assert rail == ["Requests", "Flows", "Envs", "Variables", "Cookies", "Monitors", "Mocks"]
+    rail = page.locator(".rail button").evaluate_all("(buttons) => buttons.map((b) => (b.querySelector('.rail-label') || b).textContent.trim())")
+    assert rail == ["Requests", "Flows", "Monitors", "Mocks", "Envs", "Variables", "Cookies"]
     in_topbar = page.locator(".topbar button").evaluate_all("(buttons) => buttons.filter((b) => b.offsetParent !== null).map((b) => b.id)")
     assert not {"btn-envs", "btn-variables", "btn-cookies", "btn-monitors", "btn-mocks"} & set(in_topbar)
     assert {"btn-project", "btn-import", "btn-export", "btn-help", "btn-settings"} <= set(in_topbar)
@@ -1749,9 +1811,13 @@ def test_the_rail_is_the_navigation(page, servers):
     edge = page.evaluate("document.querySelector('.rail').getBoundingClientRect().right")
     assert page.evaluate("document.querySelector('.sidebar').getBoundingClientRect().left") >= edge - 1
     assert page.evaluate("document.querySelector('.statusbar').getBoundingClientRect().left") == 0
-    # each tool opens its dialog from there
-    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie"),
-                          ("#btn-monitors", "Monitors"), ("#btn-mocks", "Mock")):
+    # the first four are sections with a page of their own; the other three open their dialog
+    for button, view in (("#btn-monitors", "#monitor-view"), ("#btn-mocks", "#mock-view")):
+        page.click(button)
+        page.wait_for_selector(view + " .page-empty, " + view + " .page-head")
+        assert page.is_hidden("#modal") and not page.is_visible("#runs-panel")
+    page.click("#side-tabs button[data-tab='collection']")
+    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie")):
         page.click(button)
         page.wait_for_selector("#modal:not([hidden])")
         assert title.lower() in page.inner_text("#modal-title").lower(), button

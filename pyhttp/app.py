@@ -1583,7 +1583,29 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         """The newest run of the flow that is still kept, with its whole log (a run an email
         started is seen this way), or ``{"run": null}``."""
         run = flow_runs.latest(fid)
-        return {"run": run.snapshot() if run else None}
+        if run:
+            return {"run": run.snapshot()}
+        kept = db.list_flow_runs(fid, limit=1)   # after a restart: the newest one in the flow's history
+        return {"run": db.get_flow_run(kept[0]["id"]) if kept else None}
+
+    @app.get("/api/flows/{fid}/runs")
+    def flow_history(fid: str, limit: int = Query(50)) -> dict[str, Any]:
+        """The flow's finished runs, newest first, without their logs."""
+        _flow_or_404(fid)
+        return {"runs": db.list_flow_runs(fid, limit=min(max(limit, 1), 200))}
+
+    @app.get("/api/flows/{fid}/runs/{rid}")
+    def flow_history_run(fid: str, rid: str) -> dict[str, Any]:
+        """One finished run with its whole log."""
+        run = db.get_flow_run(rid)
+        if not run or run["flow_id"] != fid:
+            raise HTTPException(404, "That run is no longer in the flow's history")
+        return run
+
+    @app.delete("/api/flows/{fid}/runs")
+    def clear_flow_history(fid: str) -> dict[str, Any]:
+        _flow_or_404(fid)
+        return {"deleted": db.clear_flow_runs(fid)}
 
     @app.post("/api/flows/mail-check")
     def flow_mail_check(body: MailCheckIn) -> dict[str, Any]:

@@ -26,6 +26,9 @@ four texts (from, subject, text, to: each "contains", case ignored, empty = not 
 and whether a message must fit all of them or any one of them (``fits`` below). When
 no message fitted in time, the log says what did arrive and why the newest one was not it.
 
+Every finished run is kept in the flow's history (the newest 50 of each flow) with its
+whole log: when it ran, what started it, how it ended and what each block said.
+
 A run fails when it ends on an unwired ``fail`` or ``timeout`` port, on a ``stop`` block
 set to fail, or when it runs more blocks than ``Limits.steps`` (two blocks wired in a
 circle would otherwise run for ever).
@@ -59,6 +62,7 @@ MAX_NAME = 120
 MAX_TEXT = 20_000         # characters in one field of a block
 MAX_EVENTS = 1000         # per run; a longer log loses its oldest lines
 KEPT_RUNS = 20            # finished runs kept in memory for the UI
+KEPT_HISTORY = 50         # finished runs of one flow kept in its history (the database)
 
 _NUMBER = r"(?<!\w)(?<!\d\.)(\d{%s})(?!\w|\.\d)"   # 482913 and "482913." but not 1.2345 or abc1234
 # the number a message calls its code; failing that a six-digit one; failing that any of 4 to 8 digits
@@ -425,6 +429,7 @@ class Run:
         self._log(None, "fail" if state == "failed" else "ok", f"Flow {state}" + (f": {message}" if message and not said else ""))
         try:
             db.update_flow(self.flow_id, last_run_at=self.started_at, last_status=state)
+            db.add_flow_run(self.snapshot(), KEPT_HISTORY)   # the flow's history: what ran, when, and what each block said
         except Exception:  # noqa: BLE001 - the flow was deleted, or the project closed, while it ran
             pass
 
