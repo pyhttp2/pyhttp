@@ -1,0 +1,150 @@
+/* The look of the app, in one layer on top of style.css and features.css (which hold the
+   structure). Loaded last.
+
+   Rules it follows:
+   - one action color (blue): what sends, runs, saves or confirms. Green and red only say
+     "passed" and "failed"; they are not buttons.
+   - one density: 13px text, controls about 30px high, 6px corners.
+   - navigation on the left rail, the top bar for where you are (project, environment)
+     and the app itself (import, export, help, settings).
+   - focus is always visible: a ring in the action color. */
+
+/* ---------------------------------------------------------------- tokens */
+:root {
+  --bg: #0e1116;
+  --bg-2: #14181f;
+  --bg-3: #1a1f28;
+  --bg-4: #232a35;
+  --border: #272e3a;
+  --text: #e3e7ee;
+  --muted: #8791a3;
+  --primary: #3d82f6;
+  --primary-2: #2f6fe0;
+  --ring: color-mix(in srgb, var(--primary) 26%, transparent);
+  --rail-w: 64px;
+  --top-h: 44px;
+  --shadow: 0 24px 64px rgba(0, 0, 0, .5), 0 2px 8px rgba(0, 0, 0, .3);
+}
+:root[data-theme="light"] {
+  --bg: #f4f5f7;
+  --bg-2: #ffffff;
+  --bg-3: #f0f2f5;
+  --bg-4: #e4e8ee;
+  --border: #d8dce3;
+  --text: #18202e;
+  --muted: #5a6575;
+  --primary: #2563eb;
+  --primary-2: #1d4fd0;
+  --shadow: 0 24px 60px rgba(15, 23, 42, .18), 0 2px 8px rgba(15, 23, 42, .08);
+}
+
+/* ------------------------------------------------------------------ base */
+body { font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent; }
+.small { font-size: 11.5px; }
+code { font-size: 11.5px; border-radius: 4px; }
+
+/* -------------------------------------------------------------- controls */
+input, select, textarea { padding: 5px 9px; border-radius: 6px; transition: border-color .12s, box-shadow .12s; }
+input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
+input[type=checkbox] { box-shadow: none; }   /* their size (18px) is a hit target chosen on purpose: style.css */
+input[type=checkbox]:checked, input[type=checkbox]:indeterminate { background-color: var(--primary); border-color: var(--primary); }
+input[type=checkbox]:checked:focus { border-color: var(--primary); }
+input[type=checkbox]:focus { box-shadow: none; }
+input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
+
+button { padding: 5px 11px; border-radius: 6px; font-weight: 500; background: var(--bg-3); transition: background-color .12s, border-color .12s, color .12s; }
+button:hover { background: var(--bg-4); }
+button.primary, button.accent { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+button.primary:hover, button.accent:hover { background: var(--primary-2); border-color: var(--primary-2); }
+:root[data-theme="light"] button.accent { color: #fff; }
+:root[data-theme="light"] button.accent:hover { background: var(--primary-2); }
+button.link { font-weight: 400; }
+/* switches say "on" in the action color, like checkboxes */
+.switch input:checked + span { background: var(--primary); border-color: var(--primary); }
+:where(button, select, .chip, [tabindex]):focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* --------------------------------------------------------------- top bar */
+.topbar { height: var(--top-h); gap: 10px; padding: 0 12px 0 10px; }
+.brand { gap: 8px; margin-right: 6px; }
+.brand-mark { width: 24px; height: 24px; filter: none; }
+.brand-word { font-size: 15px; }
+/* where you are (project, sync, environment) sits by the brand; the app's own actions
+   (import, export, help, settings) go to the far right: the divider is the gap between them */
+.topbar-actions { gap: 2px; margin-left: 0; flex: 1 1 auto; min-width: 0; }
+.topbar-actions > button:not(.update-pill) { padding: 5px 9px; font-weight: 500; }
+.topbar-actions > .project-btn { margin-left: 0; border-color: var(--border); background: var(--bg-3); }
+.topbar .env-picker { margin-left: 8px; }
+.topbar #env-select { min-width: 190px; }
+.tb-sep { flex: 1 1 auto; width: auto; height: 0; margin: 0; background: none; }
+#meta-info { margin-left: 6px; }
+@media (max-width: 1180px) { .tb-sep { display: block; } }
+
+/* ------------------------------------------------------------- the rail */
+.rail {
+  position: fixed; left: 0; top: var(--top-h); bottom: 30px; width: var(--rail-w); z-index: 4;
+  display: flex; flex-direction: column; padding: 6px 0; overflow-y: auto; overflow-x: hidden;
+  background: var(--bg-2); border-right: 1px solid var(--border); user-select: none;
+}
+.layout, .console { margin-left: var(--rail-w); }
+.rail-group { display: flex; flex-direction: column; margin: 0; padding: 2px 0; border: none; }
+.rail-group + .rail-group { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.rail .rail-btn {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  margin: 1px 6px; padding: 7px 0 5px; border: none; border-radius: 8px; background: none;
+  color: var(--muted); font-size: 10.5px; font-weight: 500; line-height: 1.2; white-space: nowrap;
+}
+.rail .rail-btn:hover { background: var(--bg-3); color: var(--text); }
+.rail .side-tabs .rail-btn.active { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--text); }
+.rail .side-tabs .rail-btn.active svg { color: var(--primary); }
+.rail .side-tabs .rail-btn.active::before {
+  content: ""; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--primary);
+}
+.rail .rail-btn .tab-n { position: absolute; top: 2px; right: 5px; margin: 0; font-size: 9.5px; padding: 0 4px; }
+.rail-label { display: block; }
+@media (max-width: 960px) {
+  .rail { position: static; width: auto; flex-direction: row; padding: 4px 6px; border-right: none; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .rail-group { flex-direction: row; padding: 0; }
+  .rail-group + .rail-group { margin: 0 0 0 6px; padding: 0 0 0 6px; border-top: none; border-left: 1px solid var(--border); }
+  .rail .rail-btn { margin: 0 1px; padding: 5px 9px 4px; }
+  .rail .side-tabs .rail-btn.active::before { display: none; }
+  .layout, .console { margin-left: 0; }
+}
+
+/* --------------------------------------------------------------- sidebar */
+.sidebar-head { padding: 10px; gap: 6px; }
+.select-bar { padding: 6px 10px; }
+.tag-filter { padding: 6px 10px; }
+.req-item { padding: 5px 6px 5px 10px; grid-template-columns: 20px 50px 1fr 28px; }
+.req-item .name { font-weight: 500; font-size: 13px; }
+.req-item .tag { color: color-mix(in srgb, var(--primary) 70%, var(--muted)); }
+.req-item.selected { background: color-mix(in srgb, var(--primary) 9%, transparent); }
+.method { font-size: 10.5px; letter-spacing: .2px; padding: 2px 3px; }
+.chip.active { background: var(--primary); border-color: var(--primary); }
+
+/* ---------------------------------------------------------------- editor */
+.editor { padding: 10px 14px; }
+.tabs { gap: 0; }
+.tabs button { padding: 7px 11px; font-size: 12.5px; font-weight: 500; }
+.tabs.small button { font-weight: 500; }
+.badge { font-size: 10.5px; font-weight: 600; letter-spacing: .5px; padding: 2px 8px; }
+.empty { font-size: 13px; }
+
+/* ---------------------------------------------------------------- dialogs */
+.modal-backdrop { background: rgba(6, 8, 12, .66); }
+.modal, .dialog { border-radius: 12px; box-shadow: var(--shadow); }
+.modal-head { padding: 12px 16px; }
+.modal-head h3 { font-size: 15px; font-weight: 600; letter-spacing: -.1px; }
+.modal-body { padding: 14px 16px; }
+.modal-foot { padding: 10px 16px; background: var(--bg-3); border-radius: 0 0 12px 12px; }
+:root[data-theme="light"] .modal-backdrop { background: rgba(15, 23, 42, .32); }
+
+/* ------------------------------------------------------------ status bar */
+.statusbar { height: 30px; position: relative; z-index: 5; }
+
+/* ------------------------------------------------------------------ flows */
+.flow-bar #flow-name { font-size: 14px; }
+.flow-add { font-weight: 500; }
+
+/* room for the caret next to "ANY of these (or)" */
+.flow-match-mode select { min-width: 158px; }

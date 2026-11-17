@@ -644,7 +644,11 @@ function initFlows() {
   const tabs = $('#side-tabs');
   if (!tabs) return;
   bindTabs(tabs, $('#side-panels'));
-  $$('button[data-tab]', tabs).forEach((b) => b.addEventListener('click', () => setFlowMode(b.dataset.tab === 'flows')));
+  $$('button[data-tab]', tabs).forEach((b) => b.addEventListener('click', () => {
+    setFlowMode(b.dataset.tab === 'flows');
+    // the rail stays when the sidebar is hidden: picking a section there brings its list back
+    if ($('.layout').classList.contains('no-side') && $('#btn-sidebar')) $('#btn-sidebar').click();
+  }));
   $('#btn-flow-new').addEventListener('click', newFlow);
   $('#flow-search').addEventListener('input', (e) => { flowUi.search = e.target.value; renderFlowList(); });
   window.addEventListener('resize', () => { if ($('#flow-wires') && flowUi.flow) drawFlowWires(); });

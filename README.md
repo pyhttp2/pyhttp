@@ -44,7 +44,7 @@ only on `127.0.0.1`.
   (Ctrl/Cmd+Shift+Enter does the same for the body in the editor); its ⋯ menu
   duplicates, reorders or deletes a body without opening it.
 - **Search** across name, description, URL, tags and body names; filter by tag chips.
-- **Flows** (sidebar → Flows tab): saved requests wired into a small program, drawn as
+- **Flows** (rail → Flows): saved requests wired into a small program, drawn as
   blocks on a canvas in the middle of the window. Blocks: *Send request* (ports ok / fail),
   *Wait for email* (received / timeout), *Set variable*, *If* (true / false), *Wait*, *Log*,
   *Stop*. Drag from a port to the block that runs next; a port without a wire ends the flow.
@@ -661,6 +661,8 @@ pyhttp/
   updater.py      in-app updates: download + verify + helper script (Windows), brew upgrade (macOS)
   static/         index.html, style.css, features.css, app.js, editor.js (CodeMirror editors),
                   viewer.js (response viewer), codegen.js (snippets), features.js,
+                  flows.js + flows.css (the Flows section), ui.css (the look: colors, density,
+                  the navigation rail; loaded last, its rules are written at its top),
                   vendor/codemirror.js (prebuilt CodeMirror 6 bundle, see packaging/editor)
 packaging/        build.py, pyhttp.spec, pyhttp.iss (Windows installer), make_icons.py (desktop builds)
 tests/            test_backend.py (API), test_ui.py (Playwright, headless Edge/Chromium)

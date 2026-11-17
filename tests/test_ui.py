@@ -1735,3 +1735,38 @@ def test_flows_are_a_tab_of_the_sidebar(page, servers):
     page.request.delete(f"{app_url}/api/flows/{saved[0]['id']}")
     page.click("#side-tabs button[data-tab='collection']")
     forget(page, app_url, "Flow ping", "Flow broken")
+
+
+def test_the_rail_is_the_navigation(page, servers):
+    """Sections and tools are on the left rail; the top bar keeps the project, the environment
+    and the app's own actions."""
+    rail = [b.strip() for b in page.locator(".rail button").all_text_contents()]
+    assert rail == ["Requests", "Flows", "Envs", "Variables", "Cookies", "Monitors", "Mocks"]
+    in_topbar = page.locator(".topbar button").evaluate_all("(buttons) => buttons.filter((b) => b.offsetParent !== null).map((b) => b.id)")
+    assert not {"btn-envs", "btn-variables", "btn-cookies", "btn-monitors", "btn-mocks"} & set(in_topbar)
+    assert {"btn-project", "btn-import", "btn-export", "btn-help", "btn-settings"} <= set(in_topbar)
+    # the rail does not cover the page: the sidebar begins where the rail ends, the status bar spans the window
+    edge = page.evaluate("document.querySelector('.rail').getBoundingClientRect().right")
+    assert page.evaluate("document.querySelector('.sidebar').getBoundingClientRect().left") >= edge - 1
+    assert page.evaluate("document.querySelector('.statusbar').getBoundingClientRect().left") == 0
+    # each tool opens its dialog from there
+    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie"),
+                          ("#btn-monitors", "Monitors"), ("#btn-mocks", "Mock")):
+        page.click(button)
+        page.wait_for_selector("#modal:not([hidden])")
+        assert title.lower() in page.inner_text("#modal-title").lower(), button
+        page.click("#modal-close")
+    # with the sidebar hidden the rail stays, and picking a section brings the list back
+    page.click("#btn-sidebar")
+    assert not page.is_visible(".sidebar") and page.is_visible(".rail")
+    page.click("#side-tabs button[data-tab='flows']")
+    assert page.is_visible(".sidebar") and page.is_visible("#flow-list")
+    page.click("#side-tabs button[data-tab='collection']")
+    assert page.is_visible("#req-list")
+    # one action color: New, Send-like buttons and the selected section share it
+    new_request(page, servers[1], "Rail colors")
+    page.mouse.move(700, 600)            # off the buttons: a hovered one is a shade darker
+    page.wait_for_timeout(250)
+    colors = page.evaluate("['#btn-new', '#btn-send'].map((s) => getComputedStyle(document.querySelector(s)).backgroundColor)")
+    assert colors[0] == colors[1]
+    forget(page, servers[0], "Rail colors")
