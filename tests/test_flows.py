@@ -432,3 +432,108 @@ def test_every_run_is_kept_in_the_flows_history(client, echo_url, monkeypatch): 
     assert client.delete(f"/api/flows/{fid}").json() == {"ok": True}                   # and goes with it
     from pyhttp import db
     assert db.list_flow_runs(fid) == []
+
+
+def _wait_for_input(client: TestClient, run_id: str) -> dict[str, Any]:
+    for _ in range(100):
+        got = client.get(f"/api/flow-runs/{run_id}?wait=2").json()
+        if got.get("waiting") or got["state"] != "running":
+            return got
+    raise AssertionError("the run never waited")
+
+
+def _finish(client: TestClient, run_id: str) -> dict[str, Any]:
+    for _ in range(100):
+        got = client.get(f"/api/flow-runs/{run_id}?wait=2").json()
+        if got["state"] != "running":
+            return client.get(f"/api/flow-runs/{run_id}").json() | {"all": client.get(f"/api/flow-runs/{run_id}?after=0").json()["events"]}
+    raise AssertionError("the run did not end")
+
+
+def test_pick_from_a_list_then_a_script_builds_the_next_request(client, echo_url):  # noqa: F811
+    items = [{"id": n, "name": f"item {n}"} for n in range(1, 16)]
+    listing = client.post("/api/requests", json={
+        "name": "list", "method": "POST", "url": echo_url + "/echo", "body_type": "json",
+        "bodies": [{"id": "b", "name": "Default", "body": __import__("json").dumps({"items": items})}]}).json()
+    send = client.post("/api/requests", json={
+        "name": "send", "method": "POST", "url": echo_url + "/echo", "body_type": "json",
+        "bodies": [{"id": "b", "name": "Default", "body": '{{payload}}'}]}).json()
+    g = graph([block("request", "list", request_id=listing["id"]),
+               block("script", "unwrap", code="return JSON.parse(input.body).items;", name="all"),
+               block("view", "pick", title="Pick items", min=2, max=5),
+               block("script", "build", code="const ids = input.map(i => i.id); log('picked', ids.length); set('payload', {ids}); return ids.length;"),
+               block("request", "send", request_id=send["id"]),
+               block("if", "check", left="{{prev.json.body}}", op="contains", right='"ids": [3, 7, 9]')],
+              ("start", "out", "list"), ("list", "ok", "unwrap"), ("unwrap", "ok", "pick"), ("pick", "submitted", "build"),
+              ("build", "ok", "send"), ("send", "ok", "check"))
+    made = client.post("/api/flows", json={"name": "pick", "graph": g}).json()
+    run_id = client.post("/api/flow-runs", json={"flow_id": made["id"]}).json()["id"]
+    waiting = _wait_for_input(client, run_id)
+    assert waiting["waiting"]["title"] == "Pick items" and len(waiting["waiting"]["data"]) == 15
+    assert waiting["waiting"]["min"] == 2 and waiting["waiting"]["max"] == 5
+    # too few, too many: refused, and the run keeps waiting
+    assert client.post(f"/api/flow-runs/{run_id}/answer", json={"value": [items[0]]}).status_code == 400
+    assert client.post(f"/api/flow-runs/{run_id}/answer", json={"value": items[:6]}).status_code == 400
+    picked = [items[2], items[6], items[8]]
+    assert client.post(f"/api/flow-runs/{run_id}/answer", json={"value": picked}).json() == {"ok": True}
+    done = _finish(client, run_id)
+    assert done["state"] == "passed", done
+    texts = [e["text"] for e in done["all"]]
+    assert any("Picked 3 of 15" in t for t in texts) and "picked 3" in texts
+    assert any(e["node"] == "check" and e["port"] == "true" for e in done["all"])
+    assert client.post(f"/api/flow-runs/{run_id}/answer", json={"value": []}).status_code == 400   # nothing waits now
+
+
+def test_a_view_closed_without_picking_takes_timeout_and_a_failing_script_takes_fail(client):  # noqa: F811
+    g = graph([block("set", "s", name="list", value="[1,2,3]"), block("view", "pick", data="{{list}}"), block("log", "after", message="no")],
+              ("start", "out", "s"), ("s", "out", "pick"), ("pick", "submitted", "after"))
+    made = client.post("/api/flows", json={"name": "v", "graph": g}).json()
+    run_id = client.post("/api/flow-runs", json={"flow_id": made["id"]}).json()["id"]
+    assert _wait_for_input(client, run_id)["waiting"]["data"] == [1, 2, 3]
+    client.post(f"/api/flow-runs/{run_id}/answer", json={"cancel": True})
+    done = _finish(client, run_id)
+    assert done["state"] == "failed" and "Closed without picking" in done["message"]
+
+    result = run(client, graph([block("script", "js", code="fail('no token in ' + vars.where)"), block("set", "w", name="where", value="x")],
+                               ("start", "out", "w"), ("w", "out", "js")))
+    assert result["state"] == "failed" and result["message"] == "no token in x"
+    broken = run(client, graph([block("script", "js", code="nothing()")], ("start", "out", "js")))
+    assert broken["state"] == "failed" and "ReferenceError" in broken["message"]
+
+
+def test_folders_of_flows(client):  # noqa: F811
+    a = client.post("/api/flows", json={"name": "a", "folder": " Auth / Signup "}).json()
+    b = client.post("/api/flows", json={"name": "b"}).json()
+    assert a["folder"] == "Auth/Signup" and b["folder"] == ""
+    assert client.post("/api/flows/move", json={"ids": [b["id"], "nope"], "folder": "Auth"}).json()["moved"] == 1
+    assert client.post("/api/flows/folders/rename", json={"name": "Auth", "to": "Login"}).json()["changed"] == 2
+    folders = {f["name"]: f["folder"] for f in client.get("/api/flows").json()["flows"]}
+    assert folders == {"a": "Login/Signup", "b": "Login"}
+    client.post("/api/flows/folders/rename", json={"name": "Login/Signup", "to": ""})
+    assert {f["name"]: f["folder"] for f in client.get("/api/flows").json()["flows"]} == {"a": "", "b": "Login"}
+    assert client.put(f"/api/flows/{a['id']}", json={"folder": "X"}).json()["folder"] == "X"
+
+
+def test_run_selected_runs_flows_one_after_the_other(client):  # noqa: F811
+    ok = client.post("/api/flows", json={"name": "ok", "graph": graph([block("log", "l", message="hi")], ("start", "out", "l"))}).json()
+    bad = client.post("/api/flows", json={"name": "bad", "graph": graph([block("stop", "s", result="fail")], ("start", "out", "s"))}).json()
+    assert client.post("/api/flow-batches", json={"flow_ids": []}).status_code == 400
+    batch = client.post("/api/flow-batches", json={"flow_ids": [ok["id"], bad["id"], ok["id"]]}).json()
+    assert [i["name"] for i in batch["items"]] == ["ok", "bad"]
+    for _ in range(100):
+        got = client.get(f"/api/flow-batches/{batch['id']}").json()
+        if got["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert got["state"] == "failed" and [i["state"] for i in got["items"]] == ["passed", "failed"]
+    assert got["counts"]["passed"] == 1
+    # each run is in its flow's history
+    assert client.get(f"/api/flows/{ok['id']}/runs").json()["runs"][0]["state"] == "passed"
+
+    stopping = client.post("/api/flow-batches", json={"flow_ids": [bad["id"], ok["id"]], "stop_on_fail": True}).json()
+    for _ in range(100):
+        got = client.get(f"/api/flow-batches/{stopping['id']}").json()
+        if got["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert [i["state"] for i in got["items"]] == ["failed", "skipped"]

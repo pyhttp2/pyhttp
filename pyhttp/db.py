@@ -375,6 +375,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     add("folders", "variables", "TEXT NOT NULL DEFAULT '[]'")
     add("folders", "position", "INTEGER NOT NULL DEFAULT 0")
     add("folders", "views", "TEXT NOT NULL DEFAULT '[]'")
+    add("flows", "folder", "TEXT NOT NULL DEFAULT ''")
     add("run_results", "body_name", "TEXT")
     add("run_results", "iteration", "INTEGER NOT NULL DEFAULT 1")
     add("run_results", "tests", "TEXT NOT NULL DEFAULT '[]'")
@@ -1696,22 +1697,22 @@ def get_flow(flow_id: str) -> dict[str, Any] | None:
     return _row_to_flow(row) if row else None
 
 
-def create_flow(name: str, graph: dict[str, Any]) -> dict[str, Any]:
+def create_flow(name: str, graph: dict[str, Any], folder: str = "") -> dict[str, Any]:
     fid = uuid.uuid4().hex
     now = time.time()
     with _lock:
-        _c().execute("INSERT INTO flows (id, name, graph, created_at, updated_at) VALUES (?,?,?,?,?)",
-                     (fid, str(name or "Flow"), json.dumps(graph), now, now))
+        _c().execute("INSERT INTO flows (id, name, graph, created_at, updated_at, folder) VALUES (?,?,?,?,?,?)",
+                     (fid, str(name or "Flow"), json.dumps(graph), now, now, str(folder or "")))
         _c().commit()
     return get_flow(fid)  # type: ignore[return-value]
 
 
 def update_flow(flow_id: str, **fields: Any) -> dict[str, Any] | None:
-    """``name``, ``graph``, ``last_run_at``, ``last_status``. Only an edit moves ``updated_at``."""
-    fields = {k: v for k, v in fields.items() if k in ("name", "graph", "last_run_at", "last_status")}
+    """``name``, ``graph``, ``folder``, ``last_run_at``, ``last_status``. Only an edit moves ``updated_at``."""
+    fields = {k: v for k, v in fields.items() if k in ("name", "graph", "folder", "last_run_at", "last_status")}
     if "graph" in fields:
         fields["graph"] = json.dumps(fields["graph"])
-    if "name" in fields or "graph" in fields:
+    if "name" in fields or "graph" in fields or "folder" in fields:
         fields["updated_at"] = time.time()
     if fields:
         cols = ", ".join(f"{k} = ?" for k in fields)

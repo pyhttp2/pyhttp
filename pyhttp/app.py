@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, cloudsync, console, curl, db, docs, flows, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
+from . import (USER_AGENT, __version__, cloudsync, console, curl, db, docs, flows, gitsync, jsengine, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
                projects, runner, templating, updater)
 from .templating import build_context, render
 
@@ -119,15 +119,42 @@ class MonitorPatch(BaseModel):
 class FlowIn(BaseModel):
     name: str = "Flow"
     graph: dict[str, Any] | None = None
+    folder: str = ""
 
 
 class FlowPatch(BaseModel):
     name: str | None = None
     graph: dict[str, Any] | None = None
+    folder: str | None = None
 
 
 class FlowRunIn(BaseModel):
     flow_id: str
+
+
+class FlowMoveIn(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    folder: str = ""
+
+
+class FlowFolderRename(BaseModel):
+    name: str
+    to: str = ""             # empty: the folder goes and its flows are left at the top
+
+
+class FlowBatchIn(BaseModel):
+    flow_ids: list[str] = Field(default_factory=list)
+    stop_on_fail: bool = False
+
+
+class FlowScriptTry(BaseModel):
+    code: str = ""
+    input: Any = None
+
+
+class FlowAnswerIn(BaseModel):
+    value: Any = None
+    cancel: bool = False
 
 
 class MailCheckIn(BaseModel):
@@ -277,7 +304,7 @@ class DataFileIn(BaseModel):
 
 # Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
 # schedule a sync. Variables a script sets while sending go out with the next edit.
-_GIT_QUIET = ("/api/flow-runs", "/api/flows/mail-check", "/api/mail", "/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+_GIT_QUIET = ("/api/flow-runs", "/api/flow-batches", "/api/flows/mail-check", "/api/mail", "/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
               "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
 
 
@@ -445,12 +472,18 @@ def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, An
             if isinstance(node, dict) and node.get("type") == "request" and isinstance(node.get("config"), dict):
                 node["config"]["request_id"] = req_map.get(str(node["config"].get("request_id") or ""), "")
         try:
-            db.create_flow(str(f.get("name") or "Flow")[:flows.MAX_NAME], flows.clean_graph(graph))
+            db.create_flow(str(f.get("name") or "Flow")[:flows.MAX_NAME], flows.clean_graph(graph), _flow_folder(f.get("folder")))
             n_flows += 1
         except ValueError:
             continue   # not a flow this version understands
     return {"imported": len(created), "folders": len(id_map), "environments": len(environments),
             "mocks": n_mocks, "monitors": n_monitors, "flows": n_flows}
+
+
+def _flow_folder(value: Any) -> str:
+    """A folder name as it is kept: "A / B" is "A/B", no empty parts, at most 200 characters."""
+    parts = [p.strip()[:80] for p in str(value or "").replace("\\", "/").split("/")]
+    return "/".join(p for p in parts if p)[:200]
 
 
 def _own_origin(request: Request) -> str:
@@ -1504,7 +1537,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         state = "ready" if address else "offline" if system else "sign_in"
         return {"flows": db.list_flows(), "mail": address, "mail_state": state, "mail_problem": problem,
                 "email_start": flows.starts_on_email,
-                "limits": {"steps": bounds.steps, "wait_seconds": bounds.wait_seconds, "blocks": flows.MAX_BLOCKS}}
+                "batch": next((b.snapshot() for b in flow_runs.batches.values() if b.state == "running"), None),
+                "limits": {"steps": bounds.steps, "wait_seconds": bounds.wait_seconds, "input_seconds": bounds.input_seconds,
+                           "blocks": flows.MAX_BLOCKS, "batch": flows.MAX_BATCH}}
 
     # The inbox itself, for the app that reads it from the cloud (the desktop). Where pyhttp is
     # the cloud, these paths are answered before they get here.
@@ -1542,7 +1577,32 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     @app.post("/api/flows", status_code=201)
     def create_flow(body: FlowIn) -> dict[str, Any]:
-        return db.create_flow(body.name.strip()[:flows.MAX_NAME] or "Flow", _flow_graph(body.graph))
+        return db.create_flow(body.name.strip()[:flows.MAX_NAME] or "Flow", _flow_graph(body.graph), _flow_folder(body.folder))
+
+    # folders of flows: a flow's ``folder`` is the folder's name ("" = none); "A/B" nests B in A
+    @app.post("/api/flows/move")
+    def move_flows(body: FlowMoveIn) -> dict[str, Any]:
+        folder = _flow_folder(body.folder)
+        moved = 0
+        for fid in body.ids[:500]:
+            if db.get_flow(fid):
+                db.update_flow(fid, folder=folder)
+                moved += 1
+        return {"moved": moved, "folder": folder}
+
+    @app.post("/api/flows/folders/rename")
+    def rename_flow_folder(body: FlowFolderRename) -> dict[str, Any]:
+        """Rename a folder (and the folders in it), or with ``to`` empty remove it: its flows stay."""
+        old, new = _flow_folder(body.name), _flow_folder(body.to)
+        if not old:
+            raise HTTPException(400, "Name the folder")
+        changed = 0
+        for f in db.list_flows():
+            here = f.get("folder") or ""
+            if here == old or here.startswith(old + "/"):
+                db.update_flow(f["id"], folder=(new + here[len(old):]).strip("/") if new else "")
+                changed += 1
+        return {"changed": changed}
 
     @app.get("/api/flows/{fid}")
     def get_flow(fid: str) -> dict[str, Any]:
@@ -1556,6 +1616,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             fields["name"] = body.name.strip()[:flows.MAX_NAME] or "Flow"
         if body.graph is not None:
             fields["graph"] = _flow_graph(body.graph)
+        if body.folder is not None:
+            fields["folder"] = _flow_folder(body.folder)
         return db.update_flow(fid, **fields)  # type: ignore[return-value]
 
     @app.delete("/api/flows/{fid}")
@@ -1635,6 +1697,49 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     async def cancel_flow(rid: str) -> dict[str, Any]:
         _flow_run_or_404(rid)
         return {"cancelled": flow_runs.cancel(rid)}
+
+    @app.post("/api/flow-runs/{rid}/answer")
+    async def answer_flow(rid: str, body: FlowAnswerIn) -> dict[str, Any]:
+        """What was picked in the view block the run waits on (``cancel``: closed without picking)."""
+        try:
+            _flow_run_or_404(rid).answer(body.value, body.cancel)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/flows/try-script")
+    async def try_flow_script(body: FlowScriptTry) -> dict[str, Any]:
+        """Run a JavaScript block's code on a sample input, with the project's variables: the
+        block's Try it button. Nothing it sets is kept."""
+        variables, _env = db.effective_variables()
+        return await asyncio.to_thread(jsengine.run_flow_script, body.code[:flows.MAX_TEXT],
+                                       {"input": body.input, "vars": variables, "prev": {}, "email": {}})
+
+    # Run selected: several flows, one after the other
+    @app.post("/api/flow-batches", status_code=201)
+    async def start_flow_batch(body: FlowBatchIn) -> dict[str, Any]:
+        chosen = []
+        for fid in dict.fromkeys(body.flow_ids):
+            flow = db.get_flow(fid)
+            if flow:
+                chosen.append(flow)
+        try:
+            return flow_runs.start_batch(chosen, body.stop_on_fail).snapshot()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/flow-batches/{bid}")
+    def flow_batch(bid: str) -> dict[str, Any]:
+        batch = flow_runs.batches.get(bid)
+        if batch is None:
+            raise HTTPException(404, "This run of several flows is no longer kept")
+        return batch.snapshot()
+
+    @app.post("/api/flow-batches/{bid}/cancel")
+    async def cancel_flow_batch(bid: str) -> dict[str, Any]:
+        if bid not in flow_runs.batches:
+            raise HTTPException(404, "This run of several flows is no longer kept")
+        return {"cancelled": flow_runs.cancel_batch(bid)}
 
     # ------------------------------------------------------------ mock servers
     # Mocks are answered by this very app, so they live on the port pyhttp already
@@ -1784,7 +1889,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             routes = [{k: v for k, v in rt.items() if k not in ("id", "server_id", "hits", "position")} for rt in m.get("routes") or []]
             mocks.append({**{k: v for k, v in m.items() if k not in ("id", "created_at", "hits", "routes")}, "routes": routes})
         mons = [{k: v for k, v in m.items() if k not in ("id", "created_at", "last_run_at", "last_status")} for m in db.list_monitors()]
-        flow_rows = [{"name": f["name"], "graph": f["graph"]} for f in db.list_flows()]
+        flow_rows = [{"name": f["name"], "graph": f["graph"], **({"folder": f["folder"]} if f.get("folder") else {})} for f in db.list_flows()]
         return {"pyhttp_version": __version__, "project": current_project()["name"], "folders": db.list_folders(),
                 "environments": envs, "requests": reqs, "variables": db.get_variables(), "mocks": mocks, "monitors": mons,
                 "flows": flow_rows}

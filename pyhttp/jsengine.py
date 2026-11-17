@@ -222,3 +222,77 @@ def _run_inner(code: str, state: dict[str, Any], event: str, timeout: float) -> 
         msg, line = _clean_error(str(res["error"]), 1)
         out.update({"ok": False, "error": msg, "line": line})
     return out
+
+
+# ------------------------------------------------------------------ flow scripts
+# The JavaScript block of a flow (flows.py). Not a Postman script: it gets what the flow holds
+# and hands back a value. In the script:
+#   input           what the block before handed on (the items a view block picked, the value
+#                   the last script returned), else the last response's JSON
+#   vars            the variables: the project's and the flow's own
+#   prev            the last response: prev.status, prev.json, prev.body, prev.headers
+#   email           the last email: email.code, email.link, email.subject, ...
+#   set(name, v)    a variable for the next blocks and requests ({{name}}; objects as JSON)
+#   log(...)        a line in the run log (console.log does the same)
+#   fail(message)   ends the block through its "fail" port
+#   return v        hands v on to the next block as its input (an async function may await)
+_FLOW_PRELUDE = r"""
+var __F = { vars: {}, logs: [], failed: null, done: false, value: undefined, error: null };
+function __text(v) { if (typeof v === 'string') return v; try { return JSON.stringify(v); } catch (e) { return String(v); } }
+function set(name, value) { name = String(name); __F.vars[name] = value === undefined ? null : value; vars[name] = value; }
+function log() { __F.logs.push(Array.prototype.map.call(arguments, __text).join(' ')); }
+function fail(message) { __F.failed = message === undefined ? 'failed' : __text(message); throw { __pyhttpFail: true }; }
+var console = { log: log, info: log, warn: log, error: log, debug: log };
+function __finish(v) { __F.value = v === undefined ? null : v; __F.done = true; }
+function __broke(e) {
+  if (e && e.__pyhttpFail) { __F.done = true; return; }
+  __F.error = (e && e.stack) ? String(e.stack) : (e && e.message) ? String(e.message) : String(e); __F.done = true;
+}
+"""
+
+
+def run_flow_script(code: str, values: dict[str, Any], timeout: float = SCRIPT_TIMEOUT) -> dict[str, Any]:
+    """Run a flow's JavaScript block. ``values`` has input, vars, prev, email. Returns
+    {ok, error, failed, value, vars, logs, engine}; never raises for the script's own problems."""
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pyhttp-flowjs") as pool:
+        return pool.submit(_run_flow_inner, code or "", values, timeout).result()
+
+
+def _run_flow_inner(code: str, values: dict[str, Any], timeout: float) -> dict[str, Any]:
+    out: dict[str, Any] = {"ok": False, "error": None, "failed": None, "value": None, "vars": {}, "logs": [], "engine": None}
+    try:
+        eng = _engine(timeout)
+    except EngineMissing as exc:
+        out["error"] = str(exc)
+        return out
+    out["engine"] = eng.name
+    setup = "".join(f"var {name} = {_js_json(values.get(name))};\n" for name in ("input", "vars", "prev", "email"))
+    user = code.replace("\r\n", "\n")
+    wrapped = ("try { Promise.resolve((async function () {\n" + user + "\n})()).then(__finish, __broke); }"
+               " catch (__e) { __broke(__e); }\n//# sourceURL=user.js")
+    try:
+        eng.eval(setup + "if (!vars || typeof vars !== 'object') vars = {};\n" + _FLOW_PRELUDE)
+        eng.eval(wrapped)
+        eng.run_jobs()
+        raw = eng.eval("JSON.stringify({vars: __F.vars, logs: __F.logs, failed: __F.failed, done: __F.done, value: __F.value, error: __F.error})")
+    except JSError as exc:
+        if eng.is_timeout(exc):
+            out["error"] = f"script still running after {timeout:g}s; stopped"
+            return out
+        out["error"] = _clean_error(str(exc), 3)[0]
+        return out
+    try:
+        res = json.loads(raw if isinstance(raw, str) else str(raw))
+    except (TypeError, ValueError):
+        out["error"] = "the script handed back something that is not JSON"
+        return out
+    out.update(vars=res.get("vars") or {}, logs=[str(x) for x in res.get("logs") or []], value=res.get("value"))
+    if res.get("error"):
+        out["error"] = _clean_error(str(res["error"]), 1)[0]
+    elif res.get("failed") is not None:
+        out["failed"] = str(res["failed"])
+    elif not res.get("done"):
+        out["error"] = "the script waits for something that never comes (a promise that does not settle)"
+    else:
+        out["ok"] = True
+    return out

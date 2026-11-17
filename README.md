@@ -47,12 +47,27 @@ only on `127.0.0.1`.
 - **Flows** (rail → Flows): saved requests wired into a small program, drawn as
   blocks on a canvas in the middle of the window. Blocks: *Send request* (ports ok / fail),
   *Wait for email* (received / timeout), *Set variable*, *If* (true / false), *Wait*, *Log*,
-  *Stop*. Drag from a port to the block that runs next; a port without a wire ends the flow.
+  *HTML / JS view* (submitted / timeout), *JavaScript* (ok / fail), *Stop*. Drag from a port to the block that runs next; a port without a wire ends the flow.
   Values are templates: everything a request can use, plus what the flow made (`{{name}}`
   from *Set variable*, and `{{email.code}}`, `{{email.link}}`, `{{email.subject}}`,
   `{{email.from}}`, `{{email.text}}` from the last email). A run shows each block's result
   as it finishes; what it sends is in the history. Flows are part of Export / Import and of
   cloud sync.
+  - *HTML / JS view* shows a list (by default the list in the last response, or
+    `{{prev.json.items}}`) and waits for you to pick from it: as a table to tick (at least /
+    at most, one or several, only one field such as `id`), or with your own HTML and
+    JavaScript in a sandboxed frame (`pyhttp.data`, `pyhttp.submit(value)`,
+    `pyhttp.picker(el)`). Preview tries it on sample data. What is picked goes to the next
+    block and is kept as `{{selected}}` (`{{selected[0].id}}` works too).
+  - *JavaScript* runs on what came before (`input`: the items picked or the value the last
+    script returned, else the last response's JSON; `vars`, `prev`, `email`), and hands on
+    what it returns. `set('payload', {...})` makes `{{payload}}` for the next request's body,
+    `fail('why')` takes the fail port; *Try it* runs it on sample input. Together: list →
+    pick 5 of 15 → build the body → send the next request.
+  - *Folders*: a flow can sit in a folder ("Auth/Signup" nests). Drag flows onto a folder,
+    or use the folder button on a flow; a folder's buttons run it, add a flow, rename it.
+  - *Run selected*: tick flows (or a whole folder) and run them one after the other; the
+    panel under the list follows them, and a flow that waits for a pick says "needs you".
   - *History*: every finished run of a flow is kept with its log (the newest 50): when it
     ran, what started it, how it ended. The History tab next to the run log lists them; a
     click reads one again, with the blocks marked as they ended.

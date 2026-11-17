@@ -12,7 +12,24 @@ wire on that port names the block that runs next. A port with no wire ends the f
     if         compares two values                           true, false
     delay      waits                                         out
     log        writes a line to the run log                  out
+    view       shows data (a list from a response) as HTML   submitted, timeout
+               and JavaScript, and waits for the person
+               running the flow to pick from it
+    script     runs JavaScript on what came before and       ok, fail
+               hands its result on (prepares the next
+               request's body, say)
     stop       ends the flow as passed or failed             (none)
+
+A view block and a script block hand a value to the block after them: the items picked,
+the value returned. The next script gets it as ``input``; it is also kept in a variable
+(``selected`` and ``result`` unless named otherwise), so {{selected}} (as JSON) and
+{{selected[0].id}} work in any request.
+
+A run can wait for input: while a view block waits, its snapshot has ``waiting`` (the data,
+the HTML and JavaScript to show it with) and ``Run.answer`` takes what was picked.
+
+Several flows can run one after the other (``FlowManager.start_batch``): the Run selected
+button of the flow list.
 
 Values are templates: everything a request can use ({{variable}}, {{prev.json.id}},
 {{$guid}}) plus what the flow itself made: variables from ``set`` blocks and the last
@@ -42,20 +59,27 @@ itself on an arriving email only on the web, where something is always running.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from . import db, runner
-from .templating import build_context, render
+from . import db, jsengine, runner
+from .templating import _Missing, build_context, render, resolve, to_text
 
 BLOCKS: dict[str, tuple[str, ...]] = {
     "start": ("out",), "request": ("ok", "fail"), "email": ("received", "timeout"), "set": ("out",),
-    "if": ("true", "false"), "delay": ("out",), "log": ("out",), "stop": (),
+    "if": ("true", "false"), "delay": ("out",), "log": ("out",), "view": ("submitted", "timeout"), "script": ("ok", "fail"),
+    "stop": (),
 }
 FAILING_PORTS = ("fail", "timeout")
+MAX_VIEW_ITEMS = 5000     # items of a list shown in a view block
+MAX_VIEW_BYTES = 2_000_000
+MAX_BATCH = 50            # flows in one "Run selected"
+KEPT_BATCHES = 10
+_ONE_VALUE = re.compile(r"^\s*\{\{\s*([^{}]+?)\s*\}\}\s*$")
 OPERATORS = ("equals", "not_equals", "contains", "not_contains", "matches", "greater", "less", "empty", "not_empty")
 MAX_BLOCKS = 100          # in one flow
 MAX_NAME = 120
@@ -76,6 +100,7 @@ class Limits:
     steps: int = 500             # blocks run in one flow run
     wait_seconds: float = 600    # the longest one email or delay block may wait
     active: int = 5              # flow runs going at the same time
+    input_seconds: float = 1800  # the longest a view block waits for someone to pick
 
 
 class Mail(Protocol):
@@ -247,6 +272,10 @@ def _compare(left: str, op: str, right: str) -> bool:
     return (left.strip() == right.strip()) == (op != "not_equals")
 
 
+def _short(text: str, n: int = 80) -> str:
+    return text if len(text) <= n else text[:n] + "…"
+
+
 class Run:
     """One run of a flow: its log, readable while it goes."""
 
@@ -263,7 +292,11 @@ class Run:
         self.ended_at: float | None = None
         self.events: list[dict[str, Any]] = []
         self.task: asyncio.Task[None] | None = None
-        self.vars: dict[str, str] = {}       # set by the flow's own blocks
+        self.vars: dict[str, Any] = {}       # set by the flow's own blocks (a script may set lists and objects)
+        self.handed: Any = None              # what the last view or script block handed on
+        self.waiting: dict[str, Any] | None = None   # while a view block waits for someone to pick
+        self._answer: asyncio.Future[dict[str, Any]] | None = None
+        self.batch_id = ""                   # set when the run is one of a "Run selected"
         self.email: dict[str, Any] = {}
         self.prev: dict[str, Any] | None = None
         self._n = 0
@@ -287,7 +320,23 @@ class Run:
         return {"id": self.id, "flow_id": self.flow_id, "name": self.name, "state": self.state, "message": self.message,
                 "started_at": self.started_at, "ended_at": self.ended_at, "last": self._n,
                 "started_by": f"email from {self.email.get('from')}" if self.started_by else "",
+                "batch_id": self.batch_id, "waiting": self.waiting,
                 "events": [e for e in self.events if e["n"] > after]}
+
+    def answer(self, value: Any = None, cancel: bool = False) -> None:
+        """What the person picked in the view block this run waits on (or that they closed it)."""
+        if not self.waiting or self._answer is None or self._answer.done():
+            raise ValueError("This run is not waiting for anything to be picked")
+        if not cancel:
+            low, high = self.waiting.get("min") or 0, self.waiting.get("max") or 0
+            if isinstance(value, list):
+                if low and len(value) < low:
+                    raise ValueError(f"Pick at least {low}")
+                if high and len(value) > high:
+                    raise ValueError(f"Pick at most {high}")
+            if len(json.dumps(value, default=str)) > MAX_VIEW_BYTES:
+                raise ValueError("What was picked is too large to hand on")
+        self._answer.set_result({"value": value, "cancel": bool(cancel)})
 
     async def wait(self, after: int, timeout: float) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.0, timeout)
@@ -312,6 +361,32 @@ class Run:
 
     def _text(self, node: dict[str, Any], key: str) -> str:
         return render(str(node["config"].get(key) or ""), self._context())
+
+    def _value(self, node: dict[str, Any], key: str) -> Any:
+        """A setting as a value, not a text: "{{prev.json.items}}" is that list itself, and a
+        text that reads as JSON once filled in is that JSON."""
+        raw = str(node["config"].get(key) or "")
+        ctx = self._context()
+        one = _ONE_VALUE.match(raw)
+        if one and not one.group(1).strip().startswith("$"):
+            try:
+                value = resolve(one.group(1), ctx)
+            except _Missing:
+                value = None
+            if value is not None and not isinstance(value, str):
+                return value
+        text = render(raw, ctx)
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+
+    def _given(self) -> Any:
+        """What a view or script block works on when it is not told: what the block before handed
+        on, else the last response's JSON."""
+        if self.handed is not None:
+            return self.handed
+        return (self.prev or {}).get("json")
 
     async def _go(self, bounds: Limits) -> None:
         nodes = {n["id"]: n for n in self.graph["nodes"]}
@@ -418,10 +493,92 @@ class Run:
             seconds = max(0.0, min(seconds, bounds.wait_seconds))
             await asyncio.sleep(seconds)
             return "out", "ok", f"Waited {seconds:g} s"
+        if kind == "view":
+            return await self._view(node, bounds)
+        if kind == "script":
+            return await self._script(node)
         if kind == "log":
             return "out", "ok", self._text(node, "message")
         failing = str(config.get("result") or "pass") == "fail"
         return "", ("fail" if failing else "ok"), self._text(node, "message") or ("Stopped: failed" if failing else "Stopped")
+
+    async def _view(self, node: dict[str, Any], bounds: Limits) -> tuple[str, str, str]:
+        """Show data with the block's HTML and JavaScript (or as a list to tick), then wait
+        for the person running the flow to pick from it."""
+        config = node["config"]
+        data = self._value(node, "data") if str(config.get("data") or "").strip() else self._given()
+        if isinstance(data, dict) and not str(config.get("data") or "").strip():
+            # {"items": [...], "total": 15}: the list in it is what there is to pick from
+            data = next((v for v in data.values() if isinstance(v, list) and v), data)
+        if data is None or data == "":
+            return "timeout", "fail", ("Nothing to show: no block before this one handed anything on and no request answered with JSON. "
+                                       "Set Data to show, e.g. {{prev.json.items}}")
+        note = ""
+        if isinstance(data, list) and len(data) > MAX_VIEW_ITEMS:
+            note = f" (the first {MAX_VIEW_ITEMS} of {len(data)})"
+            data = data[:MAX_VIEW_ITEMS]
+        if len(json.dumps(data, default=str)) > MAX_VIEW_BYTES:
+            return "timeout", "fail", f"The data is larger than {MAX_VIEW_BYTES // 1_000_000} MB: point the block at the list in it"
+
+        def number(key: str, default: float) -> float:
+            try:
+                return float(config.get(key) if config.get(key) not in (None, "") else default)
+            except (TypeError, ValueError):
+                return default
+
+        waited = max(5.0, min(number("timeout_s", 300), bounds.input_seconds))
+        multiple = config.get("multiple") is not False and str(config.get("multiple")) != "false"
+        self.waiting = {"node": node["id"], "title": str(config.get("title") or "Pick from the list"), "data": data,
+                        "html": str(config.get("html") or ""), "js": str(config.get("js") or ""),
+                        "multiple": multiple, "min": int(number("min", 0)), "max": int(number("max", 0)) if multiple else 1,
+                        "field": str(config.get("field") or "").strip(), "until": time.time() + waited}
+        self._answer = asyncio.get_running_loop().create_future()
+        count = f"{len(data)} items" if isinstance(data, list) else "the data"
+        self._log(node, "input", f"Waiting for you to pick from {count}{note}: open this flow to answer")
+        try:
+            answer = await asyncio.wait_for(asyncio.shield(self._answer), waited)
+        except asyncio.TimeoutError:
+            return "timeout", "fail", f"Nothing was picked within {waited:g} s"
+        finally:
+            self.waiting, self._answer = None, None
+        if answer["cancel"]:
+            return "timeout", "fail", "Closed without picking"
+        value = answer["value"]
+        name = str(config.get("name") or "selected").strip() or "selected"
+        self.vars[name] = value
+        self.handed = value
+        if isinstance(value, list):
+            told = f"Picked {len(value)}" + (f" of {len(data)}" if isinstance(data, list) else "")
+        else:
+            told = "Picked " + _short(to_text(value))
+        return "submitted", "ok", f"{told} → {{{{{name}}}}}"
+
+    async def _script(self, node: dict[str, Any]) -> tuple[str, str, str]:
+        config = node["config"]
+        code = str(config.get("code") or "")
+        if not code.strip():
+            return "fail", "fail", "This block has no script"
+        ctx = self._context()
+        given = self._value(node, "input") if str(config.get("input") or "").strip() else self._given()
+        values = {"input": given, "vars": ctx["vars"], "prev": ctx["prev"], "email": self.email}
+        res = await asyncio.to_thread(jsengine.run_flow_script, code, values)
+        for key, value in list((res.get("vars") or {}).items())[:100]:
+            self.vars[str(key)[:100]] = value
+        for line in res.get("logs", [])[:50]:
+            self._log(node, "info", line)
+        made = [str(k) for k in (res.get("vars") or {})]
+        if res.get("error"):
+            return "fail", "fail", f"Script error: {res['error']}"
+        if res.get("failed") is not None:
+            return "fail", "fail", res["failed"] or "The script failed"
+        value = res.get("value")
+        name = str(config.get("name") or "result").strip() or "result"
+        if value is not None:
+            self.vars[name] = value
+            self.handed = value
+            made.insert(0, name)
+        told = ("Returned " + _short(to_text(value))) if value is not None else "Done"
+        return "ok", "ok", told + (f"; set {', '.join('{{' + m + '}}' for m in made)}" if made else "")
 
     def _end(self, state: str, message: str) -> None:
         self.state, self.message, self.ended_at = state, message, time.time()
@@ -440,13 +597,16 @@ class FlowManager:
 
     def __init__(self, mail: Callable[[], Mail | None] | None = None) -> None:
         self.runs: dict[str, Run] = {}
+        self.batches: dict[str, Batch] = {}
         self._own_mail = mail
 
     def mail_system(self) -> Mail | None:
         return (self._own_mail() if self._own_mail else None) or mail()
 
     def active(self) -> int:
-        return sum(1 for run in self.runs.values() if run.state == "running")
+        """Runs going, a Run selected counting once however many flows it has."""
+        alone = sum(1 for run in self.runs.values() if run.state == "running" and not run.batch_id)
+        return alone + sum(1 for batch in self.batches.values() if batch.state == "running")
 
     def latest(self, flow_id: str) -> Run | None:
         """The newest run of a flow that is still kept."""
@@ -472,9 +632,7 @@ class FlowManager:
         if self.active() >= bounds.active:
             raise ValueError("A flow is still running. Wait until it ends, or stop it, then run this one." if bounds.active == 1
                              else f"{self.active()} flows are running, the most at once. Wait until one ends, or stop it.")
-        done = sorted((r for r in self.runs.values() if r.state != "running"), key=lambda r: r.ended_at or 0)
-        while len(self.runs) >= KEPT_RUNS and done:
-            self.runs.pop(done.pop(0).id, None)
+        self._keep_room()
         run = Run(flow, started_by, self.mail_system)
         self.runs[run.id] = run
         run.task = asyncio.create_task(self._run(run, bounds))
@@ -494,6 +652,107 @@ class FlowManager:
         return False
 
     async def stop_all(self) -> None:
+        for batch in list(self.batches.values()):
+            batch.cancelled = True
+            if batch.task and not batch.task.done():
+                batch.task.cancel()
         for run in list(self.runs.values()):
             if run.task and not run.task.done():
                 run.task.cancel()
+
+    # --------------------------------------------------------- Run selected
+    def start_batch(self, flow_list: list[dict[str, Any]], stop_on_fail: bool = False) -> "Batch":
+        """Run several flows one after the other (one slot of ``Limits.active`` for them all)."""
+        if not flow_list:
+            raise ValueError("Tick the flows to run first")
+        if len(flow_list) > MAX_BATCH:
+            raise ValueError(f"Run at most {MAX_BATCH} flows at once")
+        bounds = limits()
+        if self.active() >= bounds.active:
+            raise ValueError("A flow is still running. Wait until it ends, or stop it, then run these." if bounds.active == 1
+                             else f"{self.active()} flows are running, the most at once. Wait until one ends, or stop it.")
+        old = sorted((b for b in self.batches.values() if b.state != "running"), key=lambda b: b.ended_at or 0)
+        while len(self.batches) >= KEPT_BATCHES and old:
+            self.batches.pop(old.pop(0).id, None)
+        batch = Batch(flow_list, stop_on_fail)
+        self.batches[batch.id] = batch
+        batch.task = asyncio.create_task(self._run_batch(batch, bounds))
+        return batch
+
+    async def _run_batch(self, batch: "Batch", bounds: Limits) -> None:
+        try:
+            for i, item in enumerate(batch.items):
+                if batch.cancelled:
+                    break
+                flow = db.get_flow(item["flow_id"])
+                if not flow:
+                    item.update(state="skipped", message="The flow was deleted")
+                    continue
+                self._keep_room()
+                run = Run(flow, None, self.mail_system)
+                run.batch_id = batch.id
+                self.runs[run.id] = run
+                batch.runs[i] = run
+                item["run_id"] = run.id
+                run.task = asyncio.create_task(self._run(run, bounds))
+                await run.task
+                if batch.stop_on_fail and run.state != "passed":
+                    for rest in batch.items[i + 1:]:
+                        rest.update(state="skipped", message=f"Not run: {flow['name']} did not pass")
+                    break
+        except asyncio.CancelledError:
+            batch.cancelled = True
+        finally:
+            for item in batch.items:
+                if item["state"] == "queued":
+                    item.update(state="skipped" if not batch.cancelled else "cancelled")
+            batch.end()
+
+    def cancel_batch(self, batch_id: str) -> bool:
+        batch = self.batches.get(batch_id)
+        if not batch or batch.state != "running":
+            return False
+        batch.cancelled = True
+        for run in batch.runs.values():
+            if run.task and not run.task.done():
+                run.task.cancel()
+        if batch.task and not batch.task.done():
+            batch.task.cancel()
+        return True
+
+    def _keep_room(self) -> None:
+        done = sorted((r for r in self.runs.values() if r.state != "running"), key=lambda r: r.ended_at or 0)
+        while len(self.runs) >= KEPT_RUNS and done:
+            self.runs.pop(done.pop(0).id, None)
+
+
+class Batch:
+    """Flows run one after the other: what the Run selected button of the flow list starts."""
+
+    def __init__(self, flow_list: list[dict[str, Any]], stop_on_fail: bool) -> None:
+        self.id = uuid.uuid4().hex[:16]
+        self.items = [{"flow_id": f["id"], "name": f["name"], "run_id": "", "state": "queued", "message": ""} for f in flow_list]
+        self.runs: dict[int, Run] = {}
+        self.stop_on_fail = bool(stop_on_fail)
+        self.state = "running"     # running | passed | failed | cancelled
+        self.cancelled = False
+        self.started_at = time.time()
+        self.ended_at: float | None = None
+        self.task: asyncio.Task[None] | None = None
+
+    def end(self) -> None:
+        self._sync()
+        states = [item["state"] for item in self.items]
+        self.state = "cancelled" if self.cancelled else "passed" if all(s == "passed" for s in states) else "failed"
+        self.ended_at = time.time()
+
+    def _sync(self) -> None:
+        for i, run in self.runs.items():
+            self.items[i].update(state=run.state, message=run.message, started_at=run.started_at, ended_at=run.ended_at,
+                                 waiting=bool(run.waiting))
+
+    def snapshot(self) -> dict[str, Any]:
+        self._sync()
+        count = {s: sum(1 for item in self.items if item["state"] == s) for s in ("passed", "failed", "cancelled", "skipped", "running", "queued")}
+        return {"id": self.id, "state": self.state, "started_at": self.started_at, "ended_at": self.ended_at,
+                "stop_on_fail": self.stop_on_fail, "counts": count, "items": [dict(item) for item in self.items]}

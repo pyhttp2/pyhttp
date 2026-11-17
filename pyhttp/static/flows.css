@@ -142,3 +142,66 @@
   font-size: 12px; line-height: 1.5; background: var(--bg-3); }
 .flow-nomail div { margin-top: 8px; }
 .flow-nomail button.small { padding: 4px 10px; }
+
+/* folders, ticks and Run selected in the list */
+.flow-item { grid-template-columns: 16px 12px 1fr auto auto auto; padding-left: calc(10px + var(--depth, 0) * 14px); }
+.flow-tick { margin: 0; width: 14px; height: 14px; cursor: pointer; }
+.flow-folder { list-style: none; }
+.flow-sub { list-style: none; margin: 0; padding: 0; }
+.flow-folder-row { display: grid; grid-template-columns: 16px 14px 1fr auto auto auto auto auto; gap: 6px; align-items: center; cursor: pointer;
+  padding: 6px 8px 6px calc(10px + var(--depth, 0) * 14px); border-left: 3px solid transparent; user-select: none; }
+.flow-folder-row:hover { background: var(--bg-3); }
+.flow-folder-row:hover .flow-item-act, .flow-folder-row:focus-within .flow-item-act { opacity: 1; }
+.flow-folder-row.drop { background: var(--bg-3); border-left-color: var(--primary); outline: 1px dashed var(--primary); outline-offset: -2px; }
+.flow-caret { color: var(--muted); display: inline-flex; }
+.flow-folder-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; min-width: 0; }
+.flow-folder-name .ic { color: var(--muted); flex: none; }
+.flow-folder-n { font-size: 11px; }
+.flow-item[draggable="true"] { -webkit-user-drag: element; }
+.flow-selbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.flow-selbar.some { background: var(--bg-3); }
+.flow-selbar button.small { padding: 3px 8px; }
+.flow-selall { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; }
+.flow-selbar.some .flow-selall { color: var(--text); font-weight: 500; }
+
+.flow-batch { flex: none; border-top: 1px solid var(--border); padding: 8px 10px; max-height: 40%; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.flow-batch-head { display: flex; align-items: center; gap: 8px; }
+.flow-batch-list { display: flex; flex-direction: column; gap: 3px; }
+.flow-batch-row { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; align-items: center; text-align: left; width: 100%;
+  padding: 4px 6px; background: var(--bg-3); border-color: transparent; font-weight: 400; white-space: normal; font-size: 12px; }
+.flow-batch-row:hover { border-color: var(--primary); background: var(--bg-3); }
+.fbr-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fbr-msg { grid-column: 1 / -1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the view and script blocks */
+.flow-node.t-view { border-left-color: #ec4899; }
+.flow-node.t-script { border-left-color: #eab308; }
+.fw.p-submitted { stroke: var(--ok); }
+.fn-port.p-submitted i { background: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+.flow-row2 { display: flex; gap: 8px; }
+.flow-row2 > .flow-f { flex: 1; min-width: 0; }
+.flow-more { margin: 4px 0 8px; font-size: 12px; }
+.flow-more > summary { cursor: pointer; color: var(--muted); padding: 3px 0; }
+.flow-more[open] > summary { margin-bottom: 6px; }
+.flow-config .code-editor { height: 180px; min-height: 90px; }
+.flow-config textarea.flow-code { width: 100%; font: 12px/1.5 var(--mono); }
+.flow-btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.flow-btns select.small { padding: 3px 6px; font-size: 12px; }
+.flow-script-out { margin: 4px 0 8px; padding: 8px 10px; max-height: 220px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border);
+  border-left: 3px solid var(--ok); border-radius: 6px; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
+.flow-script-out.bad { border-left-color: var(--danger); }
+.flow-line.wait { border-left-color: var(--primary); }
+.flow-line.info { border-left-color: var(--border); }
+.flow-line.info .fl-text { font-family: var(--mono); }
+
+/* a run waits on a view block: its page over the canvas */
+.flow-main { position: relative; }
+.flow-ask { position: absolute; inset: 0 350px 0 0; z-index: 20; display: flex; flex-direction: column; background: var(--bg-2);
+  border: 2px solid var(--primary); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); overflow: hidden; }
+.flow-ask-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.flow-ask-say { flex: none; padding: 6px 12px; background: var(--bg-3); border-bottom: 1px solid var(--border); white-space: pre-wrap; }
+.flow-ask-say.bad { color: var(--danger); }
+.flow-ask-frame { flex: 1; width: 100%; border: 0; background: var(--bg); min-height: 0; }
+.flow-preview-host { height: min(60vh, 560px); display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.flow-preview-host .flow-ask-frame { height: 100%; }
+@media (max-width: 1100px) { .flow-ask { inset: 0 0 45% 0; } }

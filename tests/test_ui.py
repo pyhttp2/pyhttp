@@ -1839,3 +1839,131 @@ def test_the_rail_is_the_navigation(page, servers):
     colors = page.evaluate("['#btn-new', '#btn-send'].map((s) => getComputedStyle(document.querySelector(s)).backgroundColor)")
     assert colors[0] == colors[1]
     forget(page, servers[0], "Rail colors")
+
+
+def test_flow_folders_run_selected_and_a_view_to_pick_from(page, servers):
+    """Flows in folders, ticked and run one after the other; a View block shows a list in a
+    sandboxed frame, what is ticked goes to a JavaScript block, which builds the next request."""
+    app_url, echo_url = servers
+    items = [{"id": n, "name": f"item {n}"} for n in range(1, 16)]
+    listing = page.request.post(app_url + "/api/requests", data={
+        "name": "Flow list", "method": "POST", "url": echo_url + "/echo", "body_type": "json",
+        "bodies": [{"id": "b", "name": "Default", "body": json.dumps({"items": items})}]}).json()
+    send = page.request.post(app_url + "/api/requests", data={
+        "name": "Flow send", "method": "POST", "url": echo_url + "/echo", "body_type": "json",
+        "bodies": [{"id": "b", "name": "Default", "body": "{{payload}}"}]}).json()
+    spot = iter(range(0, 2000, 250))
+    node = lambda kind, bid, **c: {"id": bid, "type": kind, "x": 40 + next(spot), "y": 60, "config": c}  # noqa: E731
+    wires = lambda *w: [{"from": a, "port": p, "to": b} for a, p, b in w]  # noqa: E731
+    pick = page.request.post(app_url + "/api/flows", data={"name": "Pick", "folder": "Shop/Orders", "graph": {
+        "nodes": [node("start", "start"), node("request", "list", request_id=listing["id"]),
+                  node("script", "unwrap", code="return JSON.parse(input.body).items;"),
+                  node("view", "pick", title="Choose items", min=2, max=5, field="id"),
+                  node("script", "build", code="set('payload', {ids: input}); return input.length;"),
+                  node("request", "send", request_id=send["id"])],
+        "edges": wires(("start", "out", "list"), ("list", "ok", "unwrap"), ("unwrap", "ok", "pick"),
+                       ("pick", "submitted", "build"), ("build", "ok", "send"))}}).json()
+    quick = {"nodes": [node("start", "start"), node("log", "l", message="hi")], "edges": wires(("start", "out", "l"))}
+    one = page.request.post(app_url + "/api/flows", data={"name": "Quick one", "folder": "Shop", "graph": quick}).json()
+    two = page.request.post(app_url + "/api/flows", data={"name": "Quick two", "graph": quick}).json()
+
+    page.click("#side-tabs button[data-tab='flows']")
+    page.wait_for_selector(".flow-folder[data-path='Shop'] .flow-folder-row")
+    assert page.locator(".flow-folder[data-path='Shop/Orders'] .flow-item").count() == 1
+    # folding a folder hides what is in it
+    page.click(".flow-folder[data-path='Shop'] .flow-folder-name")
+    assert page.locator(".flow-item[data-id='%s']" % one["id"]).count() == 0
+    page.click(".flow-folder[data-path='Shop'] .flow-folder-name")
+    # tick two flows, run them one after the other
+    page.check(".flow-item[data-id='%s'] .flow-tick" % one["id"])
+    page.check(".flow-item[data-id='%s'] .flow-tick" % two["id"])
+    assert "2 ticked" in page.inner_text("#flow-selbar")
+    page.click("#flow-sel-run")
+    page.wait_for_function("document.querySelector('#flow-batch') && document.querySelector('#flow-batch').innerText.includes('2 flows ran')")
+    assert page.locator("#flow-batch .flow-batch-row .badge.ok").count() == 2
+    # drag a ticked flow onto a folder: the ticked ones move there
+    page.drag_and_drop(".flow-item[data-id='%s']" % two["id"], ".flow-folder[data-path='Shop/Orders'] .flow-folder-row")
+    page.wait_for_selector(".flow-folder[data-path='Shop/Orders'] .flow-item[data-id='%s']" % two["id"])
+    moved = {f["name"]: f["folder"] for f in page.request.get(app_url + "/api/flows").json()["flows"]}
+    assert moved["Quick two"] == moved["Quick one"] == "Shop/Orders"   # both were ticked: both move
+
+    # the view block: Preview in its settings, then a real run that waits for a pick
+    page.click(".flow-item[data-id='%s']" % pick["id"])
+    page.wait_for_selector(".flow-node.t-view")
+    page.click(".flow-node.t-view .fn-body")
+    page.click("#flow-view-preview")
+    page.wait_for_function("document.getAnimations().every((a) => a.effect.getTiming().iterations === Infinity)")
+    frame = page.frame_locator("#flow-preview-host iframe")
+    frame.locator(".pk-table tbody tr").nth(0).click()
+    frame.locator(".pk-table tbody tr").nth(1).click()
+    frame.locator("button.primary").click()
+    page.wait_for_function("document.querySelector('#flow-preview-out') && !document.querySelector('#flow-preview-out').hidden")
+    assert json.loads(page.inner_text("#flow-preview-out").split(":", 1)[1]) == [1, 2]
+    page.click("#modal-foot button")
+
+    page.click("#flow-run")
+    page.wait_for_selector("#flow-ask iframe")
+    frame = page.frame_locator("#flow-ask iframe")
+    assert frame.locator(".pk-table tbody tr").count() == 15
+    frame.locator(".pk-find").fill("item 1")          # item 1, 10..15
+    assert frame.locator(".pk-table tbody tr").count() == 7
+    frame.locator(".pk-find").fill("")
+    for n in (2, 6, 8):
+        frame.locator(".pk-table tbody tr").nth(n).click()
+    frame.locator("button.primary").click()
+    page.wait_for_function("document.querySelector('#flow-state .badge') && document.querySelector('#flow-state .badge').textContent === 'passed'")
+    assert page.locator("#flow-ask").count() == 0
+    log = page.inner_text("#flow-log")
+    assert "Picked 3 of 15" in log and "Returned 3" in log
+    newest = page.request.get(app_url + "/api/history?limit=1").json()[0]   # the request the script built
+    assert "[3, 7, 9]" in json.dumps(page.request.get(f"{app_url}/api/history/{newest['id']}").json()), newest
+    for f in (pick, one, two):
+        page.request.delete(f"{app_url}/api/flows/{f['id']}")
+    page.click("#side-tabs button[data-tab='collection']")
+    forget(page, app_url, "Flow list", "Flow send")
+
+
+def test_a_view_with_its_own_html_and_a_script_to_try(page, servers):
+    app_url, _ = servers
+    shots = os.environ.get("PYHTTP_UI_SHOTS")
+    flow = page.request.post(app_url + "/api/flows", data={"name": "Own view", "folder": "Demo", "graph": {
+        "nodes": [{"id": "start", "type": "start", "x": 40, "y": 60, "config": {}},
+                  {"id": "v", "type": "view", "x": 300, "y": 60, "config": {"title": "Cards", "data": json.dumps([{"id": n, "name": f"Plan {n}"} for n in range(1, 9)])}},
+                  {"id": "s", "type": "script", "x": 560, "y": 60, "config": {"code": "set('n', input.length); return input.map(i => i.id);"}}],
+        "edges": [{"from": "start", "port": "out", "to": "v"}, {"from": "v", "port": "submitted", "to": "s"}]}}).json()
+    page.click("#side-tabs button[data-tab='flows']")
+    page.click(".flow-item[data-id='%s']" % flow["id"])
+    page.click(".flow-node.t-view .fn-body")
+    page.click("#flow-config details.flow-more >> nth=0")
+    page.click("#flow-view-example")
+    page.wait_for_function("document.querySelector('#flow-saved').textContent === 'Saved'")
+    saved = page.request.get(f"{app_url}/api/flows/{flow['id']}").json()
+    view = next(n for n in saved["graph"]["nodes"] if n["id"] == "v")
+    assert "pyhttp.submit" in view["config"]["js"] and 'id="cards"' in view["config"]["html"]
+    page.click("#flow-view-preview")
+    page.wait_for_function("document.getAnimations().every((a) => a.effect.getTiming().iterations === Infinity)")   # the dialog has stopped moving
+    frame = page.frame_locator("#flow-preview-host iframe")
+    frame.locator(".card").nth(3).click()
+    frame.locator(".card").nth(5).click()
+    if shots:
+        page.screenshot(path=os.path.join(shots, "view-preview.png"))
+    frame.locator("#go").click()
+    page.wait_for_function("document.querySelector('#flow-preview-out') && !document.querySelector('#flow-preview-out').hidden")
+    assert [i["id"] for i in json.loads(page.inner_text("#flow-preview-out").split(":", 1)[1])] == [4, 6]
+    page.click("#modal-foot button")
+    # the script block: Try it on made-up items
+    page.click(".flow-node.t-script .fn-body")
+    page.click("#flow-script-try")
+    page.wait_for_function("document.querySelector('#flow-script-out').textContent.includes('returns')")
+    out = page.inner_text("#flow-script-out")
+    assert "{{n}} = 3" in out and "returns: [" in out
+    if shots:
+        page.screenshot(path=os.path.join(shots, "script-try.png"))
+        page.click("#flow-run")
+        page.wait_for_selector("#flow-ask iframe")
+        page.wait_for_timeout(400)
+        page.screenshot(path=os.path.join(shots, "view-waiting.png"))
+        page.click("#flow-ask-close")
+        page.wait_for_function("document.querySelector('#flow-state .badge').textContent === 'failed'")
+    page.request.delete(f"{app_url}/api/flows/{flow['id']}")
+    page.click("#side-tabs button[data-tab='collection']")

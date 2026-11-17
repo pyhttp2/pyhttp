@@ -2837,7 +2837,15 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
       </div>
     </div>
     <div class="tab-panel" data-panel="git" hidden><div id="set-git"></div></div>
-    <div class="tab-panel" data-panel="ai" hidden>
+    <div class="tab-panel" data-panel="ai" hidden>${window.PYHTTP_CLOUD ? `
+      <div class="set-section">
+        <h4>AI tools on this account (MCP)</h4>
+        <p class="small">AI tools (Claude Code, Claude Desktop, Cursor…) can work in your pyhttp on the web over
+          <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">MCP</a>: list, create and send requests, run them and read the history.
+          They connect to <code>${esc(location.origin)}/mcp</code> with a personal token you make here.</p>
+        <p><button class="primary" id="set-mcp-web">Set up AI tools: tokens and setup commands</button></p>
+        <p class="muted small">Also in the account menu (your name, top right) under “AI tools (MCP)”.</p>
+      </div>` : `
       <div class="set-section">
         <h4>MCP server</h4>
         <p class="small">pyhttp ships an <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">MCP</a> server, so AI tools
@@ -2860,7 +2868,7 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
         <h4>Try it</h4>
         <p class="muted small">Then ask the AI things like “list my pyhttp requests”, “create a POST request to … with this body and a 200 test”,
           “send Login and show the response”, or “run the Smoke folder and summarise the failures”.</p>
-      </div>
+      </div>`}
     </div>
     <div class="tab-panel" data-panel="about" hidden>
       <div class="set-section">
@@ -2943,6 +2951,10 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
   drawCerts();
   $('#set-cert-add').addEventListener('click', () => { certs.push({ host: '', cert: '', key: '' }); drawCerts(); $('#set-certs input').focus(); });
   $('#set-update-now').addEventListener('click', (e) => checkForUpdate(true, $('#set-update-status'), e.currentTarget));
+  const mcpWeb = $('#set-mcp-web');   // pyhttp on the web: the account's MCP dialog (cloud/account.js)
+  if (mcpWeb) mcpWeb.addEventListener('click', () => {
+    if (typeof window.pyhttpOpenMcp === 'function') { closeModal(); window.pyhttpOpenMcp(); } else toast('Open the account menu (top right), then AI tools (MCP)', 'error');
+  });
   $$('#set-panels .set-code .copy-btn').forEach((b) => b.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText($('#' + b.dataset.copy).textContent);
@@ -2960,9 +2972,11 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
     const q = (p) => (/[\s"']/.test(p) ? `"${p}"` : p);
     const argv = m.frozen ? [m.python, 'mcp', '--data-dir', m.data_dir]
       : [m.python, '-m', 'pyhttp', 'mcp', '--data-dir', m.data_dir];
-    $('#mcp-cmd-code').textContent = 'claude mcp add pyhttp -- ' + argv.map(q).join(' ');
-    $('#mcp-cmd-json').textContent = JSON.stringify(
-      { mcpServers: { pyhttp: { command: argv[0], args: argv.slice(1) } } }, null, 2);
+    if ($('#mcp-cmd-code')) {   // the desktop app: on the web the panel offers the account's MCP endpoint instead
+      $('#mcp-cmd-code').textContent = 'claude mcp add pyhttp -- ' + argv.map(q).join(' ');
+      $('#mcp-cmd-json').textContent = JSON.stringify(
+        { mcpServers: { pyhttp: { command: argv[0], args: argv.slice(1) } } }, null, 2);
+    }
     if (m.user_agent) { $('#set-ua').placeholder = m.user_agent; $('#set-ua-hint').textContent = `Sent with every request that has no User-Agent header of its own. Empty means the default: ${m.user_agent}`; }
   }).catch(() => {});
 }

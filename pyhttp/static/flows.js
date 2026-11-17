@@ -8,7 +8,20 @@
 // mailState: 'ready' (there is a test inbox), 'sign_in' (there is one after signing in to the
 // pyhttp cloud: the desktop app), 'offline' (signed in, the cloud does not answer)
 const flowUi = { list: [], mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
-                 loaded: false, poll: null, search: '' };
+                 loaded: false, poll: null, search: '',
+                 checked: new Set(),      // flows ticked in the list, for Run selected
+                 batch: null,             // the Run selected going (or just ended): its snapshot
+                 batchTimer: null,
+                 stopOnFail: false,
+                 closed: flowClosedFolders(),   // folders folded shut in the list
+                 ask: null };             // the view block a run waits on, as it is on screen
+
+function flowClosedFolders() {
+  try { return new Set(JSON.parse(localStorage.getItem('pyhttp.flowFoldersClosed') || '[]')); } catch { return new Set(); }
+}
+function saveFlowClosed() {
+  try { localStorage.setItem('pyhttp.flowFoldersClosed', JSON.stringify([...flowUi.closed])); } catch { /* private window */ }
+}
 
 const FLOW_BLOCKS = {
   start: { title: 'Start', ports: ['out'], hint: 'Where a run begins: when you press Run, or by itself when an email arrives.' },
@@ -18,6 +31,8 @@ const FLOW_BLOCKS = {
   if: { title: 'If', ports: ['true', 'false'], hint: 'Compares two values and takes one of two ways.' },
   delay: { title: 'Wait', ports: ['out'], hint: 'Waits before the next block.' },
   log: { title: 'Log', ports: ['out'], hint: 'Writes a line to the run log.' },
+  view: { title: 'HTML / JS view', short: 'HTML/JS', ports: ['submitted', 'timeout'], hint: 'Shows a list (say the items of the last response) and waits for you to pick from it: as a list to tick, or with your own HTML and JavaScript. What you pick is handed to the next block and kept as {{selected}}.' },
+  script: { title: 'JavaScript', short: 'Script', ports: ['ok', 'fail'], hint: 'Runs JavaScript on what came before (input: the items picked, or the last response) and hands on what it returns. set(name, value) makes {{name}} for the next requests.' },
   stop: { title: 'Stop', ports: [], hint: 'Ends the flow as passed or failed.' },
 };
 const FLOW_OPS = [['equals', 'equals'], ['not_equals', 'does not equal'], ['contains', 'contains'], ['not_contains', 'does not contain'],
@@ -39,6 +54,8 @@ async function loadFlows() {
   flowUi.emailStart = !!data.email_start;
   flowUi.limits = data.limits || {};
   flowUi.loaded = true;
+  // a Run selected going on the server (started before a reload, or in another window): follow it
+  if (data.batch && (!flowUi.batch || flowUi.batch.id !== data.batch.id)) followFlowBatch(data.batch);
   // signed in or out since the last look: the open block's settings speak of the inbox
   if (before !== flowUi.mailState + flowUi.mail && flowUi.flow && $('#flow-config')) renderFlowConfig();
 }
@@ -85,42 +102,298 @@ function flowBadge(f) {
   return '<span class="flow-dot" title="Not run yet"></span>';
 }
 
+// The list is a tree: a flow's folder is a name ("Auth/Signup" is Signup inside Auth). Each
+// flow and each folder has a box to tick; the bar above the list runs the ticked flows one
+// after the other. Drag a flow onto a folder to move it there (with others ticked, all of them).
+function flowTree(shown) {
+  const root = { name: '', path: '', folders: new Map(), flows: [] };
+  shown.forEach((f) => {
+    let at = root;
+    String(f.folder || '').split('/').filter(Boolean).forEach((part) => {
+      const path = at.path ? `${at.path}/${part}` : part;
+      if (!at.folders.has(part)) at.folders.set(part, { name: part, path, folders: new Map(), flows: [] });
+      at = at.folders.get(part);
+    });
+    at.flows.push(f);
+  });
+  return root;
+}
+const flowsIn = (node) => [...node.flows, ...[...node.folders.values()].flatMap(flowsIn)];
+const flowFolders = () => [...new Set(flowUi.list.map((f) => f.folder || '').filter(Boolean)
+  .flatMap((p) => p.split('/').map((_, i, all) => all.slice(0, i + 1).join('/'))))].sort((a, b) => a.localeCompare(b));
+
+function flowItemHtml(f, depth) {
+  const blocks = (f.graph.nodes || []).length;
+  const when = f.last_run_at ? ` · ran ${typeof agoText === 'function' ? agoText(f.last_run_at) : fmtDate(f.last_run_at)}` : '';
+  return `<li class="flow-item${flowUi.flow && flowUi.flow.id === f.id ? ' active' : ''}" data-id="${f.id}" tabindex="0" draggable="true" style="--depth:${depth}">
+    <input type="checkbox" class="flow-tick" ${flowUi.checked.has(f.id) ? 'checked' : ''} aria-label="Tick ${esc(f.name)} to run it with others" title="Tick to run it with others">
+    ${flowBadge(f)}
+    <span class="flow-item-text"><span class="flow-item-name">${esc(f.name)}</span>
+      <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">' + icon('mail') + ' on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when}</span></span>
+    <button class="link flow-item-act" data-act="move" title="Move to a folder" aria-label="Move to a folder">${icon('folder')}</button>
+    <button class="link flow-item-act" data-act="copy" title="Duplicate this flow" aria-label="Duplicate">${icon('copy')}</button>
+    <button class="link flow-item-act danger" data-act="del" title="Delete this flow" aria-label="Delete">${icon('x')}</button>
+  </li>`;
+}
+
+function flowFolderHtml(node, depth, searching) {
+  const all = flowsIn(node);
+  const ticked = all.filter((f) => flowUi.checked.has(f.id)).length;
+  const open = searching || !flowUi.closed.has(node.path);
+  const inner = open ? flowBranchHtml(node, depth + 1, searching) : '';
+  return `<li class="flow-folder${open ? ' open' : ''}" data-path="${esc(node.path)}" style="--depth:${depth}">
+      <div class="flow-folder-row" tabindex="0" title="${esc(node.path)}">
+        <input type="checkbox" class="flow-tick" ${ticked && ticked === all.length ? 'checked' : ''} data-some="${ticked && ticked < all.length ? 1 : ''}" aria-label="Tick every flow in ${esc(node.name)}" title="Tick every flow in this folder">
+        <span class="flow-caret">${icon(open ? 'chevron-down' : 'chevron-right')}</span>
+        <span class="flow-folder-name">${icon('folder')} ${esc(node.name)}</span>
+        <span class="flow-folder-n muted">${all.length}</span>
+        <button class="link flow-item-act" data-act="run" title="Run every flow in this folder, one after the other" aria-label="Run folder">${icon('play')}</button>
+        <button class="link flow-item-act" data-act="new" title="New flow in this folder" aria-label="New flow here">${icon('plus')}</button>
+        <button class="link flow-item-act" data-act="rename" title="Rename this folder" aria-label="Rename folder">${icon('pencil')}</button>
+        <button class="link flow-item-act danger" data-act="unfolder" title="Remove the folder (its flows stay, one level up)" aria-label="Remove folder">${icon('x')}</button>
+      </div>
+      ${open ? `<ul class="flow-sub">${inner}</ul>` : ''}
+    </li>`;
+}
+
+function flowBranchHtml(node, depth, searching) {
+  const folders = [...node.folders.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return folders.map((f) => flowFolderHtml(f, depth, searching)).join('') + node.flows.map((f) => flowItemHtml(f, depth)).join('');
+}
+
+function renderFlowSelBar() {
+  let bar = $('#flow-selbar');
+  const ul = $('#flow-list');
+  if (!ul) return;
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'flow-selbar';
+    bar.className = 'flow-selbar';
+    ul.before(bar);
+  }
+  // ticks of flows that were deleted meanwhile do not count
+  flowUi.checked = new Set([...flowUi.checked].filter((id) => flowUi.list.some((f) => f.id === id)));
+  const n = flowUi.checked.size;
+  const all = flowUi.list.length && n === flowUi.list.length;
+  bar.classList.toggle('some', n > 0);
+  bar.innerHTML = `<label class="flow-selall" title="Tick every flow"><input type="checkbox" id="flow-tick-all" ${all ? 'checked' : ''} ${flowUi.list.length ? '' : 'disabled'}>
+      <span>${n ? `${n} ticked` : 'Tick flows to run several'}</span></label>
+    <span class="grow"></span>
+    <button class="small" id="flow-folder-new" title="New folder (the ticked flows go into it)">${icon('folder-plus')}</button>
+    ${n ? `<button class="small" id="flow-sel-move" title="Move the ticked flows to a folder">${icon('folder')} Move</button>
+    <button class="small accent" id="flow-sel-run" title="Run the ticked flows one after the other">${icon('play')} Run ${n}</button>` : ''}`;
+  const tickAll = $('#flow-tick-all');
+  tickAll.indeterminate = n > 0 && !all;
+  tickAll.addEventListener('change', () => {
+    flowUi.checked = tickAll.checked ? new Set(flowUi.list.map((f) => f.id)) : new Set();
+    renderFlowList();
+  });
+  $('#flow-folder-new').addEventListener('click', newFlowFolder);
+  if (n) {
+    $('#flow-sel-move').addEventListener('click', () => moveFlows([...flowUi.checked]));
+    $('#flow-sel-run').addEventListener('click', () => runFlowBatch(flowUi.list.filter((f) => flowUi.checked.has(f.id)).map((f) => f.id)));
+  }
+}
+
 function renderFlowList() {
   const ul = $('#flow-list');
   if (!ul) return;
+  renderFlowSelBar();
   const q = flowUi.search.trim().toLowerCase();
-  const shown = flowUi.list.filter((f) => !q || f.name.toLowerCase().includes(q));
+  const shown = flowUi.list.filter((f) => !q || f.name.toLowerCase().includes(q) || String(f.folder || '').toLowerCase().includes(q));
   if (!shown.length) {
     ul.innerHTML = `<li class="flow-none muted small">${flowUi.list.length ? 'No flow matches the search.' : 'No flows yet. Press “+ New”.'}</li>`;
     return;
   }
-  ul.innerHTML = shown.map((f) => {
-    const blocks = (f.graph.nodes || []).length;
-    const when = f.last_run_at ? ` · ran ${typeof agoText === 'function' ? agoText(f.last_run_at) : fmtDate(f.last_run_at)}` : '';
-    return `<li class="flow-item${flowUi.flow && flowUi.flow.id === f.id ? ' active' : ''}" data-id="${f.id}" tabindex="0">
-      ${flowBadge(f)}
-      <span class="flow-item-text"><span class="flow-item-name">${esc(f.name)}</span>
-        <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">' + icon('mail') + ' on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when}</span></span>
-      <button class="link flow-item-act" data-act="copy" title="Duplicate this flow" aria-label="Duplicate">${icon('copy')}</button>
-      <button class="link flow-item-act danger" data-act="del" title="Delete this flow" aria-label="Delete">${icon('x')}</button>
-    </li>`;
-  }).join('');
+  ul.innerHTML = flowBranchHtml(flowTree(shown), 0, !!q);
+  $$('.flow-folder-row .flow-tick', ul).forEach((box) => { box.indeterminate = !!box.dataset.some; });
+
   $$('.flow-item', ul).forEach((li) => {
     const f = flowUi.list.find((x) => x.id === li.dataset.id);
     const open = () => openFlow(f);
-    li.addEventListener('click', (e) => { if (!e.target.closest('.flow-item-act')) open(); });
+    li.addEventListener('click', (e) => { if (!e.target.closest('.flow-item-act, .flow-tick')) open(); });
     li.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === li) open(); });
+    $('.flow-tick', li).addEventListener('change', (e) => {
+      if (e.target.checked) flowUi.checked.add(f.id); else flowUi.checked.delete(f.id);
+      renderFlowList();
+    });
+    li.addEventListener('dragstart', (e) => {
+      const ids = flowUi.checked.has(f.id) ? [...flowUi.checked] : [f.id];
+      e.dataTransfer.setData('text/x-pyhttp-flows', JSON.stringify(ids));
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    $('[data-act=move]', li).addEventListener('click', () => moveFlows([f.id]));
     $('[data-act=copy]', li).addEventListener('click', async () => {
-      try { await api('/flows', { method: 'POST', body: { name: f.name + ' copy', graph: f.graph } }); } catch (err) { toast(err.message, 'error'); }
+      try { await api('/flows', { method: 'POST', body: { name: f.name + ' copy', graph: f.graph, folder: f.folder || '' } }); } catch (err) { toast(err.message, 'error'); }
       refreshFlows();
     });
     $('[data-act=del]', li).addEventListener('click', async () => {
       if (!await confirmDialog('Delete flow?', `${strong(f.name)} will be removed. The requests it sends stay.`, { okLabel: 'Delete', danger: true })) return;
       try { await api('/flows/' + f.id, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
+      flowUi.checked.delete(f.id);
       if (flowUi.flow && flowUi.flow.id === f.id) { clearTimeout(flowUi.saveTimer); flowUi.flow = null; flowUi.run = null; renderFlowView(); }
       refreshFlows();
     });
   });
+
+  $$('.flow-folder', ul).forEach((li) => {
+    const path = li.dataset.path;
+    const row = $('.flow-folder-row', li);
+    const inside = () => flowUi.list.filter((f) => f.folder === path || String(f.folder || '').startsWith(path + '/'));
+    const toggle = () => {
+      if (flowUi.closed.has(path)) flowUi.closed.delete(path); else flowUi.closed.add(path);
+      saveFlowClosed();
+      renderFlowList();
+    };
+    row.addEventListener('click', (e) => { if (!e.target.closest('.flow-item-act, .flow-tick')) toggle(); });
+    row.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); toggle(); } });
+    $('.flow-tick', row).addEventListener('change', (e) => {
+      inside().forEach((f) => { if (e.target.checked) flowUi.checked.add(f.id); else flowUi.checked.delete(f.id); });
+      renderFlowList();
+    });
+    $('[data-act=run]', row).addEventListener('click', () => runFlowBatch(flowsIn(flowTree(flowUi.list)).filter((f) => inside().includes(f)).map((f) => f.id)));
+    $('[data-act=new]', row).addEventListener('click', () => newFlow(path));
+    $('[data-act=rename]', row).addEventListener('click', () => renameFlowFolder(path));
+    $('[data-act=unfolder]', row).addEventListener('click', async () => {
+      const n = inside().length;
+      if (!await confirmDialog('Remove folder?', `The folder ${strong(path)} goes. Its ${n} flow${n === 1 ? '' : 's'} stay${n === 1 ? 's' : ''}, moved to the top of the list.`, { okLabel: 'Remove folder' })) return;
+      try { await api('/flows/folders/rename', { method: 'POST', body: { name: path, to: '' } }); } catch (err) { toast(err.message, 'error'); }
+      refreshFlows();
+    });
+    // a flow dropped here moves into this folder
+    row.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-pyhttp-flows')) { e.preventDefault(); row.classList.add('drop'); } });
+    row.addEventListener('dragleave', () => row.classList.remove('drop'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      row.classList.remove('drop');
+      try { moveFlowsTo(JSON.parse(e.dataTransfer.getData('text/x-pyhttp-flows')), path); } catch { /* not ours */ }
+    });
+  });
+}
+
+// dropped on the list itself, outside any folder: back to the top level
+function bindFlowListDrop() {
+  const ul = $('#flow-list');
+  if (!ul || ul.dataset.drop) return;
+  ul.dataset.drop = '1';
+  ul.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-pyhttp-flows')) e.preventDefault(); });
+  ul.addEventListener('drop', (e) => {
+    if (e.target.closest('.flow-folder-row')) return;
+    e.preventDefault();
+    try {
+      const ids = JSON.parse(e.dataTransfer.getData('text/x-pyhttp-flows'));
+      if (ids.some((id) => (flowUi.list.find((f) => f.id === id) || {}).folder)) moveFlowsTo(ids, '');
+    } catch { /* not ours */ }
+  });
+}
+
+async function moveFlowsTo(ids, folder) {
+  try { await api('/flows/move', { method: 'POST', body: { ids, folder } }); } catch (err) { toast(err.message, 'error'); return; }
+  if (folder) flowUi.closed.delete(folder);
+  flowUi.list.forEach((f) => { if (ids.includes(f.id)) f.folder = folder; });
+  if (flowUi.flow && ids.includes(flowUi.flow.id)) flowUi.flow.folder = folder;
+  renderFlowList();
+  toast(`${ids.length === 1 ? 'Moved' : `${ids.length} flows moved`} to ${folder ? folder : 'the top level'}`, 'ok');
+}
+
+async function moveFlows(ids) {
+  const here = flowUi.list.find((f) => f.id === ids[0]);
+  const known = flowFolders();
+  const folder = await promptDialog(ids.length === 1 ? 'Move flow to a folder' : `Move ${ids.length} flows to a folder`, {
+    label: 'Folder', value: (here && here.folder) || '', placeholder: 'e.g. Auth or Auth/Signup', okLabel: 'Move',
+    message: known.length ? `Folders: ${known.map(esc).join(', ')}. A new name makes a new folder; empty moves to the top level; “/” nests one folder in another.` : 'A new name makes a new folder; “/” nests one folder in another.' });
+  if (folder === null || folder === undefined) return;
+  moveFlowsTo(ids, String(folder).split('/').map((p) => p.trim()).filter(Boolean).join('/'));
+}
+
+async function newFlowFolder() {
+  const ticked = [...flowUi.checked];
+  const name = await promptDialog('New folder', { label: 'Folder name', placeholder: 'e.g. Checkout', okLabel: 'Create',
+    message: ticked.length ? `The ${ticked.length} ticked flow${ticked.length === 1 ? '' : 's'} go into it.` : 'A first flow is made in it; drag others onto the folder to move them in.' });
+  const folder = String(name || '').split('/').map((p) => p.trim()).filter(Boolean).join('/');
+  if (!folder) return;
+  if (ticked.length) { await moveFlowsTo(ticked, folder); flowUi.checked.clear(); renderFlowList(); } else newFlow(folder);
+}
+
+async function renameFlowFolder(path) {
+  const name = await promptDialog('Rename folder', { label: 'Folder', value: path, okLabel: 'Rename', message: '“/” nests it in another folder.' });
+  const to = String(name || '').split('/').map((p) => p.trim()).filter(Boolean).join('/');
+  if (!to || to === path) return;
+  try { await api('/flows/folders/rename', { method: 'POST', body: { name: path, to } }); } catch (err) { toast(err.message, 'error'); return; }
+  refreshFlows();
+}
+
+// ------------------------------------------------------------ Run selected
+// Ticked flows run one after the other on the server; this panel under the list follows them.
+async function runFlowBatch(ids) {
+  if (!ids.length) { toast('Tick the flows to run first', 'error'); return; }
+  await flushFlowSave();
+  let batch;
+  try { batch = await api('/flow-batches', { method: 'POST', body: { flow_ids: ids, stop_on_fail: flowUi.stopOnFail } }); } catch (err) { toast(err.message, 'error'); return; }
+  followFlowBatch(batch);
+}
+
+function followFlowBatch(batch) {
+  flowUi.batch = batch;
+  renderFlowBatch();
+  clearTimeout(flowUi.batchTimer);
+  const tick = async () => {
+    if (!flowUi.batch || flowUi.batch.id !== batch.id) return;
+    let now;
+    try { now = await api(`/flow-batches/${batch.id}`); } catch { flowUi.batch = null; renderFlowBatch(); return; }
+    if (!flowUi.batch || flowUi.batch.id !== batch.id) return;
+    const moved = JSON.stringify(now.items) !== JSON.stringify(flowUi.batch.items);
+    flowUi.batch = now;
+    if (moved) { renderFlowBatch(); refreshFlows(true); }
+    if (now.state === 'running') flowUi.batchTimer = setTimeout(tick, 1000);
+    else {
+      renderFlowBatch();
+      if (flowUi.flow) loadFlowHistory(flowUi.flow);
+      if (typeof loadHistory === 'function') loadHistory();
+    }
+  };
+  flowUi.batchTimer = setTimeout(tick, 600);
+}
+
+function renderFlowBatch() {
+  let box = $('#flow-batch');
+  const inbox = $('#flow-inbox');
+  if (!box && inbox) {
+    box = document.createElement('div');
+    box.id = 'flow-batch';
+    box.className = 'flow-batch';
+    inbox.before(box);
+  }
+  if (!box) return;
+  const b = flowUi.batch;
+  box.hidden = !b;
+  if (!b) { box.innerHTML = ''; return; }
+  const c = b.counts || {};
+  const going = b.state === 'running';
+  const done = (c.passed || 0) + (c.failed || 0) + (c.cancelled || 0) + (c.skipped || 0);
+  const cls = (st) => (st === 'passed' ? 'ok' : st === 'failed' ? 'failed' : st === 'running' ? 'running' : 'cancelled');
+  box.innerHTML = `<div class="flow-batch-head">
+      <strong>${going ? `Running ${b.items.length} flows` : `${b.items.length} flows ran`}</strong>
+      <span class="badge ${cls(b.state)}">${going ? `${done}/${b.items.length}` : esc(b.state)}</span>
+      <span class="grow"></span>
+      ${going ? `<button class="small" id="flow-batch-stop">${icon('stop')} Stop</button>` : '<button class="link small" id="flow-batch-close" title="Hide">' + icon('x') + '</button>'}
+    </div>
+    <div class="flow-batch-sum muted small">${c.passed || 0} passed · ${c.failed || 0} failed${c.skipped ? ` · ${c.skipped} not run` : ''}${c.cancelled ? ` · ${c.cancelled} stopped` : ''}</div>
+    <div class="flow-batch-list">${b.items.map((it) => `<button class="flow-batch-row" data-id="${esc(it.flow_id)}" title="${esc(it.message || 'Open this flow')}">
+        <span class="badge ${it.waiting ? 'running' : cls(it.state)}">${it.waiting ? 'needs you' : esc(it.state)}</span>
+        <span class="fbr-name">${esc(it.name)}</span>
+        ${it.message ? `<span class="fbr-msg muted">${esc(it.message)}</span>` : ''}</button>`).join('')}</div>
+    <label class="flow-check small muted"><input type="checkbox" id="flow-batch-stoponfail" ${flowUi.stopOnFail ? 'checked' : ''}> Next time, stop at the first flow that does not pass</label>`;
+  const stop = $('#flow-batch-stop');
+  if (stop) stop.addEventListener('click', async () => { try { await api(`/flow-batches/${b.id}/cancel`, { method: 'POST' }); } catch (err) { toast(err.message, 'error'); } });
+  const close = $('#flow-batch-close');
+  if (close) close.addEventListener('click', () => { flowUi.batch = null; renderFlowBatch(); });
+  $('#flow-batch-stoponfail').addEventListener('change', (e) => { flowUi.stopOnFail = e.target.checked; });
+  $$('.flow-batch-row', box).forEach((row) => row.addEventListener('click', () => {
+    const f = flowUi.list.find((x) => x.id === row.dataset.id);
+    if (f) openFlow(f);
+  }));
 }
 
 function renderFlowInbox() {
@@ -139,9 +412,11 @@ function renderFlowInbox() {
   $('#flow-inbox-open').addEventListener('click', openFlowInbox);
 }
 
-async function newFlow() {
+async function newFlow(folder = '') {
+  if (typeof folder !== 'string') folder = '';   // called from a click
   try {
-    const flow = await api('/flows', { method: 'POST', body: { name: `Flow ${flowUi.list.length + 1}` } });
+    const flow = await api('/flows', { method: 'POST', body: { name: `Flow ${flowUi.list.length + 1}`, folder } });
+    if (folder) { flowUi.closed.delete(folder); saveFlowClosed(); }
     await refreshFlows();
     openFlow(flowUi.list.find((f) => f.id === flow.id) || flow);
     const name = $('#flow-name');
@@ -194,7 +469,7 @@ function renderFlowView() {
     return;
   }
   const add = Object.entries(FLOW_BLOCKS).filter(([type]) => type !== 'start')
-    .map(([type, b]) => `<button class="small flow-add" data-type="${type}" title="${esc(b.hint)}">+ ${esc(b.title)}</button>`).join('');
+    .map(([type, b]) => `<button class="small flow-add" data-type="${type}" title="${esc(b.hint)}">+ ${esc(b.short || b.title)}</button>`).join('');
   view.innerHTML = `
     <div class="flow-bar">
       <input id="flow-name" value="${esc(flow.name)}" aria-label="Flow name" title="Flow name (click to rename)" maxlength="120" spellcheck="false">
@@ -205,7 +480,7 @@ function renderFlowView() {
       <button id="flow-run" class="accent" title="Run this flow now">${icon('play')} Run</button>
     </div>
     <div class="flow-main">
-      <div id="flow-canvas" class="flow-canvas"><div id="flow-area" class="flow-area"><svg id="flow-wires" class="flow-wires"></svg></div></div>
+      <div id="flow-canvas" class="flow-canvas" data-ask=""><div id="flow-area" class="flow-area"><svg id="flow-wires" class="flow-wires"></svg></div></div>
       <div class="flow-side">
         <div id="flow-config" class="flow-config"></div>
         <div class="flow-log-head">
@@ -220,6 +495,7 @@ function renderFlowView() {
         </div>
       </div>
     </div>`;
+  if (flowUi.ask) { clearInterval(flowUi.ask.clock); flowUi.ask = null; }   // its panel went with the old view
   $('#flow-name').addEventListener('input', (e) => {
     flow.name = e.target.value;
     const label = $(`.flow-item[data-id="${CSS.escape(flow.id)}"] .flow-item-name`);
@@ -365,6 +641,8 @@ function flowDefaults(type) {
   if (type === 'stop') return { result: 'pass', message: '' };
   if (type === 'request') return { request_id: '' };
   if (type === 'log') return { message: '' };
+  if (type === 'view') return { data: '', title: 'Pick items', multiple: true, min: 1, max: 0, field: '', name: 'selected', timeout_s: 300, html: '', js: '', sample: '' };
+  if (type === 'script') return { input: '', name: 'result', code: FLOW_SCRIPT_EXAMPLE };
   return {};
 }
 
@@ -386,6 +664,14 @@ function flowSummary(node) {
   if (node.type === 'delay') return `${esc(c.seconds)} s`;
   if (node.type === 'log') return esc(String(c.message).slice(0, 60)) || '<span class="muted">nothing to write yet</span>';
   if (node.type === 'stop') return c.result === 'fail' ? 'as failed' : 'as passed';
+  if (node.type === 'view') {
+    const how = c.html || c.js ? 'own HTML/JS' : c.multiple === false ? 'pick one' : `tick ${c.min ? c.min : ''}${c.max ? `–${c.max}` : c.min ? '+' : 'any'}`;
+    return `${esc(c.title || 'Pick')} · <span class="muted">${esc(how)}</span> → <span class="mono">{{${esc(c.name || 'selected')}}}</span>`;
+  }
+  if (node.type === 'script') {
+    const first = String(c.code || '').split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//')) || '';
+    return first ? `<span class="mono">${esc(first.slice(0, 48))}</span>` : '<span class="err-text">write the script</span>';
+  }
   return c.trigger === 'email' ? `${icon('mail')} when an email arrives: ${esc(flowMatchText(c))}` : 'when you press Run';
 }
 
@@ -599,6 +885,39 @@ function renderFlowConfig() {
     fields = `<label class="flow-f">Seconds<input data-k="seconds" type="number" min="0" step="0.5" value="${esc(c.seconds ?? 1)}"></label>`;
   } else if (node.type === 'log') {
     fields = text('message', 'Line to write', 'e.g. Signed up as {{email.to}}', false);
+  } else if (node.type === 'view') {
+    const most = Math.round(flowUi.limits.input_seconds || 1800);
+    fields = text('data', 'Data to show', 'empty: what the block before handed on, else the list in the last response')
+      + '<p class="muted small">E.g. <code>{{prev.json.items}}</code> or <code>{{prev.json.data.users}}</code>. A list of objects shows as a table to tick.</p>'
+      + text('title', 'Title', 'Pick items', false)
+      + `<div class="flow-row2"><label class="flow-f">Pick<select data-k="multiple" data-bool="1" data-rerender="1">
+          <option value="true" ${c.multiple !== false ? 'selected' : ''}>several</option><option value="false" ${c.multiple === false ? 'selected' : ''}>one</option></select></label>`
+      + (c.multiple !== false ? `<label class="flow-f">At least<input data-k="min" type="number" min="0" value="${esc(c.min ?? 0)}"></label>
+          <label class="flow-f">At most<input data-k="max" type="number" min="0" value="${esc(c.max ?? 0)}" title="0: no limit"></label>` : '') + '</div>'
+      + text('field', 'Hand on only this field (optional)', 'e.g. id: [3, 7, 9] instead of whole items')
+      + `<div class="flow-row2">${text('name', 'Keep as variable', 'selected')}<label class="flow-f">Wait up to (s)<input data-k="timeout_s" type="number" min="5" max="${most}" value="${esc(c.timeout_s ?? 300)}"></label></div>`
+      + `<details class="flow-more" ${c.html || c.js ? 'open' : ''}><summary>Own look: HTML + JavaScript</summary>
+          <p class="muted small">Leave both empty for the built-in list. Your page gets <code>pyhttp.data</code> (the list) and hands on what is picked with <code>pyhttp.submit(value)</code>. <code>pyhttp.picker(element)</code> puts the built-in list anywhere in your page. It runs sandboxed: no access to the app or your login.</p>
+          <label class="flow-f">HTML<textarea data-k="html" class="flow-code" rows="6" spellcheck="false" placeholder="&lt;div id=&quot;cards&quot;&gt;&lt;/div&gt;">${esc(c.html || '')}</textarea></label>
+          <label class="flow-f">JavaScript<textarea data-k="js" class="flow-code" rows="8" spellcheck="false" placeholder="pyhttp.data.forEach(...)">${esc(c.js || '')}</textarea></label>
+          <div class="flow-btns"><button class="small" id="flow-view-example">Insert an example (cards)</button></div>
+        </details>
+        <details class="flow-more"><summary>Sample data for Preview</summary>
+          <label class="flow-f">JSON<textarea data-k="sample" class="flow-code" rows="4" spellcheck="false" placeholder="empty: 15 made-up items">${esc(c.sample || '')}</textarea></label>
+        </details>
+        <div class="flow-btns"><button class="small" id="flow-view-preview">${icon('eye')} Preview</button></div>`;
+  } else if (node.type === 'script') {
+    fields = text('input', 'Input (optional)', 'empty: what the block before handed on, else the last response JSON')
+      + `<label class="flow-f">JavaScript<textarea data-k="code" class="flow-code" rows="12" spellcheck="false">${esc(c.code || '')}</textarea></label>`
+      + `<p class="muted small"><code>input</code>, <code>vars</code>, <code>prev</code> (<code>prev.json</code>, <code>prev.status</code>), <code>email</code>.
+          <code>set('payload', {...})</code> makes <code>{{payload}}</code> for the next request's body; <code>return</code> hands a value on; <code>log()</code>, <code>fail('why')</code>. <code>await</code> works.</p>`
+      + text('name', 'Keep what it returns as', 'result')
+      + `<div class="flow-btns"><button class="small" id="flow-script-try">${icon('play')} Try it</button>
+          <select id="flow-script-examples" class="small" aria-label="Insert an example"><option value="">Insert an example…</option>
+            ${FLOW_SCRIPT_EXAMPLES.map(([label], i) => `<option value="${i}">${esc(label)}</option>`).join('')}</select></div>
+        <details class="flow-more"><summary>Input to try it with</summary>
+          <textarea id="flow-script-sample" class="flow-code" rows="4" spellcheck="false" placeholder='e.g. [{"id": 3}, {"id": 7}]'>${esc(flowUi.trySample || '')}</textarea></details>
+        <pre id="flow-script-out" class="flow-script-out" hidden></pre>`;
   } else if (node.type === 'stop') {
     fields = `<label class="flow-f">End the flow as<select data-k="result"><option value="pass" ${c.result !== 'fail' ? 'selected' : ''}>passed</option><option value="fail" ${c.result === 'fail' ? 'selected' : ''}>failed</option></select></label>`
       + text('message', 'Message (optional)', '', false);
@@ -612,7 +931,8 @@ function renderFlowConfig() {
   $$('[data-k]', box).forEach((input) => {
     const apply = () => {
       const key = input.dataset.k;
-      c[key] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+      c[key] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value)
+        : input.dataset.bool ? input.value === 'true' : input.value;
       const body = $(`.flow-node[data-id="${CSS.escape(node.id)}"] .fn-body`);
       if (body) body.innerHTML = flowSummary(node);
       showFlowMatchReads(c);
@@ -622,6 +942,351 @@ function renderFlowConfig() {
     };
     input.addEventListener(input.tagName === 'SELECT' || input.type === 'checkbox' ? 'change' : 'input', apply);
   });
+  bindFlowCodeFields(node, box);
+}
+
+// the code fields of the view and script blocks: an editor, examples, Preview and Try it
+function bindFlowCodeFields(node, box) {
+  const c = node.config;
+  const langs = { html: 'html', js: 'javascript', code: 'javascript', sample: 'json' };
+  const editor = (ta, lang) => {
+    if (typeof enhanceTextarea !== 'function' || !window.CM) return;
+    try { enhanceTextarea(ta, { lang }); } catch { /* the plain textarea still works */ }
+  };
+  $$('textarea.flow-code[data-k]', box).forEach((ta) => editor(ta, langs[ta.dataset.k] || 'text'));
+  const sample = $('#flow-script-sample', box);
+  if (sample) editor(sample, 'json');
+  const setField = (key, value) => {
+    c[key] = value;
+    const ta = $(`textarea[data-k="${key}"]`, box);
+    if (ta) { if (ta._enhanced) ta._enhanced.setValue(value); else ta.value = value; }
+    const body = $(`.flow-node[data-id="${CSS.escape(node.id)}"] .fn-body`);
+    if (body) body.innerHTML = flowSummary(node);
+    scheduleFlowSave();
+  };
+  const example = $('#flow-view-example', box);
+  if (example) example.addEventListener('click', async () => {
+    if ((c.html || c.js) && !await confirmDialog('Replace your HTML and JavaScript?', 'The example takes the place of what is in both fields.', { okLabel: 'Replace' })) return;
+    setField('html', FLOW_VIEW_EXAMPLE.html);
+    setField('js', FLOW_VIEW_EXAMPLE.js);
+  });
+  const preview = $('#flow-view-preview', box);
+  if (preview) preview.addEventListener('click', () => previewFlowView(node));
+  const pick = $('#flow-script-examples', box);
+  if (pick) pick.addEventListener('change', async () => {
+    const chosen = FLOW_SCRIPT_EXAMPLES[Number(pick.value)];
+    pick.value = '';
+    if (!chosen) return;
+    if (String(c.code || '').trim() && c.code !== FLOW_SCRIPT_EXAMPLE && !await confirmDialog('Replace the script?', `“${esc(chosen[0])}” takes the place of what you wrote.`, { okLabel: 'Replace' })) return;
+    setField('code', chosen[1]);
+  });
+  const tryIt = $('#flow-script-try', box);
+  if (tryIt) tryIt.addEventListener('click', async () => {
+    const out = $('#flow-script-out', box);
+    flowUi.trySample = sample ? sample.value : '';
+    let input;
+    if (flowUi.trySample.trim()) {
+      try { input = JSON.parse(flowUi.trySample); } catch { input = flowUi.trySample; }
+    } else input = flowDemoItems().slice(0, 3);
+    out.hidden = false;
+    out.className = 'flow-script-out';
+    out.textContent = 'Running…';
+    let res;
+    try { res = await api('/flows/try-script', { method: 'POST', body: { code: c.code || '', input } }); } catch (err) { out.textContent = err.message; return; }
+    const lines = [];
+    if (!flowUi.trySample.trim()) lines.push('// input: 3 made-up items (put your own under “Input to try it with”)');
+    res.logs.forEach((l) => lines.push('log: ' + l));
+    Object.entries(res.vars || {}).forEach(([k, v]) => lines.push(`{{${k}}} = ${JSON.stringify(v)}`));
+    if (res.error) lines.push('Error: ' + res.error);
+    else if (res.failed !== null && res.failed !== undefined) lines.push('fail: ' + res.failed);
+    else lines.push('returns: ' + JSON.stringify(res.value, null, 2));
+    out.classList.toggle('bad', !res.ok);
+    out.textContent = lines.join('\n');
+  });
+}
+
+// ------------------------------------------------- view and script blocks
+// A view block's page runs in a sandboxed frame (scripts only: no access to this page, the
+// app's cookies or its API). It talks to us with postMessage: submit, cancel. The data, the
+// settings and the built-in picker (pyhttp.picker) are put in the page before the user's code.
+const FLOW_SCRIPT_EXAMPLE = `// input: what the block before handed on (e.g. the items picked)
+// Build what the next request sends: its body can be {{payload}}
+const ids = (Array.isArray(input) ? input : [input]).map((item) => item.id ?? item);
+set('payload', { ids, count: ids.length });
+log('prepared', ids.length, 'ids');
+return ids;`;
+
+const FLOW_SCRIPT_EXAMPLES = [
+  ['Picked items → request body', FLOW_SCRIPT_EXAMPLE],
+  ['Unwrap a list from the last response', `// the list inside the last response, for a view block to show
+const list = prev.json.items || prev.json.data || prev.json.results || prev.json;
+if (!Array.isArray(list)) fail('No list in the response');
+return list;`],
+  ['Filter and sort', `// keep active items, newest first
+return input
+  .filter((item) => item.active !== false)
+  .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));`],
+  ['One request per item: first of the rest', `// hand on the first item, keep the rest for a loop back into this block
+const rest = Array.isArray(vars.queue) ? vars.queue : input;
+if (!rest.length) fail('Nothing left');   // wire "fail" to where the loop ends
+set('item', rest[0]);
+set('queue', rest.slice(1));
+return rest[0];`],
+  ['Check the response', `// fail the flow when the response is not what you expect
+if (prev.status !== 200) fail('Status was ' + prev.status);
+if (!prev.json || !prev.json.id) fail('No id in the answer');
+set('order_id', prev.json.id);
+return prev.json.id;`],
+];
+
+const FLOW_VIEW_EXAMPLE = {
+  html: `<h2 class="title"></h2>
+<div class="cards" id="cards"></div>
+<div class="bar">
+  <span id="count"></span>
+  <button id="go" class="primary">Use these</button>
+</div>`,
+  js: `// pyhttp.data is the list; pyhttp.submit(value) hands value on
+const picked = new Set();
+document.querySelector('.title').textContent = pyhttp.title;
+const cards = document.getElementById('cards');
+pyhttp.data.forEach((item, i) => {
+  const card = document.createElement('button');
+  card.className = 'card';
+  card.innerHTML = '<b></b><small></small>';
+  card.querySelector('b').textContent = item.name || item.title || ('Item ' + (i + 1));
+  card.querySelector('small').textContent = item.id !== undefined ? '#' + item.id : '';
+  card.onclick = () => {
+    picked.has(i) ? picked.delete(i) : picked.add(i);
+    card.classList.toggle('on', picked.has(i));
+    document.getElementById('count').textContent = picked.size + ' picked';
+  };
+  cards.appendChild(card);
+});
+document.getElementById('go').onclick = () =>
+  pyhttp.submit([...picked].map((i) => pyhttp.data[i]));`,
+};
+
+function flowDemoItems() {
+  const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar'];
+  return names.map((name, i) => ({ id: i + 1, name, price: Math.round((i + 1) * 7.5 * 100) / 100, active: i % 4 !== 3 }));
+}
+
+const FLOW_LS = new RegExp('[' + String.fromCharCode(0x2028, 0x2029) + ']', 'g');   // breaks a script literal
+const flowScriptJson = (v) => JSON.stringify(v === undefined ? null : v).replace(/</g, '\\u003c')
+  .replace(FLOW_LS, (ch) => '\\u' + ch.charCodeAt(0).toString(16));
+
+// the frame's own runtime: pyhttp.submit/cancel and the built-in list to tick
+const FLOW_VIEW_RUNTIME = `(function () {
+  var W = window.__W, T = window.__T;
+  function send(m) { m.pyhttp = T; parent.postMessage(m, '*'); }
+  function shape(items) { return W.field ? items.map(function (i) { return i && typeof i === 'object' ? i[W.field] : i; }) : items; }
+  function text(v) { if (v === null || v === undefined) return ''; return typeof v === 'object' ? JSON.stringify(v) : String(v); }
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; }
+  function picker(where) {
+    where = where || document.body;
+    var data = W.data, box = el('div', 'pk');
+    where.appendChild(box);
+    if (!Array.isArray(data)) {
+      box.appendChild(el('p', 'muted', 'This is not a list, so there is nothing to tick. Hand it on as it is, or point the block at the list inside it.'));
+      box.appendChild(el('pre', 'raw', JSON.stringify(data, null, 2)));
+      var one = el('button', 'primary', 'Hand this on'); one.onclick = function () { send({ type: 'submit', value: data }); };
+      box.appendChild(one);
+      return { selected: function () { return data; } };
+    }
+    var objs = data.length && data.every(function (d) { return d && typeof d === 'object' && !Array.isArray(d); });
+    var cols = ['value'];
+    if (objs) {
+      var seen = {}, order = [];
+      data.slice(0, 50).forEach(function (d) { Object.keys(d).forEach(function (k) { if (!seen[k]) { seen[k] = 0; order.push(k); } if (d[k] === null || typeof d[k] !== 'object') seen[k]++; }); });
+      cols = order.filter(function (k) { return seen[k] > 0; }).slice(0, 6);
+      if (!cols.length) cols = order.slice(0, 4);
+    }
+    var chosen = {}, shown = data.map(function (_, i) { return i; });
+    var top = el('div', 'pk-top');
+    var find = el('input', 'pk-find'); find.type = 'search'; find.placeholder = 'Search ' + data.length + ' items…';
+    var all = el('button', '', W.multiple ? 'Tick all shown' : '');
+    var count = el('span', 'pk-count');
+    var go = el('button', 'primary', W.multiple ? 'Hand on the ticked' : 'Hand on the chosen');
+    top.appendChild(find); if (W.multiple) top.appendChild(all); top.appendChild(count); top.appendChild(go);
+    box.appendChild(top);
+    var wrap = el('div', 'pk-wrap'), table = el('table', 'pk-table');
+    wrap.appendChild(table); box.appendChild(wrap);
+    var head = el('tr'); head.appendChild(el('th', 'pk-c')); head.appendChild(el('th', 'pk-n', '#'));
+    cols.forEach(function (c) { head.appendChild(el('th', '', objs ? c : '')); });
+    var thead = el('thead'); thead.appendChild(head); table.appendChild(thead);
+    var body = el('tbody'); table.appendChild(body);
+    function picked() { return data.filter(function (_, i) { return chosen[i]; }); }
+    function check() {
+      var n = picked().length, why = '';
+      if (!W.multiple && n !== 1) why = 'Choose one';
+      else if (W.min && n < W.min) why = 'Tick at least ' + W.min;
+      else if (W.max && n > W.max) why = 'Tick at most ' + W.max;
+      count.textContent = n + ' of ' + data.length + (W.multiple ? ' ticked' : ' chosen') + (why ? ' · ' + why : '');
+      count.className = 'pk-count' + (why && n ? ' bad' : '');
+      go.disabled = !!why;
+    }
+    function draw() {
+      body.innerHTML = '';
+      shown.forEach(function (i) {
+        var d = data[i], tr = el('tr', chosen[i] ? 'on' : '');
+        var td = el('td', 'pk-c'), box2 = el('input'); box2.type = W.multiple ? 'checkbox' : 'radio'; box2.name = 'pk'; box2.checked = !!chosen[i];
+        td.appendChild(box2); tr.appendChild(td); tr.appendChild(el('td', 'pk-n', String(i + 1)));
+        cols.forEach(function (c) { var v = objs ? d[c] : d; var cell = el('td', '', text(v).slice(0, 200)); cell.title = text(v); tr.appendChild(cell); });
+        tr.onclick = function () {
+          if (!W.multiple) chosen = {};
+          chosen[i] = !chosen[i];
+          draw(); check();
+        };
+        body.appendChild(tr);
+      });
+    }
+    find.oninput = function () {
+      var q = find.value.trim().toLowerCase();
+      shown = data.map(function (_, i) { return i; }).filter(function (i) { return !q || JSON.stringify(data[i]).toLowerCase().indexOf(q) >= 0; });
+      draw();
+    };
+    all.onclick = function () { var every = shown.every(function (i) { return chosen[i]; }); shown.forEach(function (i) { chosen[i] = !every; }); draw(); check(); };
+    go.onclick = function () { var p = picked(); send({ type: 'submit', value: W.multiple ? shape(p) : shape(p)[0] }); };
+    draw(); check();
+    return { selected: function () { return W.multiple ? shape(picked()) : shape(picked())[0]; } };
+  }
+  window.pyhttp = { data: W.data, title: W.title, multiple: W.multiple, min: W.min, max: W.max, field: W.field,
+    submit: function (v) { send({ type: 'submit', value: v === undefined ? null : v }); },
+    cancel: function () { send({ type: 'cancel' }); },
+    picker: picker };
+  window.addEventListener('error', function (e) { send({ type: 'error', message: e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '') }); });
+})();`;
+
+function flowViewDoc(w, token) {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
+  const theme = `:root{--bg:${v('--bg', '#111')};--bg-2:${v('--bg-2', '#1a1a1a')};--bg-3:${v('--bg-3', '#222')};--text:${v('--text', '#eee')};
+    --muted:${v('--muted', '#999')};--border:${v('--border', '#333')};--primary:${v('--primary', '#3b82f6')};--ok:${v('--ok', '#22c55e')};--danger:${v('--danger', '#ef4444')};}`;
+  const base = `${theme}
+    *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+    body{padding:12px} button{font:inherit;color:var(--text);background:var(--bg-3);border:1px solid var(--border);border-radius:6px;padding:5px 11px;cursor:pointer}
+    button:hover{border-color:var(--primary)} button.primary{background:var(--primary);border-color:var(--primary);color:#fff} button:disabled{opacity:.5;cursor:default}
+    input,select,textarea{font:inherit;color:var(--text);background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:5px 8px}
+    .muted{color:var(--muted)} pre.raw{background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:50vh;overflow:auto}
+    .pk-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;position:sticky;top:0;background:var(--bg);padding-bottom:6px;z-index:1}
+    .pk-find{flex:1;min-width:140px} .pk-count{color:var(--muted);margin-left:auto} .pk-count.bad{color:var(--danger)}
+    .pk-table{width:100%;border-collapse:collapse} .pk-table th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;border-bottom:1px solid var(--border);padding:4px 8px;white-space:nowrap}
+    .pk-table td{padding:5px 8px;border-bottom:1px solid var(--border);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .pk-table tr{cursor:pointer} .pk-table tbody tr:hover{background:var(--bg-2)} .pk-table tr.on{background:color-mix(in srgb,var(--primary) 16%,transparent)}
+    .pk-c{width:28px} .pk-n{width:36px;color:var(--muted)}
+    .title{font-size:15px;margin:0 0 10px} .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+    .card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:10px} .card.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 18%,var(--bg-3))}
+    .card small{color:var(--muted)} .bar{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:12px}`;
+  const safe = (code) => String(code || '').replace(/<\/script/gi, '<\\/script');
+  const settings = { data: w.data, title: w.title || 'Pick', multiple: w.multiple !== false, min: Number(w.min) || 0, max: Number(w.max) || 0, field: w.field || '' };
+  const own = String(w.html || '').trim() || String(w.js || '').trim();
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${base}</style>
+    <script>window.__W=${flowScriptJson(settings)};window.__T=${flowScriptJson(token)};</script>
+    <script>${FLOW_VIEW_RUNTIME}</script></head><body>
+    ${own ? String(w.html || '') : ''}
+    <script>${own ? safe(w.js) : 'pyhttp.picker(document.body);'}</script></body></html>`;
+}
+
+function flowViewFrame(w, token) {
+  const frame = document.createElement('iframe');
+  frame.className = 'flow-ask-frame';
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.setAttribute('title', w.title || 'Pick');
+  frame.srcdoc = flowViewDoc(w, token);
+  return frame;
+}
+
+const flowToken = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// messages from a view's frame: the run waiting on it, or the Preview
+window.addEventListener('message', async (e) => {
+  const m = e.data;
+  if (!m || typeof m !== 'object' || !m.pyhttp) return;
+  const target = [flowUi.ask, flowUi.preview].find((t) => t && t.frame && e.source === t.frame.contentWindow && m.pyhttp === t.token);
+  if (!target) return;
+  if (m.type === 'error') { target.say(`Error in the view's JavaScript: ${m.message}`, true); return; }
+  if (target === flowUi.preview) {
+    if (m.type === 'submit') target.say('Would hand on as {{' + (target.name || 'selected') + '}}:\n' + JSON.stringify(m.value, null, 2));
+    if (m.type === 'cancel') closeModal();
+    return;
+  }
+  const body = m.type === 'cancel' ? { cancel: true } : { value: m.value };
+  try {
+    await api(`/flow-runs/${target.runId}/answer`, { method: 'POST', body });
+    target.say(m.type === 'cancel' ? 'Closed.' : 'Handed on. The flow goes on…');
+  } catch (err) { target.say(err.message, true); }
+});
+
+// the run waits on a view block: show its page over the canvas
+function showFlowAsk(run) {
+  const main = $('.flow-main');
+  let box = $('#flow-ask');
+  const w = run && run.state === 'running' ? run.waiting : null;
+  if (!w || !main) {
+    if (box) box.remove();
+    if (flowUi.ask) clearInterval(flowUi.ask.clock);
+    flowUi.ask = null;
+    return;
+  }
+  const key = `${run.id}:${w.node}:${w.until}`;
+  if (flowUi.ask && flowUi.ask.key === key && box) return;
+  if (box) box.remove();
+  if (flowUi.ask) clearInterval(flowUi.ask.clock);
+  const token = flowToken();
+  box = document.createElement('div');
+  box.id = 'flow-ask';
+  box.className = 'flow-ask';
+  box.innerHTML = `<div class="flow-ask-head"><span class="badge running">waiting for you</span><strong>${esc(w.title || 'Pick')}</strong>
+      <span class="muted small">${Array.isArray(w.data) ? `${w.data.length} items` : ''}${w.multiple !== false && (w.min || w.max) ? ` · tick ${w.min || 0}${w.max ? '–' + w.max : '+'}` : ''}</span>
+      <span class="grow"></span><span class="muted small" id="flow-ask-left"></span>
+      <button class="small" id="flow-ask-close" title="The block takes “timeout”">Close without picking</button></div>
+    <div class="flow-ask-say small" id="flow-ask-say" hidden></div>`;
+  const frame = flowViewFrame(w, token);
+  box.appendChild(frame);
+  main.appendChild(box);
+  const say = (text, bad = false) => {
+    const el = $('#flow-ask-say');
+    if (!el) return;
+    el.hidden = !text;
+    el.textContent = text;
+    el.classList.toggle('bad', bad);
+  };
+  const left = () => {
+    const s = Math.max(0, Math.round(w.until - Date.now() / 1000));
+    const el = $('#flow-ask-left');
+    if (el) el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} left`;
+  };
+  left();
+  flowUi.ask = { key, runId: run.id, token, frame, say, clock: setInterval(left, 1000) };
+  $('#flow-ask-close').addEventListener('click', async () => {
+    try { await api(`/flow-runs/${run.id}/answer`, { method: 'POST', body: { cancel: true } }); } catch (err) { say(err.message, true); }
+  });
+  if (document.hidden || !document.hasFocus()) toast(`“${flowUi.flow ? flowUi.flow.name : 'A flow'}” waits for you to pick`, 'ok');
+}
+
+// Preview: the block's page with sample data, in a dialog; nothing is sent to a run
+function previewFlowView(node) {
+  const c = node.config;
+  let data = flowDemoItems();
+  if (String(c.sample || '').trim()) {
+    try { data = JSON.parse(c.sample); } catch (err) { toast('The sample data is not JSON: ' + err.message, 'error'); return; }
+  }
+  const w = { ...c, data, multiple: c.multiple !== false, title: c.title || 'Pick items' };
+  const token = flowToken();
+  openModal(`Preview: ${w.title}`, `<p class="muted small">With ${String(c.sample || '').trim() ? 'your sample data' : '15 made-up items (put your own under “Sample data for Preview”)'}. Handing on shows here what the next block would get.</p>
+    <div id="flow-preview-host" class="flow-preview-host"></div><pre id="flow-preview-out" class="flow-script-out" hidden></pre>`,
+  [{ label: 'Done', cls: 'primary', onClick: closeModal }]);
+  $('#modal .modal').classList.add('wide');
+  const frame = flowViewFrame(w, token);
+  $('#flow-preview-host').appendChild(frame);
+  flowUi.preview = { token, frame, name: c.name, say: (text, bad = false) => {
+    const out = $('#flow-preview-out');
+    if (!out) return;
+    out.hidden = false;
+    out.textContent = text;
+    out.classList.toggle('bad', bad);
+  } };
 }
 
 // ------------------------------------------------------------------ a run
@@ -637,10 +1302,11 @@ function showFlowEvents(events) {
   for (const ev of events) {
     last = ev.n;
     if (ev.status === 'running') { if (ev.node) markFlowBlock(ev.node, 'running'); continue; }
-    if (ev.node) markFlowBlock(ev.node, ev.status === 'fail' ? 'fail' : 'ok');
+    // "input": a view block waits for someone; "info": a line a script logged (the block goes on)
+    if (ev.node && ev.status !== 'info') markFlowBlock(ev.node, ev.status === 'fail' ? 'fail' : ev.status === 'input' ? 'running' : 'ok');
     const node = ev.node && flowNode(ev.node);
     const line = document.createElement('div');
-    line.className = 'flow-line ' + (ev.status === 'fail' ? 'bad' : 'good') + (ev.node ? '' : ' end');
+    line.className = 'flow-line ' + (ev.status === 'fail' ? 'bad' : ev.status === 'input' ? 'wait' : ev.status === 'info' ? 'info' : 'good') + (ev.node ? '' : ' end');
     line.innerHTML = `<span class="fl-what">${node ? esc(FLOW_BLOCKS[node.type].title) : ''}${ev.port ? ` <span class="fl-port">→ ${esc(ev.port)}</span>` : ''}</span>
       <span class="fl-text">${esc(ev.text)}</span><span class="fl-ms muted">${ev.ms != null ? fmtMs(ev.ms) : ''}</span>`;
     if (ev.node) line.addEventListener('click', () => selectFlowBlock(ev.node));
@@ -684,8 +1350,10 @@ async function followFlowRun(flow, run) {
     try { data = await api(`/flow-runs/${run.id}?after=${after}&wait=20`); } catch (err) { toast(err.message, 'error'); break; }
     if (flowUi.flow !== flow) break;
     after = showFlowEvents(data.events) || after;
+    showFlowAsk(data);
     if (data.state !== 'running') { showFlowState(data); flow.last_status = data.state; flow.last_run_at = data.started_at; break; }
   }
+  if (flowUi.flow === flow) showFlowAsk(null);
   if (flowUi.run === run.id) flowUi.run = null;
   if ($('#flow-run') && flowUi.flow === flow) {
     $('#flow-run').disabled = false;
@@ -705,7 +1373,8 @@ function initFlows() {
     // the rail stays when the sidebar is hidden: picking a section there brings its list back
     if ($('.layout').classList.contains('no-side') && $('#btn-sidebar')) $('#btn-sidebar').click();
   }));
-  $('#btn-flow-new').addEventListener('click', newFlow);
+  $('#btn-flow-new').addEventListener('click', () => newFlow(''));
+  bindFlowListDrop();
   $('#flow-search').addEventListener('input', (e) => { flowUi.search = e.target.value; renderFlowList(); });
   window.addEventListener('resize', () => { if ($('#flow-wires') && flowUi.flow) drawFlowWires(); });
   window.addEventListener('beforeunload', () => { if (flowUi.saveTimer !== null) flushFlowSave(); });
