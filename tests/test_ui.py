@@ -1967,3 +1967,47 @@ def test_a_view_with_its_own_html_and_a_script_to_try(page, servers):
         page.wait_for_function("document.querySelector('#flow-state .badge').textContent === 'failed'")
     page.request.delete(f"{app_url}/api/flows/{flow['id']}")
     page.click("#side-tabs button[data-tab='collection']")
+
+
+def test_dragging_the_empty_canvas_moves_the_view(page, servers):
+    app_url, _ = servers
+    flow = page.request.post(app_url + "/api/flows", data={"name": "Pan me", "graph": {
+        "nodes": [{"id": "start", "type": "start", "x": 40, "y": 60, "config": {}},
+                  {"id": "l", "type": "log", "x": 3000, "y": 1900, "config": {"message": "far"}}], "edges": []}}).json()
+    page.click("#side-tabs button[data-tab='flows']")
+    page.click(f".flow-item[data-id='{flow['id']}']")
+    page.wait_for_selector(".flow-node.t-log")
+    # the area grew to hold the far block, with room past it
+    assert page.evaluate("document.querySelector('#flow-area').offsetWidth") >= 3900
+    canvas = page.locator("#flow-canvas").bounding_box()
+    sx, sy = canvas["x"] + canvas["width"] - 60, canvas["y"] + canvas["height"] - 60   # empty canvas, near its corner
+    page.mouse.move(sx, sy)
+    page.mouse.down()
+    page.mouse.move(sx - 150, sy - 100, steps=6)
+    assert page.evaluate("document.querySelector('#flow-canvas').classList.contains('panning')")
+    page.mouse.up()
+    pos = page.evaluate("[document.querySelector('#flow-canvas').scrollLeft, document.querySelector('#flow-canvas').scrollTop]")
+    assert pos == [150, 100], pos            # the view moved with the pointer
+    assert not page.evaluate("document.querySelector('#flow-canvas').classList.contains('panning')")
+    # and back: dragging the other way scrolls back
+    page.mouse.move(sx - 150, sy - 100)
+    page.mouse.down()
+    page.mouse.move(sx, sy, steps=6)
+    page.mouse.up()
+    assert page.evaluate("[document.querySelector('#flow-canvas').scrollLeft, document.querySelector('#flow-canvas').scrollTop]") == [0, 0]
+    # a click on the empty canvas still clears the selection; dragging a block still moves the block, not the view
+    page.click(".flow-node.t-start .fn-body")
+    assert page.locator(".flow-node.sel").count() == 1
+    page.mouse.click(sx, sy)
+    assert page.locator(".flow-node.sel").count() == 0
+    head = page.locator(".flow-node.t-start .fn-head").bounding_box()
+    page.mouse.move(head["x"] + 30, head["y"] + 10)
+    page.mouse.down()
+    page.mouse.move(head["x"] + 130, head["y"] + 60, steps=6)
+    page.mouse.up()
+    assert page.evaluate("[document.querySelector('#flow-canvas').scrollLeft, document.querySelector('#flow-canvas').scrollTop]") == [0, 0]
+    page.wait_for_function("document.querySelector('#flow-saved').textContent === 'Saved'")
+    start = next(n for n in page.request.get(f"{app_url}/api/flows/{flow['id']}").json()["graph"]["nodes"] if n["id"] == "start")
+    assert (start["x"], start["y"]) == (140, 110)
+    page.request.delete(f"{app_url}/api/flows/{flow['id']}")
+    page.click("#side-tabs button[data-tab='collection']")

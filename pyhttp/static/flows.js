@@ -507,7 +507,14 @@ function renderFlowView() {
   $('#flow-stop').addEventListener('click', async () => {
     if (flowUi.run) { try { await api(`/flow-runs/${flowUi.run}/cancel`, { method: 'POST' }); } catch { /* it ended by itself */ } }
   });
-  $('#flow-area').addEventListener('pointerdown', (e) => { if (e.target.id === 'flow-area' || e.target.id === 'flow-wires') selectFlowBlock(null); });
+  // empty canvas: a click clears the selection, a drag moves the view (blocks, ports and wires handle their own)
+  $('#flow-area').addEventListener('pointerdown', (e) => {
+    if (e.target.id !== 'flow-area' && e.target.id !== 'flow-wires') return;
+    selectFlowBlock(null);
+    panFlowCanvas(e);
+  });
+  // the middle button pans from anywhere, over blocks too
+  $('#flow-canvas').addEventListener('pointerdown', (e) => { if (e.button === 1) panFlowCanvas(e); });
   bindTabs($('#flow-log-tabs'), $('#flow-log-panels'));
   $('#flow-log-tabs button[data-tab="history"]').addEventListener('click', () => loadFlowHistory(flow));
   renderFlow();
@@ -697,6 +704,7 @@ function renderFlow() {
     if (del) del.addEventListener('click', () => removeFlowBlock(node.id));
     $$('.fn-port', el).forEach((port) => port.addEventListener('pointerdown', (e) => dragFlowWire(e, node, port)));
   });
+  fitFlowArea();
   drawFlowWires();
 }
 
@@ -746,6 +754,43 @@ function drawFlowWires(extra = '') {
   }));
 }
 
+// Drag the empty canvas to move the view: what is under the pointer follows it, like a map.
+function panFlowCanvas(e) {
+  if (e.button !== 0 && e.button !== 1) return;
+  const canvas = $('#flow-canvas');
+  if (!canvas) return;
+  e.preventDefault();   // no text selection, no middle-button autoscroll
+  const sx = e.clientX, sy = e.clientY, left = canvas.scrollLeft, top = canvas.scrollTop;
+  let moved = false;
+  const move = (ev) => {
+    if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;   // a click, not a drag
+    moved = true;
+    canvas.classList.add('panning');
+    canvas.scrollLeft = left - (ev.clientX - sx);
+    canvas.scrollTop = top - (ev.clientY - sy);
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    canvas.classList.remove('panning');
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+}
+
+// the drawing area grows with the blocks, so there is always room to scroll past the last one
+function fitFlowArea() {
+  const area = $('#flow-area');
+  if (!area || !flowUi.flow) return;
+  const nodes = flowUi.flow.graph.nodes || [];
+  const w = Math.max(3200, ...nodes.map((n) => n.x + 900));
+  const h = Math.max(2000, ...nodes.map((n) => n.y + 700));
+  area.style.width = w + 'px';
+  area.style.height = h + 'px';
+}
+
 function dragFlowBlock(e, node, el) {
   if (e.button !== 0) return;
   e.preventDefault();
@@ -762,7 +807,7 @@ function dragFlowBlock(e, node, el) {
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
-    if (moved) scheduleFlowSave();
+    if (moved) { fitFlowArea(); scheduleFlowSave(); }
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
