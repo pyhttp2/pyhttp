@@ -785,8 +785,9 @@ def test_scripts_console_run_modal_folder_settings_and_reorder(page, servers):
 def test_history_panel_oauth_secrets_resize_and_openapi(page, servers):
     app_url, echo_url = servers
     new_request(page, echo_url, "Hist A")
-    # request history lives in the right-hand panel, next to Current run / Run history
-    assert page.locator("#side-tabs").count() == 0
+    # request history lives in the right-hand panel, next to Current run / Run history;
+    # the sidebar's own tabs are the requests and the flows
+    assert page.locator("#side-tabs button").all_text_contents() == ["Requests", "Flows"]
     assert page.locator("#runs-tabs button").all_text_contents()[:3] == ["Current run", "Run history", "Request history"]
     page.click("#runs-tabs button[data-tab='requests']")
     count = "document.querySelectorAll('#history-list .h-item').length"
@@ -1675,3 +1676,55 @@ def test_find_shortcut_follows_focus(page, servers):
     page.keyboard.press("Control+f")
     assert page.evaluate(where) == "response"
     assert page.evaluate("document.activeElement.classList.contains('rv-search')")
+
+
+def test_flows_are_a_tab_of_the_sidebar(page, servers):
+    app_url, echo_url = servers
+    for name, path in (("Flow ping", "/echo?n=1"), ("Flow broken", "/status/500")):
+        page.request.post(app_url + "/api/requests", data={"name": name, "method": "GET", "url": echo_url + path})
+    page.reload()
+    page.wait_for_selector("#btn-new")
+    assert page.locator("#btn-flows").count() == 0                       # no longer a button in the top bar
+    page.click("#side-tabs button[data-tab='flows']")
+    page.wait_for_selector("#flow-empty-new")
+    assert not page.is_visible("#editor-empty") and not page.is_visible("#runs-panel")
+    page.click("#btn-flow-new")
+    page.wait_for_selector(".flow-node.t-start")
+    page.fill("#flow-name", "UI flow")
+    page.click(".flow-node.t-start .fn-body")
+    assert page.locator("#flow-config select[data-k='trigger']").input_value() == "manual"
+    page.click(".flow-add[data-type='request']")                          # wired to the selected block
+    page.select_option("#flow-config select[data-k='request_id']", label="GET Flow ping")
+    page.click(".flow-add[data-type='if']")
+    page.fill("#flow-config input[data-k='left']", "{{prev.status}}")
+    page.fill("#flow-config input[data-k='right']", "200")
+    page.click(".flow-add[data-type='log']")
+    page.fill("#flow-config input[data-k='message']", "status {{prev.status}}")
+    assert page.locator("#flow-wires path.fw").count() == 3
+    # the email block: all or any of the lines, said back in words
+    page.click("#flow-area", position={"x": 5, "y": 5})
+    page.click(".flow-add[data-type='email']")
+    page.fill("#flow-config input[data-k='from']", "shop")
+    page.fill("#flow-config input[data-k='subject']", "verify")
+    assert "from has \u201cshop\u201d AND subject has \u201cverify\u201d" in page.inner_text("#flow-match-reads")
+    page.select_option("#flow-config select[data-k='mode']", "any")
+    assert "from has \u201cshop\u201d OR subject has \u201cverify\u201d" in page.inner_text("#flow-match-reads")
+    assert "OR" in page.inner_text(".flow-node.t-email .fn-body")
+    assert page.locator("#flow-match-check").count() == 0                 # this app has no mail system to try it on
+    page.click(".flow-node.t-email .fn-del")
+    page.wait_for_function("document.querySelector('#flow-saved').textContent === 'Saved'")
+    page.click("#flow-run")
+    page.wait_for_selector("#flow-state .badge.ok", timeout=15000)
+    lines = page.locator("#flow-log .flow-line").all_inner_texts()
+    assert "status 200" in lines[-2] and lines[-1] == "Flow passed"
+    assert page.locator("#flow-list .flow-item.active .flow-dot.ok").count() == 1
+    # the request editor is untouched behind it, and the flow is still open on coming back
+    page.click("#side-tabs button[data-tab='collection']")
+    assert page.is_visible("#req-list") and not page.is_visible("#flow-view") and page.is_visible("#runs-panel")
+    page.click("#side-tabs button[data-tab='flows']")
+    assert page.input_value("#flow-name") == "UI flow"
+    saved = page.request.get(app_url + "/api/flows").json()["flows"]
+    assert [f["name"] for f in saved] == ["UI flow"] and len(saved[0]["graph"]["edges"]) == 3
+    page.request.delete(f"{app_url}/api/flows/{saved[0]['id']}")
+    page.click("#side-tabs button[data-tab='collection']")
+    forget(page, app_url, "Flow ping", "Flow broken")

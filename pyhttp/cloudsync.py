@@ -58,7 +58,7 @@ import httpx
 from . import USER_AGENT, secretstore
 
 DEFAULT_SERVER = "https://app.pyhttp.com"
-SYNC_TABLES = ("requests", "folders", "environments", "variables", "mock_servers", "mock_routes", "cookies", "history")
+SYNC_TABLES = ("requests", "folders", "environments", "variables", "mock_servers", "mock_routes", "cookies", "history", "flows")
 SECRET_COLUMNS = {"environments": "variables", "folders": "variables"}   # JSON lists of {key, value, secret}
 KEYCHAIN_NAME = "pyhttp-cloud-token"
 DELAY = 1.0          # seconds of quiet after an edit before it is sent

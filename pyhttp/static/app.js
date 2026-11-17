@@ -1702,11 +1702,13 @@ async function importText(text) {
   const variables = Array.isArray(data) ? {} : (data.variables || {});
   const mocks = Array.isArray(data) ? [] : (data.mocks || []);
   const monitors = Array.isArray(data) ? [] : (data.monitors || []);
+  const flows = Array.isArray(data) ? [] : (data.flows || []);
   const what = [`${requests.length} request(s)`];
   if (folders.length) what.push(`${folders.length} folder(s)`);
   if (environments.length) what.push(`${environments.length} environment(s)`);
   if (mocks.length) what.push(`${mocks.length} mock server(s)`);
   if (monitors.length) what.push(`${monitors.length} monitor(s)`);
+  if (flows.length) what.push(`${flows.length} flow(s)`);
   const choice = await dialog({
     title: 'Import collection',
     message: `The file contains ${strong(what.join(', '))}. Add them to your collection, or replace everything you have now?`,
@@ -1720,9 +1722,9 @@ async function importText(text) {
   const replace = choice === 'replace';
   if (replace && !await confirmDialog('Replace everything?', 'All current requests, folders and environments (and mocks and monitors, when the file has them) are deleted and replaced by the file. This cannot be undone.', { okLabel: 'Replace everything', danger: true })) return;
   try {
-    const res = await api('/import', { method: 'POST', body: { requests, folders, environments, variables, mocks, monitors, replace } });
+    const res = await api('/import', { method: 'POST', body: { requests, folders, environments, variables, mocks, monitors, flows, replace } });
     toast(`Imported ${res.imported} request(s)` + (res.folders ? `, ${res.folders} folder(s)` : '') + (res.environments ? `, ${res.environments} environment(s)` : '')
-      + (res.mocks ? `, ${res.mocks} mock server(s)` : '') + (res.monitors ? `, ${res.monitors} monitor(s)` : ''), 'ok');
+      + (res.mocks ? `, ${res.mocks} mock server(s)` : '') + (res.monitors ? `, ${res.monitors} monitor(s)` : '') + (res.flows ? `, ${res.flows} flow(s)` : ''), 'ok');
     state.selected = [];
     if (replace && state.current) { autosave.dirty = false; state.current = null; renderEditor(); }
     await Promise.all([loadRequests(), loadEnvironments(),

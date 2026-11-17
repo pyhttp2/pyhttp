@@ -45,6 +45,7 @@
     <button id="btn-project" class="project-btn" title="Project: a separate workspace with its own requests, environments, history, mocks and monitors. Click to switch or create one"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span id="project-name">Project</span><span class="caret">▾</span></button>
     <button id="btn-git" class="git-btn" title="Git sync: keep this project's requests, environments and mocks in a Git repository, committed and pushed on every change"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.2v9.6M18 10.2c0 4-6 3-11.2 6.2"/></g></svg>Git<span id="git-dot" class="git-dot" hidden></span></button>
     <button id="btn-cloud" class="git-btn" title="Cloud sync: keep this project in step with your pyhttp account, on your other computers and on the web"><span id="cloud-dot" class="git-dot" hidden></span>Cloud</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <div class="env-picker" title="Active environment: its variables override global variables">
       <span class="env-dot"></span>
       <select id="env-select"></select>
@@ -52,11 +53,13 @@
     <button id="btn-envs" title="Create and edit environments (Dev, QA, Prod…)">Environments</button>
     <button id="btn-variables" title="Global variables, used by every environment">Variables</button>
     <button id="btn-cookies" title="Cookie jar: cookies stored from responses and sent with requests">Cookies</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-monitors" title="Scheduled checks: picked requests sent on an interval while the app is open; failures are flagged and can ping a webhook">Monitors<span id="mon-badge" class="tab-n fail" hidden></span></button>
-    <button id="btn-flows" title="Flows: saved requests wired into a small program. Send a request, wait for an email, pick a value out of it, decide, send the next one">Flows</button>
     <button id="btn-mocks" title="Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on (http://host:port/mock/&lt;name&gt;/…)">Mocks<span id="mock-badge" class="tab-n" hidden></span></button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-import" title="Import a pyhttp export, a Postman collection or environment, or a cURL command">Import</button>
     <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export ▾</button>
+    <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-help" class="icon-btn settings-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
     <button id="btn-settings" class="icon-btn settings-btn" title="Settings: theme, SSL verification, redirects, proxy, certificates" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -68,6 +71,10 @@
 <main class="layout">
   <!-- ------------------------------------------------ sidebar: collection -->
   <aside class="sidebar">
+    <div class="tabs side-tabs" id="side-tabs">
+      <button data-tab="collection" class="active" title="Your requests and folders">Requests</button>
+      <button data-tab="flows" title="Flows: saved requests wired into a small program. Send a request, wait for an email, pick a value out of it, decide, send the next one">Flows</button>
+    </div>
     <div class="tab-panels grow-panels" id="side-panels">
       <div class="tab-panel side-panel" data-panel="collection">
         <div class="sidebar-head">
@@ -89,12 +96,22 @@
         </div>
         <ul id="req-list" class="req-list"></ul>
       </div>
+      <div class="tab-panel side-panel" data-panel="flows" hidden>
+        <div class="sidebar-head">
+          <input id="flow-search" type="search" placeholder="Search flows…" autocomplete="off">
+          <button id="btn-flow-new" class="primary" title="New flow">+<span class="btn-text"> New</span></button>
+        </div>
+        <ul id="flow-list" class="flow-list"></ul>
+        <div id="flow-inbox" class="flow-inbox" hidden></div>
+      </div>
     </div>
   </aside>
 
   <!-- --------------------------------------------------- editor + response -->
   <section class="editor" id="editor-section">
     <div id="req-tabs" class="req-tabs" hidden></div>
+    <!-- shown instead of the request editor while the sidebar's Flows tab is chosen (flows.js) -->
+    <div id="flow-view" class="flow-view"></div>
     <div id="editor-empty" class="empty">
       <svg class="empty-mark" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M21 3 10.5 13.5M21 3l-6.5 18-4-7.5L3 9.5z"/></svg>
       <p>Select a request on the left, or create a new one.</p>

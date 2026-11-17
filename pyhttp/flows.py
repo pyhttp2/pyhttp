@@ -4,7 +4,8 @@ A flow is a graph. Each block does one thing and leaves through one of its ports
 wire on that port names the block that runs next. A port with no wire ends the flow.
 
     block      what it does                                  ports
-    start      where a run begins                            out
+    start      where a run begins: when Run is pressed, or   out
+               when an email arrives that fits
     request    sends a saved request                         ok, fail
     email      waits for an email to the test inbox          received, timeout
     set        puts a value (or part of one) in a variable   out
@@ -15,9 +16,15 @@ wire on that port names the block that runs next. A port with no wire ends the f
 
 Values are templates: everything a request can use ({{variable}}, {{prev.json.id}},
 {{$guid}}) plus what the flow itself made: variables from ``set`` blocks and the last
-email as {{email.subject}}, {{email.from}}, {{email.text}}, {{email.code}} (the first
-4 to 8 digit number in it) and {{email.link}} (the first link). They are passed on to the
+email as {{email.subject}}, {{email.from}}, {{email.text}}, {{email.code}} (the number
+the message calls its code, else its first 6-digit number, else its first number of 4 to
+8 digits) and {{email.link}} (the first link). They are passed on to the
 requests the flow sends.
+
+The Email block and an email-started Start block say which messages they mean with up to
+four texts (from, subject, text, to: each "contains", case ignored, empty = not looked at)
+and whether a message must fit all of them or any one of them (``fits`` below). When
+no message fitted in time, the log says what did arrive and why the newest one was not it.
 
 A run fails when it ends on an unwired ``fail`` or ``timeout`` port, on a ``stop`` block
 set to fail, or when it runs more blocks than ``Limits.steps`` (two blocks wired in a
@@ -50,7 +57,10 @@ MAX_TEXT = 20_000         # characters in one field of a block
 MAX_EVENTS = 1000         # per run; a longer log loses its oldest lines
 KEPT_RUNS = 20            # finished runs kept in memory for the UI
 
-_CODE = re.compile(r"(?<!\w)(?<!\d\.)(\d{4,8})(?!\w|\.\d)")   # 482913 and "482913." but not 1.2345 or abc1234
+_NUMBER = r"(?<!\w)(?<!\d\.)(\d{%s})(?!\w|\.\d)"   # 482913 and "482913." but not 1.2345 or abc1234
+# the number a message calls its code; failing that a six-digit one; failing that any of 4 to 8 digits
+_CODES = (re.compile(r"(?:code|otp|pin|passcode|password|verification)\b\D{0,40}?" + _NUMBER % "4,8", re.I),
+          re.compile(_NUMBER % "6"), re.compile(_NUMBER % "4,8"))
 _LINK = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
@@ -69,7 +79,11 @@ class Mail(Protocol):
         """The first message received after ``since`` that fits ``match`` (``to``, ``from``,
         ``subject``, ``contains``: each a text the field must contain, case ignored), waiting up
         to ``timeout`` seconds for it. None when there is none. A message is a dict with ``id``,
-        ``from``, ``to``, ``subject``, ``text`` and ``received_at``."""
+        ``from``, ``to``, ``subject``, ``text`` and ``received_at``. ``match["mode"]`` is "all"
+        or "any" (see ``fits``)."""
+
+    def recent(self, since: float = 0.0) -> list[dict[str, Any]]:
+        """The messages received after ``since``, newest first."""
 
 
 # Replaced where pyhttp runs as a service: the mail system, and the limits of the running user.
@@ -81,11 +95,73 @@ def email_values(message: dict[str, Any]) -> dict[str, Any]:
     """What {{email.…}} offers for a received message."""
     text = str(message.get("text") or "")
     both = f"{message.get('subject') or ''}\n{text}"
-    code = _CODE.search(both)
+    code = next((hit for hit in (pattern.search(both) for pattern in _CODES) if hit), None)
     link = _LINK.search(text)
     return {"id": message.get("id") or "", "from": message.get("from") or "", "to": message.get("to") or "",
             "subject": message.get("subject") or "", "text": text,
             "code": code.group(1) if code else "", "link": link.group(0).rstrip(".,;") if link else ""}
+
+
+MATCH_FIELDS = (("from", "from", "From"), ("subject", "subject", "Subject"), ("contains", "text", "Text"), ("to", "to", "To"))
+
+
+def fits(message: dict[str, Any], match: dict[str, Any]) -> tuple[bool, str]:
+    """Whether a message is the one meant, and when not, why not (for the run log).
+
+    ``match`` holds up to four texts: ``from``, ``subject``, ``contains`` (the text of the
+    message) and ``to``. Each is looked for inside its field, case ignored; an empty one is
+    not looked at. With ``mode`` "any" one of them is enough, otherwise all must be found.
+    Nothing filled in fits every message."""
+    asked = [(label, str(match.get(key) or "").strip(), str(message.get(field) or ""))
+             for key, field, label in MATCH_FIELDS if str(match.get(key) or "").strip()]
+    if not asked:
+        return True, ""
+    missed = [f"{label} does not contain \u201c{want}\u201d" for label, want, have in asked if want.lower() not in have.lower()]
+    if str(match.get("mode") or "all") == "any":
+        return (True, "") if len(missed) < len(asked) else (False, "none of these fits: " + "; ".join(missed))
+    return (True, "") if not missed else (False, "; ".join(missed))
+
+
+def match_of(config: dict[str, Any], text: Callable[[str], str]) -> dict[str, str]:
+    """A block's match settings with their templates filled in."""
+    return {**{key: text(key) for key, _field, _label in MATCH_FIELDS}, "mode": "any" if config.get("mode") == "any" else "all"}
+
+
+def described(match: dict[str, Any]) -> str:
+    parts = [f"{label.lower()} contains \u201c{str(match.get(key)).strip()}\u201d" for key, _f, label in MATCH_FIELDS if str(match.get(key) or "").strip()]
+    return (" or " if match.get("mode") == "any" else " and ").join(parts) if parts else "any message"
+
+
+def why_none(system: "Mail", match: dict[str, Any], since: float, waited: float) -> str:
+    """What to tell the user when no message fitted: what was asked for, and what did arrive."""
+    line = f"No email whose {described(match)} arrived at {system.address()} within {waited:g} s."
+    if not any(str(match.get(key) or "").strip() for key, _f, _l in MATCH_FIELDS):
+        line = f"No email arrived at {system.address()} within {waited:g} s."
+    try:
+        seen = system.recent(since)
+        earlier = sum(1 for m in system.recent(0.0) if float(m.get("received_at") or 0) <= since and fits(m, match)[0])
+    except Exception:  # noqa: BLE001 - the explanation is a courtesy
+        return line
+    if not seen:
+        # the usual surprise: the mail was sent first and the flow started after it
+        before = ("" if not earlier else
+                  f" {'1 message' if earlier == 1 else f'{earlier} messages'} already in the inbox would fit, but arrived before "
+                  f"this block began to wait: it takes only mail that arrives after that. Start the flow, then send the mail.")
+        return line + " Nothing was received in that time." + before
+    newest = seen[0]
+    _ok, why = fits(newest, match)
+    count = "1 message" if len(seen) == 1 else f"{len(seen)} messages"
+    return (f"{line} {count} did arrive; the newest, \u201c{newest.get('subject') or '(no subject)'}\u201d from "
+            f"{newest.get('from') or 'an unknown sender'}, was skipped: {why}.")
+
+
+def trigger_of(flow: dict[str, Any]) -> dict[str, Any] | None:
+    """The Start block's settings when the flow is started by an arriving email, else None."""
+    for node in (flow.get("graph") or {}).get("nodes") or []:
+        if isinstance(node, dict) and node.get("type") == "start":
+            config = node.get("config") if isinstance(node.get("config"), dict) else {}
+            return config if config.get("trigger") == "email" else None
+    return None
 
 
 # ----------------------------------------------------------------------- the graph
@@ -163,7 +239,7 @@ def _compare(left: str, op: str, right: str) -> bool:
 class Run:
     """One run of a flow: its log, readable while it goes."""
 
-    def __init__(self, flow: dict[str, Any]) -> None:
+    def __init__(self, flow: dict[str, Any], started_by: dict[str, Any] | None = None) -> None:
         self.id = uuid.uuid4().hex[:16]
         self.flow_id = flow["id"]
         self.name = flow["name"]
@@ -180,6 +256,10 @@ class Run:
         self._n = 0
         self._changed = asyncio.Event()
         self._mail_since = self.started_at
+        self.started_by = started_by         # the email that started this run, if one did
+        if started_by:
+            self.email = email_values(started_by)
+            self._mail_since = float(started_by.get("received_at") or self.started_at)
 
     # ------------------------------------------------------------------ log
     def _log(self, node: dict[str, Any] | None, status: str, text: str, port: str = "", ms: float | None = None) -> None:
@@ -193,6 +273,7 @@ class Run:
     def snapshot(self, after: int = 0) -> dict[str, Any]:
         return {"id": self.id, "flow_id": self.flow_id, "name": self.name, "state": self.state, "message": self.message,
                 "started_at": self.started_at, "ended_at": self.ended_at, "last": self._n,
+                "started_by": f"email from {self.email.get('from')}" if self.started_by else "",
                 "events": [e for e in self.events if e["n"] > after]}
 
     async def wait(self, after: int, timeout: float) -> dict[str, Any]:
@@ -257,6 +338,8 @@ class Run:
         """(port taken, "ok" or "fail", line for the log)."""
         kind, config = node["type"], node["config"]
         if kind == "start":
+            if self.started_by:
+                return "out", "ok", f"Started by an email from {self.email['from']}: {self.email['subject']}"
             return "out", "ok", "Started"
         if kind == "request":
             req = db.get_request(str(config.get("request_id") or ""))
@@ -277,14 +360,15 @@ class Run:
             system = mail()
             if system is None:
                 return "timeout", "fail", "Receiving email works in pyhttp on the web (app.pyhttp.com): this app has no mail system"
-            match = {key: self._text(node, key) for key in ("to", "from", "subject", "contains")}
+            match = match_of(config, lambda key: self._text(node, key))
             try:
                 asked = float(config.get("timeout_s") or 60)
             except (TypeError, ValueError):
                 asked = 60.0
-            message = await system.wait(match, self._mail_since, max(1.0, min(asked, bounds.wait_seconds)))
+            waited = max(1.0, min(asked, bounds.wait_seconds))
+            message = await system.wait(match, self._mail_since, waited)
             if message is None:
-                return "timeout", "fail", f"No matching email arrived at {system.address()} in time"
+                return "timeout", "fail", why_none(system, match, self._mail_since, waited)
             self._mail_since = float(message.get("received_at") or time.time())   # the next block waits for a newer one
             self.email = email_values(message)
             found = f", code {self.email['code']}" if self.email["code"] else ""
@@ -328,7 +412,8 @@ class Run:
 
     def _end(self, state: str, message: str) -> None:
         self.state, self.message, self.ended_at = state, message, time.time()
-        self._log(None, "fail" if state == "failed" else "ok", f"Flow {state}" + (f": {message}" if message else ""))
+        said = bool(self.events) and self.events[-1]["text"] == message[:2000]   # the block just said it: not twice
+        self._log(None, "fail" if state == "failed" else "ok", f"Flow {state}" + (f": {message}" if message and not said else ""))
         try:
             db.update_flow(self.flow_id, last_run_at=self.started_at, last_status=state)
         except Exception:  # noqa: BLE001 - the flow was deleted, or the project closed, while it ran
@@ -344,7 +429,26 @@ class FlowManager:
     def active(self) -> int:
         return sum(1 for run in self.runs.values() if run.state == "running")
 
-    def start(self, flow: dict[str, Any]) -> Run:
+    def latest(self, flow_id: str) -> Run | None:
+        """The newest run of a flow that is still kept."""
+        mine = [run for run in self.runs.values() if run.flow_id == flow_id]
+        return max(mine, key=lambda run: run.started_at) if mine else None
+
+    def start_by_email(self, flows_list: list[dict[str, Any]], message: dict[str, Any]) -> list[Run]:
+        """Start every flow whose Start block waits for an email like this one. A flow that
+        cannot start now (too many running) is skipped: the message stays in the inbox."""
+        started = []
+        for flow in flows_list:
+            config = trigger_of(flow)
+            if config is None or not fits(message, match_of(config, lambda key, c=config: str(c.get(key) or "")))[0]:
+                continue
+            try:
+                started.append(self.start(flow, message))
+            except ValueError:
+                continue
+        return started
+
+    def start(self, flow: dict[str, Any], started_by: dict[str, Any] | None = None) -> Run:
         bounds = limits()
         if self.active() >= bounds.active:
             raise ValueError("A flow is still running. Wait until it ends, or stop it, then run this one." if bounds.active == 1
@@ -352,7 +456,7 @@ class FlowManager:
         done = sorted((r for r in self.runs.values() if r.state != "running"), key=lambda r: r.ended_at or 0)
         while len(self.runs) >= KEPT_RUNS and done:
             self.runs.pop(done.pop(0).id, None)
-        run = Run(flow)
+        run = Run(flow, started_by)
         self.runs[run.id] = run
         run.task = asyncio.create_task(self._run(run, bounds))
         return run

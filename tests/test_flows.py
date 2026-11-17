@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -139,13 +138,15 @@ class Inbox:
     def address(self) -> str:
         return "tester@inbox.example"
 
+    def recent(self, since: float = 0.0) -> list[dict[str, Any]]:
+        return sorted((m for m in self.messages if m["received_at"] > since), key=lambda m: -m["received_at"])
+
     async def wait(self, match: dict[str, str], since: float, timeout: float) -> dict[str, Any] | None:
         self.asked.append(match)
         deadline = time.monotonic() + timeout
         while True:
-            for m in self.messages:
-                if m["received_at"] > since and all(match[k].lower() in str(m.get(field) or "").lower()
-                                                    for k, field in (("from", "from"), ("subject", "subject"), ("contains", "text"), ("to", "to"))):
+            for m in reversed(self.recent(since)):
+                if flows.fits(m, match)[0]:
                     return m
             if time.monotonic() >= deadline:
                 return None
@@ -179,7 +180,7 @@ def test_a_flow_waits_for_an_email_and_uses_what_is_in_it(client, echo_url, monk
     assert took(result) == [("start", "out"), ("mail", "received"), ("verify", "ok"), ("link", "out"), ("again", "timeout"), ("none", "out")]
     lines = {e["node"]: e["text"] for e in result["events"]}
     assert "code 482913" in lines["mail"] and lines["none"] == "no second mail; link https://shop.example/verify?t=abc"
-    assert inbox.asked[0] == {"to": "", "from": "no-reply@shop", "subject": "Verify", "contains": ""}
+    assert inbox.asked[0] == {"to": "", "from": "no-reply@shop", "subject": "Verify", "contains": "", "mode": "all"}
     sent = client.get("/api/history").json()[0]
     assert "code=482913" in sent["url"] and "to=tester+signup@inbox.example" in sent["url"]
 
@@ -194,3 +195,115 @@ def test_what_an_email_offers():
                               "text": "Call 1234567890123 or visit http://a.example/x?y=1, then https://b.example."})
     assert got["code"] == "9034" and got["link"] == "http://a.example/x?y=1"
     assert flows.email_values({"text": "no numbers v1.2345 here"})["code"] == ""
+
+
+def test_all_of_these_or_any_of_these():
+    message = {"from": "No-Reply@Shop.example", "to": "me+signup@inbox.example", "subject": "Verify your address", "text": "Your code is 482913."}
+    assert flows.fits(message, {}) == (True, "")                                            # nothing asked: every message
+    assert flows.fits(message, {"from": "", "subject": "  ", "mode": "any"}) == (True, "")
+    assert flows.fits(message, {"from": "shop", "subject": "VERIFY", "contains": "code", "to": "+signup"})[0]
+    # the mistake that is easy to make: the same word in two fields, and only one of them has it
+    ok, why = flows.fits(message, {"from": "verify", "subject": "verify"})
+    assert not ok and why == "From does not contain \u201cverify\u201d"
+    assert flows.fits(message, {"from": "verify", "subject": "verify", "mode": "any"}) == (True, "")
+    ok, why = flows.fits(message, {"from": "bank", "contains": "invoice", "mode": "any"})
+    assert not ok and why.startswith("none of these fits: From does not contain") and "Text does not contain" in why
+    assert flows.described({"from": "a", "subject": "b", "mode": "any"}) == "from contains \u201ca\u201d or subject contains \u201cb\u201d"
+    assert flows.described({"from": "a", "subject": "b"}) == "from contains \u201ca\u201d and subject contains \u201cb\u201d"
+    assert flows.described({}) == "any message"
+
+
+def test_a_timeout_says_what_arrived_and_why_it_was_not_it(client, monkeypatch):  # noqa: F811
+    inbox = Inbox()
+    monkeypatch.setattr(flows, "mail", lambda: inbox)
+    monkeypatch.setattr(flows, "limits", lambda: flows.Limits(steps=50, wait_seconds=0.3, active=5))
+    now = time.time()
+    inbox.messages = [{"id": "a", "from": "no-reply@shop.example", "to": "tester@inbox.example", "subject": "Test order", "text": "hi", "received_at": now + 5}]
+    both = run(client, graph([block("email", "mail", **{"from": "test", "subject": "test", "timeout_s": 0.3})], ("start", "out", "mail")))
+    assert both["state"] == "failed"
+    assert "No email whose from contains \u201ctest\u201d and subject contains \u201ctest\u201d arrived" in both["message"]
+    assert both["events"][-1]["text"] == "Flow failed"                      # the reason is said once, by the block
+    assert "1 message did arrive" in both["message"] and "\u201cTest order\u201d from no-reply@shop.example" in both["message"]
+    assert "was skipped: From does not contain \u201ctest\u201d" in both["message"]
+
+    either = run(client, graph([block("email", "mail", **{"from": "test", "subject": "test", "mode": "any", "timeout_s": 0.3})], ("start", "out", "mail")))
+    assert either["state"] == "passed" and "Test order" in either["events"][1]["text"]
+
+    inbox.messages = []
+    nothing = run(client, graph([block("email", "mail", timeout_s=0.3)], ("start", "out", "mail")))
+    assert "No email arrived at tester@inbox.example within 1 s. Nothing was received in that time." == nothing["message"]
+
+    # sent first, flow started after: the block says that this is why
+    inbox.messages = [{"id": "o", "from": "test@shop.example", "subject": "Test", "text": "", "received_at": now - 30}]
+    late = run(client, graph([block("email", "mail", subject="test", timeout_s=0.3)], ("start", "out", "mail")))
+    assert "1 message already in the inbox would fit, but arrived before" in late["message"]
+    assert "Start the flow, then send the mail." in late["message"]
+
+    # the same check before a run: which messages in the inbox would a block take
+    inbox.messages = [{"id": "a", "from": "no-reply@shop.example", "subject": "Test order", "text": "", "received_at": now},
+                      {"id": "b", "from": "test@bank.example", "subject": "Statement", "text": "", "received_at": now + 1}]
+    checked = client.post("/api/flows/mail-check", json={"match": {"from": "test", "subject": "test"}}).json()
+    assert checked["available"] and [(m["id"], m["fits"]) for m in checked["messages"]] == [("b", False), ("a", False)]
+    assert checked["messages"][0]["why"] == "Subject does not contain \u201ctest\u201d"
+    any_of = client.post("/api/flows/mail-check", json={"match": {"from": "test", "subject": "test", "mode": "any"}}).json()
+    assert [m["fits"] for m in any_of["messages"]] == [True, True]
+    monkeypatch.setattr(flows, "mail", lambda: None)
+    assert client.post("/api/flows/mail-check", json={"match": {}}).json() == {"available": False, "messages": []}
+
+
+def test_an_arriving_email_starts_the_flows_that_wait_for_it(client, echo_url, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(flows, "limits", lambda: flows.Limits(steps=50, wait_seconds=1, active=5))
+    use = client.post("/api/requests", json={"name": "use", "method": "GET", "url": echo_url + "/echo?code={{email.code}}"}).json()
+
+    def flow(name: str, **start: Any) -> str:
+        g = {"nodes": [block("start", "start", **start), block("request", "use", request_id=use["id"]),
+                       block("log", "said", message="{{email.subject}} / {{email.code}}")],
+             "edges": [{"from": "start", "port": "out", "to": "use"}, {"from": "use", "port": "ok", "to": "said"}]}
+        return client.post("/api/flows", json={"name": name, "graph": g}).json()["id"]
+
+    orders = flow("orders", trigger="email", subject="order", **{"from": "shop"})
+    either = flow("either", trigger="email", subject="invoice", contains="order", mode="any")
+    by_hand = flow("by hand")
+    other = flow("other", trigger="email", subject="invoice")
+    manager = client.app.state.flow_runs
+    message = {"id": "m1", "from": "no-reply@shop.example", "to": "t@inbox.example", "subject": "Your order 4471",
+               "text": "Order 4471 is confirmed. Code 882211.", "received_at": time.time()}
+
+    async def arrive() -> list[str]:
+        from pyhttp import db
+        started = manager.start_by_email(db.list_flows(), message)
+        for one in started:
+            await one.task
+        return [one.flow_id for one in started]
+
+    started = client.portal.call(arrive)
+    assert started == [orders, either]                                  # not the one run by hand, not the one for invoices
+    last = client.get(f"/api/flows/{orders}/last-run").json()["run"]
+    assert last["state"] == "passed" and last["started_by"] == "email from no-reply@shop.example"
+    lines = [e["text"] for e in last["events"] if e["status"] != "running"]
+    assert lines[0] == "Started by an email from no-reply@shop.example: Your order 4471"
+    assert lines[2] == "Your order 4471 / 882211"
+    assert "code=882211" in client.get("/api/history").json()[0]["url"]
+    assert client.get(f"/api/flows/{by_hand}/last-run").json() == {"run": None}
+    assert client.get(f"/api/flows/{other}/last-run").json() == {"run": None}
+
+
+def test_flows_travel_with_an_export(client, echo_url):  # noqa: F811
+    rid = client.post("/api/requests", json={"name": "ping", "method": "GET", "url": echo_url + "/echo"}).json()["id"]
+    g = graph([block("request", "r", request_id=rid), block("log", "l", message="done")], ("start", "out", "r"), ("r", "ok", "l"))
+    client.post("/api/flows", json={"name": "Smoke", "graph": g})
+    exported = client.get("/api/export").json()
+    assert [f["name"] for f in exported["flows"]] == ["Smoke"]
+
+    done = client.post("/api/import", json={"requests": exported["requests"], "flows": exported["flows"] + [{"name": "broken", "graph": {"nodes": [{"type": "x"}]}}]}).json()
+    assert done["flows"] == 1 and done["imported"] == 1
+    copies = [f for f in client.get("/api/flows").json()["flows"] if f["name"] == "Smoke"]
+    assert len(copies) == 2
+    new_id = next(n["config"]["request_id"] for n in copies[1]["graph"]["nodes"] if n["type"] == "request")
+    assert new_id != rid and client.get(f"/api/requests/{new_id}").json()["name"] == "ping"   # wired to the imported copy
+    result = client.post("/api/flow-runs", json={"flow_id": copies[1]["id"]}).json()
+    for _ in range(50):
+        got = client.get(f"/api/flow-runs/{result['id']}?after=99&wait=1").json()
+        if got["state"] != "running":
+            break
+    assert got["state"] == "passed"

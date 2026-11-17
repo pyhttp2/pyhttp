@@ -1,8 +1,52 @@
 /* ------------------------------------------------------------------ flows */
-.modal.flow-modal { width: min(1500px, 97vw); height: 92vh; max-height: 92vh; }
-.flow-modal .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 10px 12px; }
-.flow-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.flow-bar #flow-name { width: 220px; font-weight: 600; }
+/* The sidebar's two tabs, and the top bar's groups */
+.side-tabs { flex: none; margin: 0; padding: 0 6px; }
+.side-tabs button { padding: 9px 12px; font-weight: 500; }
+.tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex: none; }
+@media (max-width: 1180px) { .tb-sep { display: none; } }
+
+/* With the Flows tab chosen the middle of the window is the flow, and the runs panel
+   (which is about requests) steps aside. */
+.flow-view { display: none; }
+.layout.flow-mode { grid-template-columns: var(--side-w, 320px) minmax(480px, 1fr); }
+.layout.flow-mode.no-side { grid-template-columns: 1fr; }
+.layout.flow-mode .runs { display: none; }
+.layout.flow-mode #editor-section { overflow: hidden; padding: 10px 12px; }
+.layout.flow-mode #editor-section > :not(#flow-view) { display: none !important; }
+.layout.flow-mode #flow-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.flow-empty { margin: auto; max-width: 560px; }
+@media (max-width: 1180px) { .layout.flow-mode { grid-template-columns: var(--side-w, 280px) minmax(380px, 1fr); } }
+@media (max-width: 960px) { .layout.flow-mode, .layout.flow-mode.no-side { grid-template-columns: 1fr; } .layout.flow-mode #flow-view { min-height: 80vh; } }
+
+/* the list of flows */
+.flow-list { list-style: none; margin: 0; padding: 6px 0; overflow: auto; flex: 1; min-height: 0; }
+.flow-item { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 8px; align-items: center; padding: 7px 8px 7px 12px;
+  cursor: pointer; border-left: 3px solid transparent; }
+.flow-item:hover { background: var(--bg-3); }
+.flow-item.active { background: var(--bg-3); border-left-color: var(--primary); }
+.flow-item-text { min-width: 0; display: flex; flex-direction: column; }
+.flow-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-item-meta { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-item-act { opacity: 0; padding: 2px 5px !important; color: var(--muted) !important; }
+.flow-item:hover .flow-item-act, .flow-item.active .flow-item-act, .flow-item-act:focus-visible { opacity: 1; }
+.flow-item-act:hover { color: var(--text) !important; text-decoration: none !important; }
+.flow-item-act.danger:hover { color: var(--danger) !important; }
+.flow-none { padding: 16px 14px; }
+.flow-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bg-4); border: 1px solid var(--border); }
+.flow-dot.ok { background: var(--ok); border-color: var(--ok); }
+.flow-dot.bad { background: var(--danger); border-color: var(--danger); }
+.flow-dot.running { background: var(--primary); border-color: var(--primary); animation: flow-pulse 1s ease-in-out infinite; }
+@keyframes flow-pulse { 50% { opacity: .35; } }
+.flow-auto { color: #c084fc; }
+.flow-inbox { flex: none; border-top: 1px solid var(--border); padding: 10px 12px; }
+.flow-inbox-row { display: flex; gap: 6px; align-items: center; margin-top: 3px; min-width: 0; }
+.flow-inbox-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-inbox-row button { padding-left: 0; }
+
+/* the editor */
+.flow-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex: none; }
+.flow-bar #flow-name { width: 220px; font-weight: 600; background: transparent; border-color: transparent; }
+.flow-bar #flow-name:hover, .flow-bar #flow-name:focus { background: var(--bg-3); border-color: var(--border); }
 .flow-adds { display: flex; gap: 4px; flex-wrap: wrap; }
 .flow-add { padding: 3px 8px; }
 .flow-main { flex: 1; min-height: 0; display: flex; gap: 10px; }
@@ -17,7 +61,7 @@
 .fw-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; pointer-events: stroke; }
 .fw-hit:hover { stroke: rgba(239, 68, 68, .25); }
 
-.flow-node { position: absolute; width: 210px; background: var(--bg-2); border: 1px solid var(--border); border-left: 4px solid var(--muted);
+.flow-node { position: absolute; width: 220px; background: var(--bg-2); border: 1px solid var(--border); border-left: 4px solid var(--muted);
   border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); user-select: none; }
 .flow-node.sel { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, .35); }
 .flow-node.t-start { border-left-color: var(--accent); }
@@ -34,7 +78,7 @@
 .fn-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
 .fn-del { padding: 0 5px !important; color: var(--muted) !important; font-size: 12px; }
 .fn-del:hover { color: var(--danger) !important; text-decoration: none; }
-.fn-body { padding: 7px 10px; font-size: 13px; min-height: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fn-body { padding: 7px 10px; font-size: 13px; min-height: 32px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; word-break: break-word; }
 .fn-in { position: absolute; left: -8px; top: 9px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-2); border: 2px solid var(--muted); }
 .fn-ports { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding: 0 0 7px; }
 .fn-ports:empty { display: none; }
@@ -44,17 +88,32 @@
 .fn-port.p-ok i, .fn-port.p-received i, .fn-port.p-true i { background: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
 .fn-port.p-fail i, .fn-port.p-timeout i, .fn-port.p-false i { background: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
 
-.flow-side { width: 330px; flex: none; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
-.flow-config { flex: none; max-height: 55%; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 10px 12px; }
+.flow-side { width: 340px; flex: none; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+.flow-config { flex: none; max-height: 60%; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .flow-config p { margin: 0 0 8px; }
 .flow-config-head { margin-bottom: 4px; }
 .flow-f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .flow-f input, .flow-f select { width: 100%; color: var(--text); }
 .flow-check { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+
+/* which messages a block means */
+.flow-match { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--bg-3); }
+.flow-match-mode { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.flow-match-mode select { font-weight: 600; }
+.flow-match-row { display: grid; grid-template-columns: 52px 54px 1fr; gap: 6px; align-items: center; margin-bottom: 5px; font-size: 12px; }
+.flow-match-row input { min-width: 0; width: 100%; }
+.fm-label { font-weight: 600; }
+.flow-match-reads { margin: 6px 0 4px !important; }
+.flow-match-result { margin-top: 6px; }
+.fm-msg { display: grid; grid-template-columns: 14px 1fr; gap: 6px; padding: 4px 0; border-top: 1px solid var(--border); word-break: break-word; }
+.fm-msg.yes .fm-mark { color: var(--ok); } .fm-msg.no .fm-mark { color: var(--danger); }
+.fm-subj { font-weight: 600; }
+.fm-why { color: var(--danger); }
+
 .flow-log-head { flex: none; display: flex; align-items: center; gap: 8px; }
-.flow-log { flex: 1; min-height: 80px; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 6px; }
+.flow-log { flex: 1; min-height: 80px; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
 .flow-log p { margin: 6px; }
-.flow-line { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 5px 7px; border-left: 3px solid var(--ok); border-radius: 4px; margin-bottom: 4px; background: var(--bg-2); cursor: pointer; font-size: 12px; }
+.flow-line { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 5px 7px; border-left: 3px solid var(--ok); border-radius: 4px; margin-bottom: 4px; background: var(--bg-3); cursor: pointer; font-size: 12px; }
 .flow-line.bad { border-left-color: var(--danger); }
 .flow-line.end { cursor: default; font-weight: 600; }
 .fl-what { color: var(--muted); }
@@ -62,10 +121,9 @@
 .fl-text { grid-column: 1 / -1; word-break: break-word; }
 .fl-ms { grid-row: 1; grid-column: 2; }
 
-.flow-inbox { background: var(--bg-3); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; line-height: 1.9; }
 .flow-mail-text { margin-top: 12px; max-height: 40vh; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .flow-main { flex-direction: column; }
   .flow-side { width: auto; max-height: 45%; }
 }

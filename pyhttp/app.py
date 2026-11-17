@@ -130,6 +130,10 @@ class FlowRunIn(BaseModel):
     flow_id: str
 
 
+class MailCheckIn(BaseModel):
+    match: dict[str, Any] = Field(default_factory=dict)
+
+
 class MockRouteIn(BaseModel):
     name: str = ""
     method: str = "GET"              # or ANY to answer every method
@@ -246,6 +250,7 @@ class ImportIn(BaseModel):
     variables: dict[str, str] = Field(default_factory=dict)
     mocks: list[dict[str, Any]] = Field(default_factory=list)
     monitors: list[dict[str, Any]] = Field(default_factory=list)
+    flows: list[dict[str, Any]] = Field(default_factory=list)
     replace: bool = False
 
 
@@ -355,7 +360,8 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 
 def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, Any]], environments: list[dict[str, Any]],
                       variables: dict[str, str], replace: bool, mocks: list[dict[str, Any]] | None = None,
-                      monitors: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                      monitors: list[dict[str, Any]] | None = None,
+                      flows_in: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Create folders (parents first), requests and environments; optionally replace everything.
     A full export also carries mocks and monitors. Requests that come with their old ``id`` are
     remapped, so monitors and "depends on" links between requests survive the round trip."""
@@ -430,8 +436,21 @@ def import_collection(folders: list[dict[str, Any]], requests: list[dict[str, An
             db.create_monitor({**{k: v for k, v in m.items() if k not in ("id", "created_at", "last_run_at", "last_status")},
                                "request_ids": ids})
             n_monitors += 1
+    n_flows = 0
+    for f in flows_in or []:
+        if not isinstance(f, dict) or not isinstance(f.get("graph"), dict):
+            continue
+        graph = json.loads(json.dumps(f["graph"]))   # a copy: the request blocks get this database's ids
+        for node in graph.get("nodes") or []:
+            if isinstance(node, dict) and node.get("type") == "request" and isinstance(node.get("config"), dict):
+                node["config"]["request_id"] = req_map.get(str(node["config"].get("request_id") or ""), "")
+        try:
+            db.create_flow(str(f.get("name") or "Flow")[:flows.MAX_NAME], flows.clean_graph(graph))
+            n_flows += 1
+        except ValueError:
+            continue   # not a flow this version understands
     return {"imported": len(created), "folders": len(id_map), "environments": len(environments),
-            "mocks": n_mocks, "monitors": n_monitors}
+            "mocks": n_mocks, "monitors": n_monitors, "flows": n_flows}
 
 
 def _own_origin(request: Request) -> str:
@@ -545,6 +564,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.state.git = git
+    app.state.flow_runs = flow_runs   # where pyhttp runs as a service, arriving mail starts flows through this
 
     def current_project() -> dict[str, Any]:
         return registry.get(current["id"]) or {"id": current["id"], "name": current["id"]}
@@ -1512,6 +1532,27 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             raise HTTPException(404, "This flow run is no longer kept. Run the flow again.")
         return run
 
+    @app.get("/api/flows/{fid}/last-run")
+    def last_flow_run(fid: str) -> dict[str, Any]:
+        """The newest run of the flow that is still kept, with its whole log (a run an email
+        started is seen this way), or ``{"run": null}``."""
+        run = flow_runs.latest(fid)
+        return {"run": run.snapshot() if run else None}
+
+    @app.post("/api/flows/mail-check")
+    def flow_mail_check(body: MailCheckIn) -> dict[str, Any]:
+        """Which of the messages in the inbox right now fit a block's match settings: lets the
+        user see what "From contains" and "Subject contains" would pick before running."""
+        system = flows.mail()
+        if system is None:
+            return {"available": False, "messages": []}
+        out = []
+        for m in system.recent(0.0)[:20]:
+            ok, why = flows.fits(m, body.match)
+            out.append({"id": m.get("id"), "from": m.get("from"), "subject": m.get("subject"),
+                        "received_at": m.get("received_at"), "fits": ok, "why": why})
+        return {"available": True, "address": system.address(), "messages": out}
+
     @app.get("/api/flow-runs/{rid}")
     async def flow_run(rid: str, after: int = Query(0), wait: float = Query(0)) -> dict[str, Any]:
         """The run's state and its log lines after number ``after``. With ``wait`` (seconds, at
@@ -1671,8 +1712,10 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             routes = [{k: v for k, v in rt.items() if k not in ("id", "server_id", "hits", "position")} for rt in m.get("routes") or []]
             mocks.append({**{k: v for k, v in m.items() if k not in ("id", "created_at", "hits", "routes")}, "routes": routes})
         mons = [{k: v for k, v in m.items() if k not in ("id", "created_at", "last_run_at", "last_status")} for m in db.list_monitors()]
+        flow_rows = [{"name": f["name"], "graph": f["graph"]} for f in db.list_flows()]
         return {"pyhttp_version": __version__, "project": current_project()["name"], "folders": db.list_folders(),
-                "environments": envs, "requests": reqs, "variables": db.get_variables(), "mocks": mocks, "monitors": mons}
+                "environments": envs, "requests": reqs, "variables": db.get_variables(), "mocks": mocks, "monitors": mons,
+                "flows": flow_rows}
 
     @app.get("/api/export")
     def export_all() -> dict[str, Any]:
@@ -1847,7 +1890,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     def import_all(body: ImportIn) -> dict[str, Any]:
         return import_collection([f.model_dump() for f in body.folders], [r.model_dump() for r in body.requests],
                                  [e.model_dump() for e in body.environments], body.variables, body.replace,
-                                 mocks=body.mocks, monitors=body.monitors)
+                                 mocks=body.mocks, monitors=body.monitors, flows_in=body.flows)
 
     @app.post("/api/import/detect")
     def import_detect(body: dict[str, Any]) -> dict[str, Any]:
