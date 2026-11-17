@@ -31,7 +31,10 @@ set to fail, or when it runs more blocks than ``Limits.steps`` (two blocks wired
 circle would otherwise run for ever).
 
 Receiving email needs a mail system behind the app. This module only knows the shape of
-one (``Mail``): pyhttp on the web provides it, the desktop app has none.
+one (``Mail``). pyhttp on the web has it: every account owns a test inbox there. The desktop
+app reads that same inbox from the cloud once it is signed in to the account
+(``cloudsync.CloudInbox``); signed out, the Email block says to sign in. A flow starts by
+itself on an arriving email only on the web, where something is always running.
 """
 from __future__ import annotations
 
@@ -89,6 +92,10 @@ class Mail(Protocol):
 # Replaced where pyhttp runs as a service: the mail system, and the limits of the running user.
 mail: Callable[[], Mail | None] = lambda: None
 limits: Callable[[], Limits] = Limits
+# True where pyhttp runs as a service: mail arrives there by itself and can start a flow.
+starts_on_email = False
+NO_MAIL = ("Sign in to the pyhttp cloud (the Cloud button) to receive email in flows: your test inbox is part of "
+           "your account. This block took \u201ctimeout\u201d.")
 
 
 def email_values(message: dict[str, Any]) -> dict[str, Any]:
@@ -239,8 +246,10 @@ def _compare(left: str, op: str, right: str) -> bool:
 class Run:
     """One run of a flow: its log, readable while it goes."""
 
-    def __init__(self, flow: dict[str, Any], started_by: dict[str, Any] | None = None) -> None:
+    def __init__(self, flow: dict[str, Any], started_by: dict[str, Any] | None = None,
+                 mail_system: Callable[[], Mail | None] | None = None) -> None:
         self.id = uuid.uuid4().hex[:16]
+        self._mail = mail_system or mail
         self.flow_id = flow["id"]
         self.name = flow["name"]
         self.graph = clean_graph(flow.get("graph") or {})
@@ -357,9 +366,9 @@ class Run:
                 line += f", {failed_tests} test(s) failed"
             return ("ok", "ok", line) if good else ("fail", "fail", line)
         if kind == "email":
-            system = mail()
+            system = self._mail()
             if system is None:
-                return "timeout", "fail", "Receiving email works in pyhttp on the web (app.pyhttp.com): this app has no mail system"
+                return "timeout", "fail", NO_MAIL
             match = match_of(config, lambda key: self._text(node, key))
             try:
                 asked = float(config.get("timeout_s") or 60)
@@ -421,10 +430,15 @@ class Run:
 
 
 class FlowManager:
-    """The flow runs of the app."""
+    """The flow runs of the app. ``mail`` answers this app's own mail system, when it has one
+    apart from the module's (the desktop app: the account's inbox in the cloud, once signed in)."""
 
-    def __init__(self) -> None:
+    def __init__(self, mail: Callable[[], Mail | None] | None = None) -> None:
         self.runs: dict[str, Run] = {}
+        self._own_mail = mail
+
+    def mail_system(self) -> Mail | None:
+        return (self._own_mail() if self._own_mail else None) or mail()
 
     def active(self) -> int:
         return sum(1 for run in self.runs.values() if run.state == "running")
@@ -456,7 +470,7 @@ class FlowManager:
         done = sorted((r for r in self.runs.values() if r.state != "running"), key=lambda r: r.ended_at or 0)
         while len(self.runs) >= KEPT_RUNS and done:
             self.runs.pop(done.pop(0).id, None)
-        run = Run(flow, started_by)
+        run = Run(flow, started_by, self.mail_system)
         self.runs[run.id] = run
         run.task = asyncio.create_task(self._run(run, bounds))
         return run

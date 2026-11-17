@@ -1693,6 +1693,8 @@ def test_flows_are_a_tab_of_the_sidebar(page, servers):
     page.fill("#flow-name", "UI flow")
     page.click(".flow-node.t-start .fn-body")
     assert page.locator("#flow-config select[data-k='trigger']").input_value() == "manual"
+    # starting by itself on an email is for pyhttp on the web; here the choice is shown, not offered
+    assert page.locator("#flow-config select[data-k='trigger'] option[value='email']").get_attribute("disabled") is not None
     page.click(".flow-add[data-type='request']")                          # wired to the selected block
     page.select_option("#flow-config select[data-k='request_id']", label="GET Flow ping")
     page.click(".flow-add[data-type='if']")
@@ -1710,7 +1712,12 @@ def test_flows_are_a_tab_of_the_sidebar(page, servers):
     page.select_option("#flow-config select[data-k='mode']", "any")
     assert "from has \u201cshop\u201d OR subject has \u201cverify\u201d" in page.inner_text("#flow-match-reads")
     assert "OR" in page.inner_text(".flow-node.t-email .fn-body")
-    assert page.locator("#flow-match-check").count() == 0                 # this app has no mail system to try it on
+    assert page.locator("#flow-match-check").count() == 0                 # not signed in: no inbox to try it on
+    assert "Sign in to receive email" in page.inner_text("#flow-config .flow-nomail")
+    assert "Sign in to receive email" in page.inner_text("#flow-inbox")
+    page.click("#flow-config .flow-signin")                               # straight to the Cloud dialog
+    page.wait_for_function("document.querySelector('#modal-title').textContent.startsWith('Cloud sync')")
+    page.click("#modal-close")
     page.click(".flow-node.t-email .fn-del")
     page.wait_for_function("document.querySelector('#flow-saved').textContent === 'Saved'")
     page.click("#flow-run")

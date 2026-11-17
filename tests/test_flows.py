@@ -186,8 +186,90 @@ def test_a_flow_waits_for_an_email_and_uses_what_is_in_it(client, echo_url, monk
 
 
 def test_without_a_mail_system_the_email_block_says_so(client):  # noqa: F811
+    listing = client.get("/api/flows").json()
+    assert listing["mail"] == "" and listing["mail_state"] == "sign_in" and listing["email_start"] is False
     result = run(client, graph([block("email", "mail")], ("start", "out", "mail")))
-    assert result["state"] == "failed" and "pyhttp on the web" in result["message"]
+    assert result["state"] == "failed" and "Sign in to the pyhttp cloud" in result["message"]
+    assert client.get("/api/mail").status_code == 404 and "Sign in" in client.get("/api/mail").json()["detail"]
+
+
+class FakeAccount:
+    """A signed-in desktop's sync client, as far as the inbox needs it: the cloud is a dict."""
+
+    def __init__(self) -> None:
+        self.token = "t1"
+        self.down = False
+        self.calls: list[tuple[str, str]] = []
+        self.messages = [{"id": "aaaaaaaaaaaaaaaa", "from": "no-reply@shop.example", "to": "me@inbox.pyhttp.com",
+                          "subject": "Verify", "text": "Your code is 482913.", "received_at": time.time() + 30, "size": 10}]
+
+    def signed_in(self) -> bool:
+        return bool(self.token)
+
+    def _token(self) -> str:
+        return self.token
+
+    def _call(self, method: str, path: str, body: Any = None, authed: bool = True, allow: tuple[int, ...] = ()) -> Any:
+        from pyhttp import cloudsync
+        self.calls.append((method, path))
+        if self.down:
+            raise cloudsync.CloudError("The pyhttp cloud could not be reached (ConnectError)")
+        if path.startswith("/api/sync/~inbox/wait"):
+            hit = next((m for m in self.messages if m["received_at"] > body["since"] and flows.fits(m, body["match"])[0]), None)
+            return {"message": hit}
+        if method == "GET" and path.startswith("/api/sync/~inbox?") or path == "/api/sync/~inbox":
+            return {"address": "me@inbox.pyhttp.com", "kept": 50, "messages": list(self.messages)}
+        found = next((m for m in self.messages if path.endswith("/" + m["id"])), None)
+        if found is None:
+            return None
+        if method == "DELETE":
+            self.messages.remove(found)
+            return {"ok": True}
+        return found
+
+
+def test_a_signed_in_desktop_reads_the_accounts_inbox_from_the_cloud(client, echo_url):  # noqa: F811
+    from pyhttp import cloudsync
+
+    account = FakeAccount()
+    inbox = cloudsync.CloudInbox(account)  # type: ignore[arg-type]
+    manager = client.app.state.flow_runs
+    manager._own_mail = lambda: inbox if account.signed_in() else None
+
+    listing = client.get("/api/flows").json()
+    assert listing["mail"] == "me@inbox.pyhttp.com" and listing["mail_state"] == "ready" and listing["email_start"] is False
+    use = client.post("/api/requests", json={"name": "use", "method": "GET", "url": echo_url + "/echo?code={{email.code}}"}).json()
+    result = run(client, graph([block("email", "mail", subject="verify", timeout_s=5), block("request", "use", request_id=use["id"])],
+                               ("start", "out", "mail"), ("mail", "received", "use")))
+    assert result["state"] == "passed" and "code=482913" in client.get("/api/history").json()[0]["url"]
+    assert ("POST", "/api/sync/~inbox/wait") in account.calls
+
+    # the inbox itself, and the check of a block's lines, work through the same account
+    assert [m["subject"] for m in client.get("/api/mail").json()["messages"]] == ["Verify"]
+    assert client.get("/api/mail/aaaaaaaaaaaaaaaa").json()["text"] == "Your code is 482913."
+    assert client.get("/api/mail/bbbbbbbbbbbbbbbb").status_code == 404
+    checked = client.post("/api/flows/mail-check", json={"match": {"from": "bank"}}).json()
+    assert [(m["fits"], m["why"]) for m in checked["messages"]] == [(False, "From does not contain \u201cbank\u201d")]
+    assert client.delete("/api/mail/aaaaaaaaaaaaaaaa").json() == {"ok": True} and account.messages == []
+
+    # no mail in time: the same explanation as on the web
+    empty = run(client, graph([block("email", "mail", timeout_s=0.2)], ("start", "out", "mail")))
+    assert empty["state"] == "failed" and "No email arrived at me@inbox.pyhttp.com" in empty["message"]
+
+    # the cloud does not answer: said plainly, in the list and in the run
+    account.down = True
+    inbox._address = ("", "")
+    listing = client.get("/api/flows").json()
+    assert listing["mail_state"] == "offline" and "could not be reached" in listing["mail_problem"]
+    assert client.get("/api/mail").status_code == 502
+    failed = run(client, graph([block("email", "mail", timeout_s=1)], ("start", "out", "mail")))
+    assert failed["state"] == "failed" and "could not be reached" in failed["message"]
+
+    # signed out again: back to "sign in"
+    account.down, account.token = False, ""
+    assert client.get("/api/flows").json()["mail_state"] == "sign_in"
+    out = run(client, graph([block("email", "mail")], ("start", "out", "mail")))
+    assert "Sign in to the pyhttp cloud" in out["message"]
 
 
 def test_what_an_email_offers():

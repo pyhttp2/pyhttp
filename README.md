@@ -60,8 +60,12 @@ only on `127.0.0.1`.
     what did arrive and why it was skipped (or that the mail came before the flow started).
   - *Start*: when you press Run, or **by itself when an email arrives** that fits; the run
     then begins with that message as `{{email.…}}`.
-  - Email needs a mail system: pyhttp on the web gives every account a test inbox, the
-    desktop app has none (the block takes its "timeout" port).
+  - *The inbox*: every pyhttp account has a test inbox, `<name>@inbox.pyhttp.com`. On the web
+    it is simply there. The desktop app uses the same one once it is signed in (topbar →
+    Cloud): the mail arrives in the cloud and the Email block asks for it there, so the app
+    must be online. Not signed in, the block, the sidebar and the run log say so, with a
+    Sign in button. Starting a flow by itself on an arriving email is for the web, where
+    something is always running; on the desktop such a flow is run by hand.
   - Use cases: sign up, wait for the verification mail, send its code on; password reset;
     an order confirmation mail starts a check of the order; create, then poll until ready; a
     smoke test that branches on a status.

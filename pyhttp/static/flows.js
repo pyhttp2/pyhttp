@@ -5,7 +5,9 @@
 // the window is the canvas of the open one: a block leaves through one of its ports, and the
 // wire on that port leads to the next block. Drag a block by its title, drag from a port to
 // another block to wire them, click a wire to remove it. Changes save as they are made.
-const flowUi = { list: [], mail: '', limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
+// mailState: 'ready' (there is a test inbox), 'sign_in' (there is one after signing in to the
+// pyhttp cloud: the desktop app), 'offline' (signed in, the cloud does not answer)
+const flowUi = { list: [], mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
                  loaded: false, poll: null, search: '' };
 
 const FLOW_BLOCKS = {
@@ -30,9 +32,31 @@ const flowByEmail = (flow) => { const s = flowStart(flow); return !!(s && s.conf
 async function loadFlows() {
   const data = await api('/flows');
   flowUi.list = data.flows;
+  const before = flowUi.mailState + flowUi.mail;
   flowUi.mail = data.mail || '';
+  flowUi.mailState = data.mail_state || (data.mail ? 'ready' : 'sign_in');
+  flowUi.mailProblem = data.mail_problem || '';
+  flowUi.emailStart = !!data.email_start;
   flowUi.limits = data.limits || {};
   flowUi.loaded = true;
+  // signed in or out since the last look: the open block's settings speak of the inbox
+  if (before !== flowUi.mailState + flowUi.mail && flowUi.flow && $('#flow-config')) renderFlowConfig();
+}
+
+// what to say, and offer, where a block needs the inbox and there is none
+function flowNoMail(what) {
+  if (flowUi.mailState === 'offline') {
+    return `<div class="flow-nomail"><strong>The pyhttp cloud is not reachable.</strong> ${esc(flowUi.mailProblem || '')} Your test inbox lives there; ${what} once it answers again.</div>`;
+  }
+  return `<div class="flow-nomail"><strong>Sign in to receive email.</strong> Your account has a test inbox (an address like <code>name@inbox.pyhttp.com</code>). Signed in, ${what}.
+    <div><button class="primary small flow-signin">Sign in to pyhttp cloud</button></div></div>`;
+}
+
+function bindFlowSignIn(scope) {
+  $$('.flow-signin', scope).forEach((b) => b.addEventListener('click', () => {
+    const cloudButton = $('#btn-cloud');
+    if (cloudButton) cloudButton.click();
+  }));
 }
 
 // ----------------------------------------------------- the sidebar's Flows tab
@@ -102,8 +126,12 @@ function renderFlowList() {
 function renderFlowInbox() {
   const box = $('#flow-inbox');
   if (!box) return;
-  box.hidden = !flowUi.mail;
-  if (!flowUi.mail) return;
+  box.hidden = false;
+  if (!flowUi.mail) {
+    box.innerHTML = '<div class="muted small">Your test inbox</div>' + flowNoMail('flows here can wait for mail sent to it');
+    bindFlowSignIn(box);
+    return;
+  }
   box.innerHTML = `<div class="muted small">Your test inbox</div>
     <div class="flow-inbox-row"><code title="${esc(flowUi.mail)}">${esc(flowUi.mail)}</code></div>
     <div class="flow-inbox-row"><button class="link small" id="flow-addr-copy">Copy address</button><button class="link small" id="flow-inbox-open">Open inbox</button></div>`;
@@ -479,15 +507,21 @@ function renderFlowConfig() {
   const c = node.config;
   const text = (key, label, placeholder = '', mono = true) =>
     `<label class="flow-f">${label}<input data-k="${key}" class="${mono ? 'mono' : ''}" value="${esc(c[key] ?? '')}" placeholder="${esc(placeholder)}" autocomplete="off"></label>`;
-  const noMail = '<p class="small err-text">This app has no mail system. Flows receive email in pyhttp on the web (app.pyhttp.com).</p>';
+  const noMail = flowNoMail('this block waits for mail sent to it');
   let fields = '';
   if (node.type === 'start') {
+    // starting by itself needs something that is always running: pyhttp on the web
+    const here = flowUi.emailStart;
     fields = `<label class="flow-f">This flow runs<select data-k="trigger" data-rerender="1">
         <option value="manual" ${c.trigger !== 'email' ? 'selected' : ''}>when I press Run</option>
-        <option value="email" ${c.trigger === 'email' ? 'selected' : ''}>by itself, when an email arrives</option></select></label>`;
+        <option value="email" ${c.trigger === 'email' ? 'selected' : ''} ${here || c.trigger === 'email' ? '' : 'disabled'}>by itself, when an email arrives${here ? '' : ' (on app.pyhttp.com)'}</option></select></label>`;
     if (c.trigger === 'email') {
-      fields += (flowUi.mail ? `<p class="small">Every message to <code>${esc(flowUi.mail)}</code> that fits starts a run, with the message as <code>{{email.…}}</code>. Run still starts it by hand.</p>` : noMail)
+      fields += (here
+        ? (flowUi.mail ? `<p class="small">Every message to <code>${esc(flowUi.mail)}</code> that fits starts a run, with the message as <code>{{email.…}}</code>. Run still starts it by hand.</p>` : noMail)
+        : '<div class="flow-nomail"><strong>Starts by itself on app.pyhttp.com</strong>, where this flow is synced to: something has to be running when the mail arrives. In this app, press Run.</div>')
         + flowMatchFields(c);
+    } else if (!here) {
+      fields += '<p class="muted small">A flow can also start by itself when an email arrives: in pyhttp on the web (app.pyhttp.com), which is always running.</p>';
     }
   } else if (node.type === 'request') {
     const options = (state.requests || []).map((r) => `<option value="${r.id}" ${r.id === c.request_id ? 'selected' : ''}>${esc(r.method)} ${esc(r.name)}</option>`).join('');
@@ -496,7 +530,7 @@ function renderFlowConfig() {
   } else if (node.type === 'email') {
     fields = (flowUi.mail
       ? `<p class="small">Waits for a message to <code>${esc(flowUi.mail)}</code> that arrives after the flow started (or after the last email block).</p>`
-      : noMail.replace('</p>', ' Here the block takes “timeout”.</p>'))
+      : noMail)
       + flowMatchFields(c)
       + `<label class="flow-f">Wait up to (seconds)<input data-k="timeout_s" type="number" min="1" max="${Math.round(flowUi.limits.wait_seconds || 600)}" value="${esc(c.timeout_s ?? 60)}"></label>`;
   } else if (node.type === 'set') {
@@ -518,6 +552,7 @@ function renderFlowConfig() {
   box.innerHTML = `<div class="flow-config-head"><strong>${esc(FLOW_BLOCKS[node.type].title)}</strong></div>
     <p class="muted small">${esc(FLOW_BLOCKS[node.type].hint)}</p>${fields}`;
   showFlowMatchReads(c);
+  bindFlowSignIn(box);
   const check = $('#flow-match-check');
   if (check) check.addEventListener('click', () => checkFlowMatch(c));
   $$('[data-k]', box).forEach((input) => {

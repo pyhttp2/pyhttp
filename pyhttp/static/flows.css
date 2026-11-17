@@ -127,3 +127,9 @@
   .flow-main { flex-direction: column; }
   .flow-side { width: auto; max-height: 45%; }
 }
+
+/* where a block needs the test inbox and there is none yet */
+.flow-nomail { border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 6px; padding: 8px 10px; margin: 6px 0 10px;
+  font-size: 12px; line-height: 1.5; background: var(--bg-3); }
+.flow-nomail div { margin-top: 8px; }
+.flow-nomail button.small { padding: 4px 10px; }

@@ -1089,3 +1089,48 @@ class Syncer:
             if self._timer:
                 self._timer.cancel()
                 self._timer = None
+
+
+# ------------------------------------------------------------------- the test inbox
+class CloudInbox:
+    """The account's test inbox (<name>@inbox.pyhttp.com), read from the pyhttp cloud by a
+    signed-in desktop app. It is what a flow's Email block waits on here (flows.Mail): the mail
+    itself arrives in the cloud, this only asks for it."""
+
+    WAIT_SECONDS = 20.0   # one question to the cloud stays open this long at most
+
+    def __init__(self, syncer: "Syncer") -> None:
+        self.syncer = syncer
+        self._address = ("", "")   # (the sign-in it belongs to, the address)
+
+    def listing(self) -> dict[str, Any]:
+        """``address``, ``kept`` and the ``messages`` (without their text), newest first."""
+        return self.syncer._call("GET", "/api/sync/~inbox")  # noqa: SLF001
+
+    def address(self) -> str:
+        token = self.syncer._token()  # noqa: SLF001
+        if self._address[0] != token or not self._address[1]:
+            self._address = (token, str(self.listing().get("address") or ""))
+        return self._address[1]
+
+    def recent(self, since: float = 0.0) -> list[dict[str, Any]]:
+        return self.syncer._call("GET", f"/api/sync/~inbox?full=1&since={float(since)!r}")["messages"]  # noqa: SLF001
+
+    def get(self, message_id: str) -> dict[str, Any] | None:
+        return self.syncer._call("GET", f"/api/sync/~inbox/{message_id}", allow=(404,))  # noqa: SLF001
+
+    def delete(self, message_id: str) -> bool:
+        return self.syncer._call("DELETE", f"/api/sync/~inbox/{message_id}", allow=(404,)) is not None  # noqa: SLF001
+
+    async def wait(self, match: dict[str, str], since: float, timeout: float) -> dict[str, Any] | None:
+        import asyncio
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            left = deadline - time.monotonic()
+            asked = {"match": match, "since": since, "timeout": max(0.0, min(left, self.WAIT_SECONDS))}
+            answer = await asyncio.to_thread(self.syncer._call, "POST", "/api/sync/~inbox/wait", asked)  # noqa: SLF001
+            if answer and answer.get("message"):
+                return answer["message"]
+            if deadline - time.monotonic() <= 0:
+                return None

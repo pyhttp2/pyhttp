@@ -277,7 +277,7 @@ class DataFileIn(BaseModel):
 
 # Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
 # schedule a sync. Variables a script sets while sending go out with the next edit.
-_GIT_QUIET = ("/api/flow-runs", "/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+_GIT_QUIET = ("/api/flow-runs", "/api/flows/mail-check", "/api/mail", "/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
               "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
 
 
@@ -544,7 +544,9 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     cloud = cloudsync.Syncer(data_dir, lambda: db.current().path, CloudProjects)   # idle until the user signs in
     sockets = wsclient.Manager()
-    flow_runs = flows.FlowManager()
+    # on a signed-in computer a flow's Email block reads the account's inbox in the cloud
+    cloud_inbox = cloudsync.CloudInbox(cloud)
+    flow_runs = flows.FlowManager(mail=lambda: cloud_inbox if cloud.signed_in() else None)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -1489,10 +1491,54 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     def list_flows() -> dict[str, Any]:
         """The flows, and what the app can do in one: ``mail`` is the address the Email block
         receives on, or empty where there is no mail system (the desktop app)."""
-        system = flows.mail()
+        system = flow_runs.mail_system()
         bounds = flows.limits()
-        return {"flows": db.list_flows(), "mail": system.address() if system else "",
+        address, problem = "", ""
+        if system:
+            try:
+                address = system.address()
+            except cloudsync.CloudError as exc:   # signed in, and the cloud is not reachable right now
+                problem = str(exc)
+        # mail_state: "ready" (there is an inbox), "sign_in" (there would be one after signing in to
+        # the cloud), "offline" (signed in, the cloud does not answer)
+        state = "ready" if address else "offline" if system else "sign_in"
+        return {"flows": db.list_flows(), "mail": address, "mail_state": state, "mail_problem": problem,
+                "email_start": flows.starts_on_email,
                 "limits": {"steps": bounds.steps, "wait_seconds": bounds.wait_seconds, "blocks": flows.MAX_BLOCKS}}
+
+    # The inbox itself, for the app that reads it from the cloud (the desktop). Where pyhttp is
+    # the cloud, these paths are answered before they get here.
+    def _inbox() -> Any:
+        system = flow_runs.mail_system()
+        if system is None or not hasattr(system, "listing"):
+            raise HTTPException(404, "Sign in to the pyhttp cloud to have a test inbox")
+        return system
+
+    @app.get("/api/mail")
+    def mail_listing() -> dict[str, Any]:
+        try:
+            return _inbox().listing()
+        except cloudsync.CloudError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.get("/api/mail/{mid}")
+    def mail_read(mid: str) -> dict[str, Any]:
+        try:
+            message = _inbox().get(mid)
+        except cloudsync.CloudError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        if not message:
+            raise HTTPException(404, "Message not found")
+        return message
+
+    @app.delete("/api/mail/{mid}")
+    def mail_delete(mid: str) -> dict[str, Any]:
+        try:
+            if not _inbox().delete(mid):
+                raise HTTPException(404, "Message not found")
+        except cloudsync.CloudError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"ok": True}
 
     @app.post("/api/flows", status_code=201)
     def create_flow(body: FlowIn) -> dict[str, Any]:
@@ -1543,11 +1589,15 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
     def flow_mail_check(body: MailCheckIn) -> dict[str, Any]:
         """Which of the messages in the inbox right now fit a block's match settings: lets the
         user see what "From contains" and "Subject contains" would pick before running."""
-        system = flows.mail()
+        system = flow_runs.mail_system()
         if system is None:
             return {"available": False, "messages": []}
+        try:
+            newest = system.recent(0.0)[:20]
+        except cloudsync.CloudError as exc:
+            raise HTTPException(502, str(exc)) from exc
         out = []
-        for m in system.recent(0.0)[:20]:
+        for m in newest:
             ok, why = flows.fits(m, body.match)
             out.append({"id": m.get("id"), "from": m.get("from"), "subject": m.get("subject"),
                         "received_at": m.get("received_at"), "fits": ok, "why": why})
