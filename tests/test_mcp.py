@@ -87,6 +87,28 @@ def test_send_and_history(mcp_env, echo_url):
     asyncio.run(scenario())
 
 
+def test_use_client_sends_every_call_through_the_given_client():
+    """pyhttp on a server serves the same tools to many people: it hands in a client whose
+    calls go to the caller's own app (see use_client)."""
+    import httpx
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": "r1", "name": "Served", "method": "GET", "url": "https://x.example"}])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://pyhttp")
+    m.use_client(client)
+    try:
+        rows = asyncio.run(m.list_requests(query="ser"))
+    finally:
+        m.configure(Path(tempfile.gettempdir()))   # back to "start an app on a folder" for the other tests
+        asyncio.run(client.aclose())
+    assert [r["name"] for r in rows] == ["Served"]
+    assert seen == [("GET", "/api/requests", {"q": "ser", "tag": ""})]
+
+
 def test_run_variables_and_curl(mcp_env, echo_url):
     async def scenario():
         await m.set_global_variable("base", echo_url)

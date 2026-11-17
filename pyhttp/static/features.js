@@ -154,7 +154,7 @@ function fmtTokenStatus(st) {
   const exp = st.expires_at ? new Date(st.expires_at * 1000) : null;
   const left = exp ? Math.round((exp - Date.now()) / 60000) : null;
   const when = exp ? (st.valid ? `expires in ${left < 1 ? '<1' : left} min` : 'expired') : 'no expiry given';
-  return `<span class="${st.valid ? 'ok-text' : 'err-text'}">●</span> <code>${esc(st.preview)}</code> · ${when}${st.scope ? ' · scope ' + esc(st.scope) : ''}${st.has_refresh ? ' · refreshable' : ''}`;
+  return `<span class="${st.valid ? 'ok-text' : 'err-text'}">${icon('dot')}</span> <code>${esc(st.preview)}</code> · ${when}${st.scope ? ' · scope ' + esc(st.scope) : ''}${st.has_refresh ? ' · refreshable' : ''}`;
 }
 async function refreshOauthStatus(box) {
   const status = box && $('.oa-status', box);
@@ -194,9 +194,9 @@ document.addEventListener('click', async (e) => {
 function renderAuthPanel(r) {
   const box = $('#auth-panel');
   const a = r.auth || { type: 'inherit' };
-  let note = 'This request uses the auth of its folder (or none). Set auth on a folder with its ⋯ menu → Settings.';
+  let note = 'This request uses the auth of its folder (or none). Set auth on a folder with its ' + icon('more') + ' menu → Settings.';
   if (inheritedInfo && inheritedInfo.auth && inheritedInfo.auth.type !== 'none') note = `Inherits <strong>${esc(AUTH_LABELS[inheritedInfo.auth.type])}</strong> from folder <strong>${esc(inheritedInfo.auth_from || '')}</strong>.`;
-  else if (r.folder_id) note = 'No folder in the path sets auth, so nothing is added. Set auth on a folder with its ⋯ menu → Settings.';
+  else if (r.folder_id) note = 'No folder in the path sets auth, so nothing is added. Set auth on a folder with its ' + icon('more') + ' menu → Settings.';
   box.innerHTML = `
     <label class="field"><span class="fl">Type</span>
       <select id="auth-type">${Object.entries(AUTH_LABELS).map(([v, l]) => `<option value="${v}" ${a.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
@@ -250,7 +250,7 @@ function testRow(t) {
     <input class="t-value mono${NO_VALUE_OPS.has(op) ? ' t-blank' : ''}" value="${esc(t.value || '')}" placeholder="${type === 'json' && op === 'type_is' ? 'string | number | boolean | object | array | null' : 'expected value'}" ${NO_VALUE_OPS.has(op) ? 'tabindex="-1"' : ''} spellcheck="false">
     <input class="t-name" value="${esc(t.name || '')}" placeholder="name (optional)" spellcheck="false">
     <select class="t-body" title="Which body this test applies to">${bodyScopeOptions(t.body_id)}</select>
-    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">${icon('x')}</button>`;
   $('.t-body', row).addEventListener('change', scheduleSave);
   $('.t-type', row).addEventListener('change', () => { const cur = readTestRow(row); cur.op = ''; row.replaceWith(testRow(cur)); scheduleSave(); });
   $('.t-op', row).addEventListener('change', () => { row.replaceWith(testRow(readTestRow(row))); scheduleSave(); });
@@ -289,7 +289,7 @@ function extractRow(e) {
     <span class="muted small">from</span>
     <select class="x-source">${EXTRACT_SOURCES.map(([v, l]) => `<option value="${v}" ${v === src ? 'selected' : ''}>${l}</option>`).join('')}</select>
     <input class="x-path mono" value="${esc(e.path || '')}" placeholder="${src === 'json' ? 'data.token' : src === 'header' ? 'Set-Cookie' : src === 'regex' ? 'token=(\\w+)' : ''}" ${src === 'status' || src === 'body' ? 'hidden' : ''} spellcheck="false">
-    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">${icon('x')}</button>`;
   $('.x-source', row).addEventListener('change', () => { row.replaceWith(extractRow(readExtractRow(row))); scheduleSave(); });
   $('.kv-del', row).addEventListener('click', () => { row.remove(); updateTabCounts(); scheduleSave(); });
   return row;
@@ -305,7 +305,7 @@ function preVarRow(v) {
     <input class="p-key mono" value="${esc(v.key || '')}" placeholder="name" spellcheck="false">
     <input class="p-value mono grow" value="${esc(v.value || '')}" placeholder="value, e.g. {{$guid}} or {{$timestamp}}" spellcheck="false">
     <select class="p-scope"><option value="local" ${!v.scope || v.scope === 'local' ? 'selected' : ''}>this request only</option><option value="env" ${v.scope === 'env' ? 'selected' : ''}>save in environment</option><option value="global" ${v.scope === 'global' ? 'selected' : ''}>save globally</option></select>
-    <button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
+    <button class="kv-del" title="Remove" aria-label="Remove row">${icon('x')}</button>`;
   $('.kv-del', row).addEventListener('click', () => { row.remove(); scheduleSave(); });
   return row;
 }
@@ -574,7 +574,7 @@ function renderPathVars() {
   if (!names.length) { box.hidden = true; box.innerHTML = ''; return; }
   const have = new Set(readKv($('#kv-params')).map((p) => p.key));
   box.hidden = false;
-  box.innerHTML = `<span class="muted small">Path variables in the URL:</span> ${names.map((n) => `<span class="chip ${have.has(n) ? 'ok' : ''}" data-pv="${esc(n)}" title="${have.has(n) ? 'Value comes from the Params row ' + n : 'Click to add a Params row for :' + n}">:${esc(n)}${have.has(n) ? ' ✓' : ''}</span>`).join(' ')}
+  box.innerHTML = `<span class="muted small">Path variables in the URL:</span> ${names.map((n) => `<span class="chip ${have.has(n) ? 'ok' : ''}" data-pv="${esc(n)}" title="${have.has(n) ? 'Value comes from the Params row ' + n : 'Click to add a Params row for :' + n}">:${esc(n)}${have.has(n) ? ' ' + icon('check') : ''}</span>`).join(' ')}
     <span class="muted small">Give each a value in the rows above (key = name without the colon); it replaces <code>:name</code> in the path instead of becoming a query parameter.</span>`;
   $$('[data-pv]', box).forEach((c) => c.addEventListener('click', () => {
     const n = c.dataset.pv;
@@ -608,7 +608,7 @@ function updateTabCounts() {
   n('n-headers', readKv($('#kv-headers')).filter((p) => p.enabled !== false).length + ((inheritedInfo && inheritedInfo.headers) ? inheritedInfo.headers.length : 0));
   const auth = $('#auth-type') ? $('#auth-type').value : 'inherit';
   const authEl = $('#n-auth');
-  if (authEl) authEl.textContent = auth === 'inherit' ? ((inheritedInfo && inheritedInfo.auth && inheritedInfo.auth.type !== 'none') ? '↑' : '') : auth === 'none' ? '' : '●';
+  if (authEl) authEl.innerHTML = auth === 'inherit' ? ((inheritedInfo && inheritedInfo.auth && inheritedInfo.auth.type !== 'none') ? icon('arrow-up') : '') : auth === 'none' ? '' : icon('dot');
   const t = readTests();
   n('n-tests', t.tests.filter((x) => x.enabled).length + t.extract.filter((x) => x.enabled).length);
   const bt = $('#f-body-type').value;
@@ -655,7 +655,7 @@ async function checkBinaryPath() {
   if (!p) { info.textContent = 'The file is read when the request is sent. Content-Type is guessed from the extension unless you set a header.'; return; }
   try {
     const r = await api('/path-exists?path=' + encodeURIComponent(p));
-    info.textContent = r.exists ? `✓ ${r.name} (${fmtBytes(r.size)})` : '✕ File not found';
+    info.innerHTML = r.exists ? iconText('check', `${r.name} (${fmtBytes(r.size)})`) : iconText('x', 'File not found');
     info.className = 'muted small ' + (r.exists ? 'ok' : 'err');
   } catch { info.textContent = ''; }
 }
@@ -783,9 +783,9 @@ function renderResponsePanels(result) {
     const title = `${k.startsWith('pre') ? 'Pre-request' : 'Test'} script${k.endsWith('_body') ? ` · ${esc(rep.body_name || 'this body')}` : ''}`;
     return `<h4 class="rt-h">${title}</h4>${rep.ok ? `<div class="muted small">ran OK${rep.timed_out ? ' (timed out)' : ''}</div>` : `<div class="err-text small mono">${esc(rep.error || 'error')}</div>`}${logs ? `<div class="script-log">${logs}</div>` : ''}`;
   }).join('');
-  $('#r-tests').innerHTML = (tests.length ? `<ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul>`
+  $('#r-tests').innerHTML = (tests.length ? `<ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${icon(t.passed ? 'check' : 'x')}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul>`
     : '<div class="muted small">No tests on this request. Add some in the <button class="link small" id="r-goto-tests">Tests</button> tab (status, headers, JSON values, response time).</div>') + scriptHtml +
-    (ext.length ? `<h4 class="rt-h">Extracted variables</h4><ul class="test-results">${ext.map((e) => `<li class="${e.ok ? 'pass' : 'fail'}"><span class="mark">${e.ok ? '✓' : '✕'}</span><span class="tn mono">${esc(e.name)} = ${esc(e.ok ? (e.value.length > 120 ? e.value.slice(0, 117) + '…' : e.value) : '')}</span><span class="note muted small">${esc(e.ok ? `saved ${e.scope === 'env' ? 'in the environment' : 'globally'}` : e.note)}</span></li>`).join('')}</ul>` : '') +
+    (ext.length ? `<h4 class="rt-h">Extracted variables</h4><ul class="test-results">${ext.map((e) => `<li class="${e.ok ? 'pass' : 'fail'}"><span class="mark">${icon(e.ok ? 'check' : 'x')}</span><span class="tn mono">${esc(e.name)} = ${esc(e.ok ? (e.value.length > 120 ? e.value.slice(0, 117) + '…' : e.value) : '')}</span><span class="note muted small">${esc(e.ok ? `saved ${e.scope === 'env' ? 'in the environment' : 'globally'}` : e.note)}</span></li>`).join('')}</ul>` : '') +
     (pre.length ? `<h4 class="rt-h">Pre-request variables</h4><ul class="test-results">${pre.map((p) => `<li class="pass"><span class="mark">•</span><span class="tn mono">${esc(p.name)} = ${esc(p.value)}</span><span class="note muted small">${esc(p.scope)}</span></li>`).join('')}</ul>` : '');
   const gt = $('#r-goto-tests'); if (gt) gt.addEventListener('click', () => showTab($('#editor-tabs'), 'tests'));
   // request as sent
@@ -796,7 +796,7 @@ function renderResponsePanels(result) {
       ${(req.params || []).length ? `<div class="muted small">Query params: ${req.params.map(([k, v]) => esc(k) + '=' + esc(v)).join('&amp;')}</div>` : ''}
       <table class="htable"><tbody>${(req.headers || []).map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</tbody></table>
       ${req.auth_type && req.auth_type !== 'none' ? `<div class="muted small">Auth: ${esc(AUTH_LABELS[req.auth_type] || req.auth_type)}${req.auth_from ? ` (from folder ${esc(req.auth_from)})` : ''}</div>` : ''}
-      ${unresolved.length ? `<div class="warn-box">⚠ Unresolved variables: ${unresolved.map((u) => `<code>{{${esc(u)}}}</code>`).join(' ')}</div>` : ''}
+      ${unresolved.length ? `<div class="warn-box">${icon('warning')} Unresolved variables: ${unresolved.map((u) => `<code>{{${esc(u)}}}</code>`).join(' ')}</div>` : ''}
       ${(req.files || []).length ? `<div class="muted small">Files: ${req.files.map((f) => `${esc(f.field)} = ${esc(f.filename)} (${fmtBytes(f.size)})`).join(', ')}</div>` : ''}
       ${req.body ? `<pre class="rv-pre mono">${esc(req.body)}</pre>` : '<div class="muted small">No body</div>'}
     </div>`;
@@ -842,8 +842,8 @@ async function loadHistoryList(before = null) {
         <span class="method m-${esc(h.method)}">${esc(h.method)}</span>
         <div style="min-width:0"><div class="name">${esc(h.request_name || h.url)}${h.body_name ? ` <span class="bn">· ${esc(h.body_name)}</span>` : ''}</div><div class="sub">${esc(h.url)}</div></div>
         <span class="h-code ${codeClass(h.status_code)}">${h.status_code ?? 'ERR'}</span>
-        <button class="h-resend" title="Send again" aria-label="Send again">↻</button>
-        <button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button></li>`;
+        <button class="h-resend" title="Send again" aria-label="Send again">${icon('refresh')}</button>
+        <button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">${icon('more')}</button></li>`;
     }).join('') + (items.length === HISTORY_PAGE ? `<li class="load-more" data-before="${items[items.length - 1].ts}" data-day="${esc(lastDay)}"><button class="link small">Show older entries…</button></li>` : '');
     if (before) ul.insertAdjacentHTML('beforeend', html); else ul.innerHTML = html;
     if (before) ul.scrollTop = keep;
@@ -863,15 +863,15 @@ async function loadHistoryList(before = null) {
 }
 function openHistoryMenu(hid, anchor, at) {
   openMenu('h:' + hid, anchor, at, [
-    { act: 'view', icon: '👁', label: 'View response', run: () => openHistoryEntry(hid) },
-    { act: 'views', icon: '◧', label: 'Show in its views', run: () => openHistoryEntry(hid, 'views') },
-    { act: 'views-out', icon: '↗', label: 'Open its views in the browser', run: () => openHistoryViews(hid) },
-    { act: 'resend', icon: '↻', label: 'Send again', run: () => resendHistory(hid) },
-    { act: 'compare', icon: '⇄', label: 'Compare with…', run: () => pickCompare(hid) },
-    { act: 'restore', icon: '↩', label: 'Open as new request', run: () => restoreHistory(hid) },
-    { act: 'open', icon: '→', label: 'Go to the saved request', run: () => gotoHistoryRequest(hid) },
+    { act: 'view', icon: 'eye', label: 'View response', run: () => openHistoryEntry(hid) },
+    { act: 'views', icon: 'panel', label: 'Show in its views', run: () => openHistoryEntry(hid, 'views') },
+    { act: 'views-out', icon: 'external', label: 'Open its views in the browser', run: () => openHistoryViews(hid) },
+    { act: 'resend', icon: 'refresh', label: 'Send again', run: () => resendHistory(hid) },
+    { act: 'compare', icon: 'swap', label: 'Compare with…', run: () => pickCompare(hid) },
+    { act: 'restore', icon: 'undo', label: 'Open as new request', run: () => restoreHistory(hid) },
+    { act: 'open', icon: 'arrow-right', label: 'Go to the saved request', run: () => gotoHistoryRequest(hid) },
     '-',
-    { act: 'del', icon: '🗑', label: 'Remove from history', danger: true, run: async () => { await api('/history/' + hid, { method: 'DELETE' }); if (hist.compare && hist.compare.id === hid) setCompareBase(null); loadHistoryList(); } },
+    { act: 'del', icon: 'trash', label: 'Remove from history', danger: true, run: async () => { await api('/history/' + hid, { method: 'DELETE' }); if (hist.compare && hist.compare.id === hid) setCompareBase(null); loadHistoryList(); } },
   ]);
 }
 async function resendHistory(hid, btn = null) {
@@ -922,12 +922,12 @@ async function openHistoryEntry(hid, tab = '') {
       <div class="tab-panel" data-panel="body"><div id="h-viewer"></div></div>
       <div class="tab-panel vw-host" data-panel="views" hidden><div id="h-views" class="vw-host"><div class="muted small">Loading…</div></div></div>
       <div class="tab-panel" data-panel="headers" hidden>${headers.length ? `<table class="htable"><tbody>${headers.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</tbody></table>` : '<div class="muted small">No headers</div>'}</div>
-      <div class="tab-panel" data-panel="tests" hidden>${tests.length ? `<ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul>` : '<div class="muted small">This call ran no tests.</div>'}</div>
+      <div class="tab-panel" data-panel="tests" hidden>${tests.length ? `<ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${icon(t.passed ? 'check' : 'x')}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul>` : '<div class="muted small">This call ran no tests.</div>'}</div>
       <div class="tab-panel" data-panel="request" hidden><pre class="mono hd-pre">${esc(formatRequest(d.request))}</pre></div>
     </div>
   `, [
-    { label: '↻ Send again & compare', onClick: async (e) => { const r = await resendHistory(hid, e.currentTarget); if (r && r.id) { closeModal(); openCompare(hid, r.id); } } },
-    { label: '⇄ Compare with…', onClick: () => { closeModal(); pickCompare(hid); } },
+    { label: 'Send again & compare', icon: 'refresh', onClick: async (e) => { const r = await resendHistory(hid, e.currentTarget); if (r && r.id) { closeModal(); openCompare(hid, r.id); } } },
+    { label: 'Compare with…', icon: 'swap', onClick: () => { closeModal(); pickCompare(hid); } },
     { label: 'Open as new request', onClick: () => { closeModal(); restoreHistory(hid, h); } },
     { label: 'Close', cls: 'primary hd-close', onClick: closeModal },
   ]);
@@ -982,7 +982,7 @@ function renderCompareBanner() {
   if (!box) return;
   box.hidden = !hist.compare;
   if (!hist.compare) { box.innerHTML = ''; return; }
-  box.innerHTML = `<span>⇄ Click another entry to compare with <strong>${esc(hist.compare.label)}</strong></span><button class="link small" id="h-compare-cancel">Cancel</button>`;
+  box.innerHTML = `<span>${icon('swap')} Click another entry to compare with <strong>${esc(hist.compare.label)}</strong></span><button class="link small" id="h-compare-cancel">Cancel</button>`;
   $('#h-compare-cancel', box).addEventListener('click', () => setCompareBase(null));
 }
 // stable text for diffing: JSON pretty-printed with sorted keys, anything else as-is
@@ -1170,7 +1170,7 @@ async function exampleAction(r, e, act) {
       const NEW = '__new';
       const pick = await selectDialog('Mock route from this example', {
         label: 'Mock server', okLabel: 'Add route', value: mocks.list.length ? mocks.list[0].id : NEW,
-        options: [...mocks.list.map((m) => ({ value: m.id, label: m.name })), { value: NEW, label: `＋ New mock server “${r.name}”` }],
+        options: [...mocks.list.map((m) => ({ value: m.id, label: m.name })), { value: NEW, label: `+ New mock server “${r.name}”` }],
         message: `Adds a route for ${strong(r.method)} and the path of this request that answers with ${strong(e.name)}.`,
       });
       if (!pick) return;
@@ -1191,7 +1191,7 @@ async function openCookieManager() {
     box.innerHTML = cookies.length ? domains.map((d) => `
       <div class="cookie-domain"><div class="cd-head"><strong>${esc(d)}</strong><span class="muted small">${cookies.filter((c) => c.domain === d).length} cookie(s)</span><span class="grow"></span><button class="link small danger" data-deldom="${esc(d)}">Delete all</button></div>
       <table class="htable"><thead><tr><th>Name</th><th>Value</th><th>Path</th><th>Expires</th><th></th><th></th></tr></thead><tbody>
-      ${cookies.filter((c) => c.domain === d).map((c) => `<tr><td class="k">${esc(c.name)}</td><td class="v"><input class="mono ck-val" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" value="${esc(c.value)}"></td><td>${esc(c.path)}</td><td>${c.expires ? esc(fmtDate(c.expires)) : 'session'}</td><td>${c.secure ? '<span class="chip">secure</span>' : ''}${c.http_only ? '<span class="chip">httpOnly</span>' : ''}</td><td><button class="kv-del" data-del="1" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" title="Delete" aria-label="Delete cookie">✕</button></td></tr>`).join('')}
+      ${cookies.filter((c) => c.domain === d).map((c) => `<tr><td class="k">${esc(c.name)}</td><td class="v"><input class="mono ck-val" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" value="${esc(c.value)}"></td><td>${esc(c.path)}</td><td>${c.expires ? esc(fmtDate(c.expires)) : 'session'}</td><td>${c.secure ? '<span class="chip">secure</span>' : ''}${c.http_only ? '<span class="chip">httpOnly</span>' : ''}</td><td><button class="kv-del" data-del="1" data-domain="${esc(c.domain)}" data-name="${esc(c.name)}" data-path="${esc(c.path)}" title="Delete" aria-label="Delete cookie">${icon('x')}</button></td></tr>`).join('')}
       </tbody></table></div>`).join('') : '<div class="empty small">The cookie jar is empty. Cookies set by responses are stored here and sent with later requests to the same domain, like a browser.</div>';
     $$('[data-deldom]', box).forEach((b) => b.addEventListener('click', async () => {
       if (!await confirmDialog('Delete cookies?', `All cookies for ${strong(b.dataset.deldom)} will be removed.`, { okLabel: 'Delete', danger: true })) return;
@@ -1210,7 +1210,7 @@ async function openCookieManager() {
     }));
   };
   openModal('Cookies', `
-    <p class="muted small">Stored cookies are sent automatically with matching requests (turn this off per request under Settings, or globally in ⚙ Settings). Edit a value and press Enter to change it.</p>
+    <p class="muted small">Stored cookies are sent automatically with matching requests (turn this off per request under Settings, or globally in ${icon('settings')} Settings). Edit a value and press Enter to change it.</p>
     <div class="row tight"><input id="ck-domain" placeholder="domain, e.g. api.example.com" class="mono"><input id="ck-name" placeholder="name" class="mono"><input id="ck-value" placeholder="value" class="mono grow"><button id="ck-add">Add cookie</button></div>
     <div id="cookie-box"></div>
   `, [{ label: 'Clear all', cls: 'danger', onClick: async () => {
@@ -1242,7 +1242,7 @@ async function openCodeModal() {
   openModal('Code snippet', `
     <div class="row tight">
       <select id="snip-lang">${SNIPPET_LANGS.map(([v, l]) => `<option value="${v}" ${v === lang ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <span class="muted small grow">Variables and auth are resolved; secrets appear in clear text.${resolved.unresolved && resolved.unresolved.length ? ` ⚠ Unresolved: ${resolved.unresolved.map((u) => `{{${esc(u)}}}`).join(', ')}` : ''}</span>
+      <span class="muted small grow">Variables and auth are resolved; secrets appear in clear text.${resolved.unresolved && resolved.unresolved.length ? ` ${icon('warning')} Unresolved: ${resolved.unresolved.map((u) => `{{${esc(u)}}}`).join(', ')}` : ''}</span>
       <button id="snip-copy">Copy</button>
     </div>
     <pre id="snip-out" class="mono snippet"></pre>`, [{ label: 'Close', onClick: closeModal }]);
@@ -1327,12 +1327,12 @@ async function importPostman(data, kind, info) {
 }
 function exportMenu(anchor) {
   openMenu('export', anchor, null, [
-    { act: 'pyhttp', icon: '⬇', label: 'pyhttp JSON (whole project: collection, environments, mocks, monitors)', run: exportAll },
-    { act: 'postman', icon: '🚀', label: 'Postman collection (v2.1)', run: () => exportPostman() },
-    { act: 'postman-env', icon: '🌐', label: 'Postman environments', run: () => exportPostman(true) },
+    { act: 'pyhttp', icon: 'download', label: 'pyhttp JSON (whole project: collection, environments, mocks, monitors)', run: exportAll },
+    { act: 'postman', icon: 'package', label: 'Postman collection (v2.1)', run: () => exportPostman() },
+    { act: 'postman-env', icon: 'layers', label: 'Postman environments', run: () => exportPostman(true) },
     '-',
-    { act: 'docs', icon: '📄', label: 'Documentation (Markdown)', run: () => exportDocs() },
-    { act: 'docs-html', icon: '🌐', label: 'Documentation (HTML page)', run: () => exportDocs('', 'html') },
+    { act: 'docs', icon: 'file-text', label: 'Documentation (Markdown)', run: () => exportDocs() },
+    { act: 'docs-html', icon: 'globe', label: 'Documentation (HTML page)', run: () => exportDocs('', 'html') },
   ]);
 }
 async function exportDocs(folderId = '', format = 'md') {
@@ -1417,7 +1417,7 @@ function renderReqTabs() {
   const sig = JSON.stringify(items);
   if (sig !== tabsSignature) {
     tabsSignature = sig;
-    box.innerHTML = items.map((it) => `<div class="req-tab ${it.active ? 'active' : ''}" data-key="${esc(it.key)}" title="${esc(it.name)} (drag to reorder)" draggable="true"><span class="method m-${esc(it.method)}">${esc(it.method)}</span><span class="rt-name">${esc(it.name)}</span><span class="rt-dot" title="Unsaved changes" hidden>●</span><button class="rt-close" title="Close (Ctrl+W)">✕</button></div>`).join('') +
+    box.innerHTML = items.map((it) => `<div class="req-tab ${it.active ? 'active' : ''}" data-key="${esc(it.key)}" title="${esc(it.name)} (drag to reorder)" draggable="true"><span class="method m-${esc(it.method)}">${esc(it.method)}</span><span class="rt-name">${esc(it.name)}</span><span class="rt-dot" title="Unsaved changes" hidden>${icon('dot')}</span><button class="rt-close" title="Close (Ctrl+W)" aria-label="Close ${esc(it.name)}">${icon('x')}</button></div>`).join('') +
       '<button class="rt-add" title="New request (Ctrl+N)">+</button>';
   }
   $$('.req-tab', box).forEach((el) => { $('.rt-dot', el).hidden = !(el.dataset.key === cur && autosave.dirty); });
@@ -1740,7 +1740,7 @@ function runReportHtml(run) {
   const results = run.results || [];
   const rows = results.map((r) => {
     const tests = r.tests || [];
-    return `<tr class="${r.status}"><td>${r.position}</td><td>${r.iteration || 1}</td><td>${esc(r.method)}</td><td>${esc(r.request_name)}${r.body_name ? ' · ' + esc(r.body_name) : ''}</td><td>${esc((r.detail || {}).request ? r.detail.request.url : '')}</td><td>${r.status_code ?? 'ERR'}</td><td>${Math.round(r.duration_ms || 0)} ms</td><td>${esc(r.status)}</td><td>${tests.length ? tests.map((t) => `<div class="${t.passed ? 'p' : 'f'}">${t.passed ? '✓' : '✕'} ${esc(t.name)}${t.note ? ` <small>(${esc(t.note)})</small>` : ''}</div>`).join('') : ''}${r.error ? `<div class="f">${esc(r.error)}</div>` : ''}</td></tr>`;
+    return `<tr class="${r.status}"><td>${r.position}</td><td>${r.iteration || 1}</td><td>${esc(r.method)}</td><td>${esc(r.request_name)}${r.body_name ? ' · ' + esc(r.body_name) : ''}</td><td>${esc((r.detail || {}).request ? r.detail.request.url : '')}</td><td>${r.status_code ?? 'ERR'}</td><td>${Math.round(r.duration_ms || 0)} ms</td><td>${esc(r.status)}</td><td>${tests.length ? tests.map((t) => `<div class="${t.passed ? 'p' : 'f'}">${icon(t.passed ? 'check' : 'x', 13)} ${esc(t.name)}${t.note ? ` <small>(${esc(t.note)})</small>` : ''}</div>`).join('') : ''}${r.error ? `<div class="f">${esc(r.error)}</div>` : ''}</td></tr>`;
   }).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>pyhttp run: ${esc(run.name)}</title>
 <style>body{font:14px system-ui,sans-serif;margin:24px;color:#1c2330}h1{font-size:20px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #d6dbe3;padding:6px 8px;vertical-align:top;text-align:left}th{background:#f0f2f5}tr.failed td{background:#fff1f1}.p{color:#15803d}.f{color:#b91c1c}.sum{display:flex;gap:18px;margin:10px 0 18px}.sum b{font-size:18px;display:block}</style></head>
@@ -1767,13 +1767,13 @@ async function checkForUpdate(manual = false, statusEl = null, btn = null) {
     const pill = $('#btn-update');
     pill.hidden = !u.available;
     if (u.available) {
-      pill.textContent = `⬆ Update ${u.latest}`;
+      pill.innerHTML = iconText('arrow-up', `Update ${u.latest}`);
       pill.onclick = () => openUpdateDialog(u);
     }
     if (statusEl) {
-      if (u.available) { statusEl.innerHTML = `⬆ Version ${esc(u.latest)} is available (you have ${esc(u.current)}). <button class="link small" id="upd-open">Details</button>`; statusEl.className = 'small ok-text'; $('#upd-open').addEventListener('click', () => openUpdateDialog(u)); }
+      if (u.available) { statusEl.innerHTML = `${icon('arrow-up')} Version ${esc(u.latest)} is available (you have ${esc(u.current)}). <button class="link small" id="upd-open">Details</button>`; statusEl.className = 'small ok-text'; $('#upd-open').addEventListener('click', () => openUpdateDialog(u)); }
       else if (u.reason) { statusEl.textContent = `Could not check: ${u.reason}`; statusEl.className = 'small err-text'; }
-      else { statusEl.textContent = `✓ You have the latest version (${u.current}).`; statusEl.className = 'small ok-text'; }
+      else { statusEl.innerHTML = iconText('check', `You have the latest version (${u.current}).`); statusEl.className = 'small ok-text'; }
     } else if (manual) {
       if (u.available) openUpdateDialog(u);
       else toast(u.reason ? `Could not check: ${u.reason}` : `You have the latest version (${u.current})`, u.reason ? 'error' : 'ok');
@@ -1844,7 +1844,7 @@ async function startSelfUpdate() {
     if (s.log && s.log.length) { const log = $('#upd-log'); log.hidden = false; log.textContent = s.log.join('\n'); log.scrollTop = log.scrollHeight; }
     if (s.state === 'error') { fail(s.error || s.message || 'Update failed'); return; }
     $('#upd-msg').innerHTML = `<span class="spin"></span>${esc(s.message || s.state)}`;
-    if (s.state === 'restarting') { $('#upd-msg').innerHTML = `✓ ${esc(s.message)} You can close this window if it does not close by itself.`; return; }
+    if (s.state === 'restarting') { $('#upd-msg').innerHTML = `${icon('check')} ${esc(s.message)} You can close this window if it does not close by itself.`; return; }
     setTimeout(poll, 500);
   };
   poll();
@@ -1940,13 +1940,13 @@ function sidebarShown() { return !$('.layout').classList.contains('no-side'); }
 // ================================================= response collapse / max
 function setResponseMax(on) {
   $('#editor-form').classList.toggle('resp-max', on);
-  $('#r-max').textContent = on ? '⤡' : '⤢';
+  $('#r-max').innerHTML = icon(on ? 'minimize' : 'maximize');
   $('#r-max').title = on ? 'Restore the request editor (Esc)' : 'Maximize the response (Esc restores)';
   if (on) $('#response').classList.remove('collapsed');
 }
 function setResponseCollapsed(on) {
   $('#response').classList.toggle('collapsed', on);
-  $('#r-collapse').textContent = on ? '▸' : '▾';
+  $('#r-collapse').innerHTML = icon(on ? 'chevron-right' : 'chevron-down');
   $('#r-collapse').title = on ? 'Show the response' : 'Hide the response to see the whole request';
   if (on) setResponseMax(false);
 }
@@ -2093,7 +2093,7 @@ async function loadMonitors(render = true) {
   mon.list = data.monitors;
   const sb = $('#sb-monitors');
   sb.hidden = !data.failing;
-  sb.textContent = data.failing === 1 ? '⚠ 1 monitor failing' : `⚠ ${data.failing} monitors failing`;
+  sb.innerHTML = icon('warning') + (data.failing === 1 ? ' 1 monitor failing' : ` ${data.failing} monitors failing`);
   const badge = $('#mon-badge');
   badge.hidden = !data.failing;
   badge.textContent = data.failing || '';
@@ -2147,7 +2147,7 @@ function monitorDialog(existing = null) {
 }
 
 function initMonitors() {
-  $('#sb-monitors').addEventListener('click', () => showMonitors());   // the ⚠ chip in the status bar
+  $('#sb-monitors').addEventListener('click', () => showMonitors());   // the warning chip in the status bar
   loadMonitors(true);
   mon.timer = setInterval(() => loadMonitors(true), 30000);
 }
@@ -2220,7 +2220,7 @@ function mockRouteDialog(mockId, existing = null) {
     <label class="field">Answers
       <select id="mr-method" class="method-select m-${esc(r.method)}" title="ANY answers every method">${MOCK_METHODS.map((x) => `<option ${x === r.method ? 'selected' : ''}>${x}</option>`).join('')}</select>
       <input id="mr-path" class="grow mono" value="${esc(r.path)}" placeholder="/users/:id" spellcheck="false" autocomplete="off"></label>
-    <p class="muted small mock-hint">→ <code class="mono" id="mr-preview"></code><br>
+    <p class="muted small mock-hint">${icon('arrow-right')} <code class="mono" id="mr-preview"></code><br>
       <code>:id</code> or <code>{id}</code> captures one segment as <code>{{req.params.id}}</code>; <code>*</code> matches one segment and <code>**</code> the rest of the path.</p>
     <label class="field">Name <input id="mr-name" class="grow" value="${esc(r.name)}" placeholder="optional, e.g. “user not found”"></label>
     <div class="field mock-row">
@@ -2394,8 +2394,8 @@ function mountViews(box, ctx) {
         <div class="vw-chips" role="tablist">${views.length > 1 ? `<button class="vw-chip ${sel === 'all' ? 'on' : ''}" data-v="all" title="Show every view side by side">All ${views.length}</button>` : ''}${
           views.map((v) => `<button class="vw-chip ${sel === v.id ? 'on' : ''}" data-v="${esc(v.id)}" title="${esc(v.file)}">${esc(v.name)}</button>`).join('')}</div>
         <span class="grow"></span>
-        <button class="link small" data-act="reload" title="Load the page${many ? 's' : ''} again, for example after editing the HTML file">↻ Reload</button>
-        <button class="link small" data-act="open" title="Open ${many ? 'every view' : 'this view'} in your browser">↗ Open${many ? ' all' : ''} in browser</button>
+        <button class="link small" data-act="reload" title="Load the page${many ? 's' : ''} again, for example after editing the HTML file">${icon('refresh')} Reload</button>
+        <button class="link small" data-act="open" title="Open ${many ? 'every view' : 'this view'} in your browser">${icon('external')} Open${many ? ' all' : ''} in browser</button>
         ${ctx.onEdit ? '<button class="link small" data-act="edit" title="Add, rename or remove the HTML pages of this request">Edit views…</button>' : ''}
       </div>
       ${result.response.truncated ? '<div class="vw-note small">This response was cut short when it was stored, so a view may get incomplete data.</div>' : ''}
@@ -2467,7 +2467,7 @@ function renderViewsPanel() {
       they show in the <b>View</b> tab of the response, and for every past call in <b>Request history</b>.</p>
     ${views.length ? `<ul class="vwp-list">${views.map((v) => `<li><span class="vwp-name">${esc(v.name)}</span><span class="mono muted small" title="${esc(v.file)}">${esc(v.file)}</span></li>`).join('')}</ul>`
       : '<div class="vwp-none muted small">No views on this request yet.</div>'}
-    ${fromFolders.length ? `<p class="muted small" style="margin-bottom:4px">From its folders (set in the folder's ⋯ menu → Settings):</p>
+    ${fromFolders.length ? `<p class="muted small" style="margin-bottom:4px">From its folders (set in the folder's ${icon('more')} menu → Settings):</p>
       <ul class="vwp-list">${fromFolders.map((v) => `<li><span class="vwp-name">${esc(v.name)} <span class="muted small">· ${esc(v.from || 'folder')}</span></span><span class="mono muted small" title="${esc(v.file)}">${esc(v.file)}</span></li>`).join('')}</ul>` : ''}
     <div class="vw-actions"><button id="vwp-edit" class="${views.length ? '' : 'primary'}">${views.length ? 'Edit views…' : 'Choose HTML files…'}</button><button id="vwp-starter" title="Writes a working page (chart, table, raw data) you can edit">Create a starter view</button></div>
     <p class="muted small">A page finds the response in its own address: <code>new URLSearchParams(location.search).get('api')</code>, then <code>fetch(api)</code>.</p></div>`;
@@ -2520,7 +2520,7 @@ const data = await fetch(api).then((r) => r.json());   // the body, as the API s
   const fileLabel = (f) => (f.split(/[\\/]/).pop() || 'View').replace(/\.html?$/i, '').replace(/[?#].*$/, '') || 'View';
   const draw = () => {
     const box = $('#vw-rows');
-    box.innerHTML = rows.map((r, i) => `<div class="vw-row"><input data-i="${i}" data-k="name" value="${esc(r.name)}" placeholder="Sales chart"><input class="mono" data-i="${i}" data-k="file" value="${esc(r.file)}" placeholder="C:\\views\\sales.html" spellcheck="false">${canPick ? `<button data-browse="${i}">Browse…</button>` : ''}<button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove this view">✕</button></div>`).join('');
+    box.innerHTML = rows.map((r, i) => `<div class="vw-row"><input data-i="${i}" data-k="name" value="${esc(r.name)}" placeholder="Sales chart"><input class="mono" data-i="${i}" data-k="file" value="${esc(r.file)}" placeholder="C:\\views\\sales.html" spellcheck="false">${canPick ? `<button data-browse="${i}">Browse…</button>` : ''}<button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove this view">${icon('x')}</button></div>`).join('');
     $$('input', box).forEach((inp) => inp.addEventListener('input', () => { rows[inp.dataset.i][inp.dataset.k] = inp.value; }));
     $$('[data-del]', box).forEach((b) => b.addEventListener('click', () => { rows.splice(Number(b.dataset.del), 1); draw(); }));
     $$('[data-browse]', box).forEach((b) => b.addEventListener('click', async () => {
@@ -2682,7 +2682,7 @@ function renderGitPanel(box) {
       <h4>Git sync</h4>
       <p class="muted small set-intro">Keeps this project's definitions in a Git repository: every request, folder, environment, mock and monitor is a JSON file,
         and a change is committed and pushed a few seconds after you make it. History, run outputs and cookies are not included. Each project has its own folder.</p>
-      ${g.git ? '' : '<div class="ssl-warn">⚠ Git was not found on this computer. Install it from git-scm.com and restart pyhttp.</div>'}
+      ${g.git ? '' : '<div class="ssl-warn">' + icon('warning') + ' Git was not found on this computer. Install it from git-scm.com and restart pyhttp.</div>'}
       <div class="set-grid">
         <div class="set-field wide"><span class="set-label">Folder</span>
           <span class="git-dir-row"><input id="git-dir" class="mono" value="${esc(g.dir || '')}" placeholder="${esc(g.suggested_dir || '')}" spellcheck="false"><button id="git-browse" hidden>Browse…</button></span>
@@ -2703,7 +2703,7 @@ function renderGitPanel(box) {
         ${sw('git-auto-commit', 'Commit automatically', 'A few seconds after the last edit, with the names of what changed as the message. Off: the files are still written, and “Sync now” commits them.', g.auto_commit)}
         ${sw('git-auto-push', 'Push automatically', 'After every commit. A push that fails (offline, no access) is tried again with the next change. Off: “Sync now” pushes.', g.auto_push)}
         ${sw('git-auto-pull', 'Pull automatically', 'With every sync, when the app starts and on the timer below: changes from the remote are merged and read into this project. In a repository shared with code, that merges the remote branch into the one checked out. Off: “Sync now” pulls.', g.auto_pull)}
-        ${sw('git-secrets', 'Include secret values', 'Off: the values of variables marked 🔒 are written empty, so they never reach the repository. Tokens and passwords typed straight into a request are always written.', g.secrets)}
+        ${sw('git-secrets', 'Include secret values', `Off: the values of variables marked ${icon('lock')} are written empty, so they never reach the repository. Tokens and passwords typed straight into a request are always written.`, g.secrets)}
       </div>
       <div class="set-grid">
         <div class="set-field"><span class="set-label">Look at the remote every</span>
@@ -2865,7 +2865,7 @@ async function wsSendMessage() {
   catch (e) { toast(e.message, 'error'); }
 }
 function wsRowHtml(e) {
-  const arrow = e.dir === 'in' ? '↓' : e.dir === 'out' ? '↑' : e.dir === 'error' ? '!' : '•';
+  const arrow = icon(e.dir === 'in' ? 'arrow-down' : e.dir === 'out' ? 'arrow-up' : e.dir === 'error' ? 'warning' : 'dot');
   const kind = e.kind === 'text' || e.kind === 'open' || e.kind === 'close' ? '' : `<span class="ws-kind">${esc(e.kind)}</span>`;
   const size = e.dir === 'in' || e.dir === 'out' ? `<span class="ws-size muted">${esc(fmtBytes(e.size || 0))}</span>` : '';
   return `<div class="ws-row ws-${e.dir}" data-n="${e.n}" title="${e.dir === 'in' ? 'Received' : e.dir === 'out' ? 'Sent' : ''} ${esc(fmtClock(e.ts))}${e.kind === 'text' ? '. Click to pretty-print JSON' : ''}">
@@ -3030,7 +3030,7 @@ async function openCloud() {
   if (!s.signed_in) {
     body = `<p>Sign in to keep your projects in step with your pyhttp account: on your other computers, and in the browser at <code>${esc((s.server || '').replace(/^https?:\/\//, ''))}</code>.</p>
       <p class="muted small">Signing in opens your browser. pyhttp never sees a password. Once signed in, every project on this computer is uploaded to your account and kept in step, and projects already in your account appear here. </p>
-      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of 🔒 variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer. You can change this later, here.</span></span><span class="switch"><input type="checkbox" id="cloud-login-secrets" checked><span></span></span></label>
+      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of ${icon('lock')} variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer. You can change this later, here.</span></span><span class="switch"><input type="checkbox" id="cloud-login-secrets" checked><span></span></span></label>
       <div class="set-actions"><button id="cloud-login" class="primary">Sign in with your browser</button></div>`;
   } else {
     const conflicts = (s.conflicts || []).map((c) => `<div class="cloud-conflict" data-id="${esc(c.id)}">
@@ -3046,7 +3046,7 @@ async function openCloud() {
       ${conflicts ? `<div class="set-section"><h4>Changed here and in the cloud (this project)</h4><p class="muted small">Neither was overwritten. Choose which one stays.</p>${conflicts}</div>` : ''}
       <div class="set-section"><h4>Projects</h4>${projects || '<span class="muted small">Looking at your account…</span>'}
         <p class="muted small">A project you create, rename or delete here changes in your account and on your other computers too, and the other way round. “Keep only here” takes a project out of your account and leaves it on this computer. A project deleted elsewhere is removed here; a copy of it is kept in the <code>deleted-projects</code> folder of the data folder.</p></div>
-      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of 🔒 variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer; values already in your account stay there until you change or delete them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
+      <label class="switch-row"><span class="txt"><b>Sync secret values too</b><span class="muted small">On: values of ${icon('lock')} variables are stored in your account, so your other computers and the web version can use them. Off: they go up empty and stay on this computer; values already in your account stay there until you change or delete them.</span></span><span class="switch"><input type="checkbox" id="cloud-secrets" ${s.include_secrets ? 'checked' : ''}><span></span></span></label>
       <div class="set-actions"><button id="cloud-sync" class="primary">Sync now</button></div>`;
   }
   const foot = [{ label: 'Close', onClick: closeModal }];
@@ -3107,8 +3107,8 @@ async function shareDialog(kind, target, name) {
       <div class="set-actions"><button id="share-stop" class="danger">Stop sharing</button></div>`
     : `<p>Create a link to the ${what} <b>${esc(name)}</b>. Anyone who has the link can see it in the browser and take a copy, without an account.</p>
       <div class="set-actions"><button id="share-create" class="primary">Create link</button></div>`}
-    <p class="muted small">The link always shows the current version${kind === 'folder' ? ', with everything inside the folder' : ''}. Values of 🔒 variables are left out.
-      Anything typed straight into a request (a token in a header, a password under Auth) is visible, so keep those in 🔒 variables.${kind === 'project' ? ' Environments and global variables are included; history, cookies, mocks and monitors are not.' : ''}</p>
+    <p class="muted small">The link always shows the current version${kind === 'folder' ? ', with everything inside the folder' : ''}. Values of ${icon('lock')} variables are left out.
+      Anything typed straight into a request (a token in a header, a password under Auth) is visible, so keep those in ${icon('lock')} variables.${kind === 'project' ? ' Environments and global variables are included; history, cookies, mocks and monitors are not.' : ''}</p>
     ${others.length ? `<div class="set-section"><h4>Other links in this project</h4>${others.map(row).join('')}</div>` : ''}
   </div>`;
   openModal('Share with a link', body, [{ label: 'Close', onClick: closeModal }]);

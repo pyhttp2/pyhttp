@@ -44,6 +44,14 @@ def configure(data_dir: Path, project: str | None = None) -> None:
     _client = None
 
 
+def use_client(client: httpx.AsyncClient) -> None:
+    """Send every tool's API calls through ``client`` instead of an app started on a data folder.
+    pyhttp on a server uses this to serve many people from one process: its client hands each
+    call to the app of the person who made the MCP request. Paths start with ``/api``."""
+    global _client
+    _client = client
+
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:

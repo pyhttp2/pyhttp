@@ -95,7 +95,7 @@ function jsonTree(root, opts = {}) {
     if (container) {
       const tg = document.createElement('span');
       tg.className = 'jv-toggle';
-      tg.textContent = '▾';
+      tg.innerHTML = icon('chevron-down');
       line.appendChild(tg);
     } else {
       const sp = document.createElement('span');
@@ -288,7 +288,7 @@ function jsonTreeVirtual(root, opts = {}) {
     el.style.paddingLeft = row.depth * 16 + 2 + 'px';
     const tg = document.createElement('span');
     tg.className = 'jv-toggle' + (row.kind === 'box' && row.size ? (row.open ? '' : ' shut') : ' blank');
-    tg.textContent = '▾';
+    tg.innerHTML = icon('chevron-down');
     el.appendChild(tg);
     if (row.kind === 'close') { put(el, 'jv-p', (row.arr ? ']' : '}') + (row.last ? '' : ',')); return el; }
     if (row.key !== null) {
@@ -526,8 +526,8 @@ function mountViewer(container, resp, opts = {}) {
     <span class="rv-search-box">
       <input class="rv-search" placeholder="Search (Ctrl+F)" spellcheck="false">
       <span class="rv-count muted small"></span>
-      <button class="rv-btn rv-prev" title="Previous match (Shift+Enter)">▲</button>
-      <button class="rv-btn rv-next" title="Next match (Enter)">▼</button>
+      <button class="rv-btn rv-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">${icon('chevron-up')}</button>
+      <button class="rv-btn rv-next" title="Next match (Enter)" aria-label="Next match">${icon('chevron-down')}</button>
     </span>`;
   const body = document.createElement('div');
   body.className = 'rv-body' + (state.wrap ? ' wrap' : '');

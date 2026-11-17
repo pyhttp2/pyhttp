@@ -100,9 +100,9 @@ function renderFlowList() {
     return `<li class="flow-item${flowUi.flow && flowUi.flow.id === f.id ? ' active' : ''}" data-id="${f.id}" tabindex="0">
       ${flowBadge(f)}
       <span class="flow-item-text"><span class="flow-item-name">${esc(f.name)}</span>
-        <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">✉ on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when}</span></span>
-      <button class="link flow-item-act" data-act="copy" title="Duplicate this flow" aria-label="Duplicate">⧉</button>
-      <button class="link flow-item-act danger" data-act="del" title="Delete this flow" aria-label="Delete">✕</button>
+        <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">' + icon('mail') + ' on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when}</span></span>
+      <button class="link flow-item-act" data-act="copy" title="Duplicate this flow" aria-label="Duplicate">${icon('copy')}</button>
+      <button class="link flow-item-act danger" data-act="del" title="Delete this flow" aria-label="Delete">${icon('x')}</button>
     </li>`;
   }).join('');
   $$('.flow-item', ul).forEach((li) => {
@@ -201,8 +201,8 @@ function renderFlowView() {
       <span class="flow-adds" role="group" aria-label="Add a block">${add}</span>
       <span class="grow"></span>
       <span id="flow-saved" class="save-state"></span>
-      <button id="flow-stop" hidden>■ Stop</button>
-      <button id="flow-run" class="accent" title="Run this flow now">▶ Run</button>
+      <button id="flow-stop" hidden>${icon('stop')} Stop</button>
+      <button id="flow-run" class="accent" title="Run this flow now">${icon('play')} Run</button>
     </div>
     <div class="flow-main">
       <div id="flow-canvas" class="flow-canvas"><div id="flow-area" class="flow-area"><svg id="flow-wires" class="flow-wires"></svg></div></div>
@@ -386,7 +386,7 @@ function flowSummary(node) {
   if (node.type === 'delay') return `${esc(c.seconds)} s`;
   if (node.type === 'log') return esc(String(c.message).slice(0, 60)) || '<span class="muted">nothing to write yet</span>';
   if (node.type === 'stop') return c.result === 'fail' ? 'as failed' : 'as passed';
-  return c.trigger === 'email' ? `✉ when an email arrives: ${esc(flowMatchText(c))}` : 'when you press Run';
+  return c.trigger === 'email' ? `${icon('mail')} when an email arrives: ${esc(flowMatchText(c))}` : 'when you press Run';
 }
 
 function renderFlow() {
@@ -401,7 +401,7 @@ function renderFlow() {
     el.style.left = node.x + 'px';
     el.style.top = node.y + 'px';
     el.innerHTML = `${node.type === 'start' ? '' : '<span class="fn-in" title="Wires end here"></span>'}
-      <div class="fn-head"><span class="fn-title">${esc(b.title)}</span>${node.type === 'start' ? '' : '<button class="fn-del link" title="Remove this block" aria-label="Remove block">✕</button>'}</div>
+      <div class="fn-head"><span class="fn-title">${esc(b.title)}</span>${node.type === 'start' ? '' : '<button class="fn-del link" title="Remove this block" aria-label="Remove block">' + icon('x') + '</button>'}</div>
       <div class="fn-body" title="">${flowSummary(node)}</div>
       <div class="fn-ports">${b.ports.map((p) => `<span class="fn-port p-${p}" data-port="${p}" title="Drag to the block that runs next">${b.ports.length > 1 ? esc(p) : ''}<i></i></span>`).join('')}</div>`;
     area.appendChild(el);
@@ -545,7 +545,7 @@ async function checkFlowMatch(c) {
   if (!data.messages.length) { box.innerHTML = '<span class="muted">The inbox is empty: send a test message to it, then try again.</span>'; return; }
   const hits = data.messages.filter((m) => m.fits).length;
   box.innerHTML = `<div><strong>${hits} of ${data.messages.length}</strong> message${data.messages.length === 1 ? '' : 's'} in the inbox ${hits === 1 ? 'fits' : 'fit'}.</div>`
-    + data.messages.slice(0, 6).map((m) => `<div class="fm-msg ${m.fits ? 'yes' : 'no'}"><span class="fm-mark">${m.fits ? '✓' : '✕'}</span>
+    + data.messages.slice(0, 6).map((m) => `<div class="fm-msg ${m.fits ? 'yes' : 'no'}"><span class="fm-mark">${icon(m.fits ? 'check' : 'x')}</span>
         <span><span class="fm-subj">${esc(m.subject || '(no subject)')}</span> <span class="muted">${esc(m.from || '')}</span>${m.fits ? '' : `<br><span class="fm-why">${esc(m.why)}</span>`}</span></div>`).join('');
 }
 

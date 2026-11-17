@@ -4,6 +4,63 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The app's one icon set: inline SVG in the style of the navigation rail (24px grid, 1.7 stroke,
+// round caps and joins, currentColor). icon('trash') returns the markup; the .ic class aligns it with
+// the text beside it and sizes it in em, so it follows the font size of its button (size = px overrides).
+const ICONS = {
+  'x': '<path d="M18 6 6 18M6 6l12 12"/>',
+  'check': '<path d="M20 6 9 17l-5-5"/>',
+  'plus': '<path d="M12 5v14M5 12h14"/>',
+  'play': '<path d="M7 5v14l11-7z" fill="currentColor"/>',
+  'stop': '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/>',
+  'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+  'chevron-up': '<path d="m6 15 6-6 6 6"/>',
+  'chevron-right': '<path d="m9 6 6 6-6 6"/>',
+  'arrow-up': '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
+  'arrow-down': '<path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/>',
+  'arrow-right': '<path d="M5 12h14M12.5 5.5 19 12l-6.5 6.5"/>',
+  'download': '<path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/>',
+  'swap': '<path d="M16 3.5 20 7.5l-4 4M20 7.5H4M8 20.5l-4-4 4-4M4 16.5h16"/>',
+  'move': '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5V20"/>',
+  'undo': '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5A5.5 5.5 0 0 1 20 14.5V20"/>',
+  'external': '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  'refresh': '<path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5"/><path d="M20 4v4.5h-4.5"/>',
+  'maximize': '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  'minimize': '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+  'more': '<circle cx="5" cy="12" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="19" cy="12" r="1.1" fill="currentColor"/>',
+  'dot': '<circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none"/>',
+  'warning': '<path d="M10.3 4 2.4 17.8A2 2 0 0 0 4.1 20.8h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>',
+  'lock': '<rect x="4.5" y="11" width="15" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  'unlock': '<rect x="4.5" y="11" width="15" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.75-1.4"/>',
+  'link': '<path d="M10 13.5a4.5 4.5 0 0 0 6.8.5l2.9-2.9a4.5 4.5 0 0 0-6.4-6.4l-1.6 1.6"/><path d="M14 10.5a4.5 4.5 0 0 0-6.8-.5l-2.9 2.9a4.5 4.5 0 0 0 6.4 6.4l1.6-1.6"/>',
+  'send': '<path d="M21 3 10.5 13.5M21 3l-6.5 18-4-7.5L3 9.5z"/>',
+  'copy': '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  'trash': '<path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/>',
+  'pencil': '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/><path d="m14.5 5.5 3 3"/>',
+  'folder': '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/>',
+  'folder-plus': '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path d="M12 11v5M9.5 13.5h5"/>',
+  'settings': '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  'package': '<path d="M21 7.5 12 3 3 7.5v9L12 21l9-4.5z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9M7.5 5.25l9 4.5"/>',
+  'layers': '<path d="M12 3 3 7.5l9 4.5 9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/>',
+  'file-text': '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  'globe': '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  'lightbulb': '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>',
+  'zap': '<path d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z" fill="currentColor"/>',
+  'eye': '<path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="3"/>',
+  'panel': '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9.5 4v16"/>',
+  'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
+  'moon': '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  'contrast': '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
+  'mail': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
+};
+function icon(name, size) {
+  const body = ICONS[name];
+  if (!body) return '';
+  const s = size ? ` width="${size}" height="${size}" style="width:${size}px;height:${size}px"` : '';
+  return `<svg class="ic ic-${name}" viewBox="0 0 24 24"${s} fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
+}
+// icon + escaped text, for a button or chip that showed "glyph label"
+const iconText = (name, text) => `${icon(name)} ${esc(text)}`;
 const fmtMs = (ms) => ms == null ? '' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 const fmtBytes = (n) => n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
 const fmtDate = (ts) => new Date(ts * 1000).toLocaleString();
@@ -33,9 +90,10 @@ function tintMethodSelect() {
   sel.className = 'method-select m-' + sel.value;
 }
 
-function toast(msg, kind = '', action = null) {
+function toast(msg, kind = '', action = null, ic = '') {
   const el = $('#toast');
   el.textContent = msg;
+  if (ic) el.insertAdjacentHTML('afterbegin', icon(ic) + ' ');
   el.className = 'toast ' + kind;
   if (action) {
     const b = document.createElement('button');
@@ -137,9 +195,10 @@ function openModal(title, bodyHtml, footButtons = []) {
   $('#modal-body').innerHTML = bodyHtml;
   const foot = $('#modal-foot');
   foot.innerHTML = '';
-  footButtons.forEach(({ label, cls = '', onClick }) => {
+  footButtons.forEach(({ label, cls = '', onClick, icon: ic }) => {
     const b = document.createElement('button');
     b.textContent = label;
+    if (ic) b.insertAdjacentHTML('afterbegin', icon(ic) + ' ');
     b.className = cls;
     b.addEventListener('click', onClick);
     foot.appendChild(b);
@@ -171,8 +230,8 @@ function kvRow(r, withEnable, lists = null, secrets = false) {
     (withEnable ? `<input type="checkbox" class="kv-on" ${r.enabled !== false ? 'checked' : ''}>` : '') +
     `<input class="kv-key mono" placeholder="Key" value="${esc(r.key)}" spellcheck="false" autocomplete="off" ${lists ? `list="${lists.key}"` : ''}>` +
     `<input class="kv-val mono" placeholder="Value" value="${esc(r.value)}" spellcheck="false" autocomplete="off" ${lists ? `list="${lists.value}"` : ''} ${r.secret ? 'type="password"' : ''}>` +
-    (secrets ? `<button class="kv-secret" title="${r.secret ? 'Secret: masked here and in saved history and run files. Click to make it a normal value' : 'Mark as secret (masked here and in saved history and run files)'}">${r.secret ? '🔒' : '🔓'}</button>` : '') +
-    `<button class="kv-del" title="Remove" aria-label="Remove row">✕</button>`;
+    (secrets ? `<button class="kv-secret" title="${r.secret ? 'Secret: masked here and in saved history and run files. Click to make it a normal value' : 'Mark as secret (masked here and in saved history and run files)'}" aria-label="Secret value" aria-pressed="${r.secret ? 'true' : 'false'}">${icon(r.secret ? 'lock' : 'unlock')}</button>` : '') +
+    `<button class="kv-del" title="Remove" aria-label="Remove row">${icon('x')}</button>`;
   $('.kv-del', row).addEventListener('click', () => row.remove());
   if (secrets) {
     const val = $('.kv-val', row);
@@ -180,7 +239,8 @@ function kvRow(r, withEnable, lists = null, secrets = false) {
       const on = !row.classList.contains('secret');
       row.classList.toggle('secret', on);
       val.type = on ? 'password' : 'text';
-      e.currentTarget.textContent = on ? '🔒' : '🔓';
+      e.currentTarget.innerHTML = icon(on ? 'lock' : 'unlock');
+      e.currentTarget.setAttribute('aria-pressed', on ? 'true' : 'false');
       e.currentTarget.title = on ? 'Secret: masked here and in saved history and run files. Click to make it a normal value' : 'Mark as secret (masked here and in saved history and run files)';
     });
     // a secret shows while it is being edited
@@ -396,7 +456,7 @@ function updateSelectionBar() {
   const n = state.selected.length;
   $('#selected-count').textContent = `${n} selected`;
   $('#btn-run').disabled = n === 0;
-  $('#btn-run').textContent = n ? `▶ Run selected (${n})` : '▶ Run selected';
+  $('#btn-run').innerHTML = icon('play') + (n ? ` Run selected (${n})` : ' Run selected');
   $('#btn-run-now').disabled = n === 0;
   $('#btn-clear-sel').hidden = n === 0;
   const shown = state.requests;
@@ -525,7 +585,7 @@ function renderBodies() {
       `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Include this body when pressing Send">` +
       `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>` +
       `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)" aria-label="Send only ${esc(b.name || 'Unnamed')}">${SEND_ICON}</button>` +
-      `<button type="button" class="icon bmore" title="Body actions" aria-label="Actions for ${esc(b.name || 'Unnamed')}" aria-haspopup="menu">⋯</button>`;
+      `<button type="button" class="icon bmore" title="Body actions" aria-label="Actions for ${esc(b.name || 'Unnamed')}" aria-haspopup="menu">${icon('more')}</button>`;
     $('input', li).addEventListener('click', (e) => {
       e.stopPropagation();
       b.enabled = e.target.checked;
@@ -559,7 +619,7 @@ function updateBodyHints() {
   const on = state.bodies.filter((b) => b.enabled).length;
   $('#bodies-count').textContent = total ? `${on} of ${total} checked` : '';
   const type = $('#f-body-type').value;
-  $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body ➤ when bodies are not sent
+  $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body send button when bodies are not sent
   let hint = '';
   if (type === 'none' && total) hint = 'Body type is “No body”, so bodies are not sent.';
   else if (type !== 'none' && on > 1) hint = `Send hits this request ${on}× (once per checked body) and saves each output.`;
@@ -578,13 +638,13 @@ function renderDependencyBadge(dep) {
   if (!dep) return;
   const name = dep.name || 'dependency';
   let text = '', title = '', cls = 'dep-badge';
-  if (dep.state === 'shared') { text = `⛓ ${name}: shared`; title = `“${name}” was sent once for all the bodies sent together, so it was not sent again for this one.`; }
-  else if (dep.state === 'fresh') { text = `⛓ ${name}: reused`; title = `“${name}” was sent ${fmtAge(dep.age)} ago and is still valid for ${fmtAge(Math.max(0, dep.ttl - dep.age))}, so it was not sent again.`; }
-  else if (dep.state === 'ran' && dep.ok) { text = `⛓ ${name}: sent first${dep.retried ? ', then retried' : ''}`; title = `“${name}” was sent before this request (${dep.status_code ?? 'OK'}, ${fmtMs(dep.duration_ms)})${dep.retried ? ' because the previous response was 401/403; this request was then sent again' : ''}.`; }
-  else if (dep.state === 'ran') { text = `⛓ ${name}: failed`; cls += ' fail'; title = `“${name}” failed (${dep.error || 'HTTP ' + dep.status_code}).`; }
-  else if (dep.state === 'missing') { text = '⛓ dependency missing'; cls += ' fail'; title = 'The request this one depends on was deleted. Pick another in the Settings tab.'; }
-  else if (dep.state === 'loop') { text = `⛓ ${name}: skipped`; title = 'Skipped: the dependencies form a loop.'; }
-  el.textContent = text; el.title = title; el.className = cls;
+  if (dep.state === 'shared') { text = `${name}: shared`; title = `“${name}” was sent once for all the bodies sent together, so it was not sent again for this one.`; }
+  else if (dep.state === 'fresh') { text = `${name}: reused`; title = `“${name}” was sent ${fmtAge(dep.age)} ago and is still valid for ${fmtAge(Math.max(0, dep.ttl - dep.age))}, so it was not sent again.`; }
+  else if (dep.state === 'ran' && dep.ok) { text = `${name}: sent first${dep.retried ? ', then retried' : ''}`; title = `“${name}” was sent before this request (${dep.status_code ?? 'OK'}, ${fmtMs(dep.duration_ms)})${dep.retried ? ' because the previous response was 401/403; this request was then sent again' : ''}.`; }
+  else if (dep.state === 'ran') { text = `${name}: failed`; cls += ' fail'; title = `“${name}” failed (${dep.error || 'HTTP ' + dep.status_code}).`; }
+  else if (dep.state === 'missing') { text = 'dependency missing'; cls += ' fail'; title = 'The request this one depends on was deleted. Pick another in the Settings tab.'; }
+  else if (dep.state === 'loop') { text = `${name}: skipped`; title = 'Skipped: the dependencies form a loop.'; }
+  el.innerHTML = iconText('link', text); el.title = title; el.className = cls;
 }
 function renderSendButton() {
   const btn = $('#btn-send');
@@ -608,7 +668,7 @@ function renderSendButton() {
   btn.classList.toggle('cancel', !!sending);
   btn.disabled = false;
   const par = !!appSettings.parallel;
-  const title = sending ? 'Stop the call(s) in flight' : n > 1 ? `Send the ${n} checked bodies ${par ? 'in parallel (at most ' + (appSettings.concurrency || 8) + ' at once)' : 'one after another'}. Use ▾ to change. Ctrl+Enter` : 'Ctrl+Enter';
+  const title = sending ? 'Stop the call(s) in flight' : n > 1 ? `Send the ${n} checked bodies ${par ? 'in parallel (at most ' + (appSettings.concurrency || 8) + ' at once)' : 'one after another'}. Use the arrow next to Send to change. Ctrl+Enter` : 'Ctrl+Enter';
   const label = sending ? (state.sending.kind === 'run' ? `Cancel (${state.sending.done || 0}/${state.sending.total})` : 'Cancel') : (n > 1 ? `Send ×${n}${par ? ' ∥' : ''}` : 'Send');
   // Only touch the DOM when the text changes: this runs on every blur of a body field, i.e. between
   // the mousedown and mouseup of a click on Send, and WebKit drops a click whose target text node
@@ -688,8 +748,8 @@ function openSendModeMenu(anchor) {
     toast(parallel ? `Bodies are sent in parallel, at most ${appSettings.concurrency || 8} at once (Settings → Requests)` : 'Bodies are sent one after another', 'ok');
   };
   openMenu('send-mode', anchor, null, [
-    { act: 'seq', icon: par ? '' : '✓', label: 'Send in order, one after another', run: () => pick(false) },
-    { act: 'par', icon: par ? '✓' : '', label: `Send in parallel, at most ${appSettings.concurrency || 8} at once`, run: () => pick(true) },
+    { act: 'seq', icon: par ? '' : 'check', label: 'Send in order, one after another', run: () => pick(false) },
+    { act: 'par', icon: par ? 'check' : '', label: `Send in parallel, at most ${appSettings.concurrency || 8} at once`, run: () => pick(true) },
   ]);
 }
 async function cancelSending() {
@@ -786,7 +846,7 @@ function sendOrCancel() {
   if (typeof isWsRequest === 'function' && isWsRequest()) { wsToggle(); return; }
   if (state.sending && state.sending.key === responseKey()) cancelSending(); else sendCurrent();
 }
-// The ➤ button next to a body: send that one body right away, whatever is checked.
+// The send button next to a body: send that one body right away, whatever is checked.
 function sendOneBody(id) {
   if (!state.bodies.some((b) => b.id === id)) return;
   if (state.sending && state.sending.key === responseKey()) { toast('A send is already in flight. Cancel it first.', 'error'); return; }
@@ -822,7 +882,7 @@ function addBody(from, at = null) {
   $('#body-name').focus();
   $('#body-name').select();
 }
-// The ⋯ of a body row: manage a body without making it the one in the editor.
+// The more menu of a body row: manage a body without making it the one in the editor.
 function openBodyMenu(b, anchor, at) {
   flushBody();
   const i = state.bodies.indexOf(b);
@@ -833,12 +893,12 @@ function openBodyMenu(b, anchor, at) {
     scheduleSave();
   };
   openMenu('body:' + b.id, anchor, at, [
-    { act: 'send', icon: '➤', label: 'Send only this body', run: () => sendOneBody(b.id) },
-    { act: 'dup', icon: '⧉', label: 'Duplicate', run: () => addBody(b, i + 1) },
-    { act: 'up', icon: '▲', label: 'Move up', run: () => { if (i > 0) moveTo(i - 1); } },
-    { act: 'down', icon: '▼', label: 'Move down', run: () => { if (i < state.bodies.length - 1) moveTo(i + 1); } },
+    { act: 'send', icon: 'send', label: 'Send only this body', run: () => sendOneBody(b.id) },
+    { act: 'dup', icon: 'copy', label: 'Duplicate', run: () => addBody(b, i + 1) },
+    { act: 'up', icon: 'arrow-up', label: 'Move up', run: () => { if (i > 0) moveTo(i - 1); } },
+    { act: 'down', icon: 'arrow-down', label: 'Move down', run: () => { if (i < state.bodies.length - 1) moveTo(i + 1); } },
     '-',
-    { act: 'del', icon: '🗑', label: 'Delete', danger: true, run: () => deleteBody(b) },
+    { act: 'del', icon: 'trash', label: 'Delete', danger: true, run: () => deleteBody(b) },
   ]);
 }
 async function deleteBody(which = null) {
@@ -954,7 +1014,7 @@ function renderMetaTags() {
   $$('.chip', box).forEach((c) => c.addEventListener('click', () => toggleDetails(true)));
   const hasDesc = $('#f-description').value.trim().length > 0;
   const open = !$('#details').hidden;
-  $('#btn-details').textContent = (open ? 'Hide details ▴' : 'Details ▾') + (!open && hasDesc ? ' •' : '');
+  $('#btn-details').innerHTML = (open ? 'Hide details ' + icon('chevron-up') : 'Details ' + icon('chevron-down')) + (!open && hasDesc ? ' ' + icon('dot') : '');
   $('#btn-details').title = hasDesc && !open ? 'Has a description. Click to view or edit tags and description' : 'Edit tags and description';
 }
 function toggleDetails(force) {
@@ -1212,7 +1272,7 @@ function renderResponseArea() {
       : '';
     // two or more real responses: any two of them can be compared as a diff
     const real = keys.filter((k) => !rs.byKey[k].pending && !rs.byKey[k].notSent);
-    const cmpBtn = real.length > 1 ? '<button class="link small rb-compare" title="Compare the response on screen with another one: body, headers and the request as sent, as a diff">⇄ Compare</button>' : '';
+    const cmpBtn = real.length > 1 ? '<button class="link small rb-compare" title="Compare the response on screen with another one: body, headers and the request as sent, as a diff">' + icon('swap') + ' Compare</button>' : '';
     strip.innerHTML = keys.map(tab).join('') + cmpBtn + runInfo;
     const cmp = $('.rb-compare', strip);
     if (cmp) cmp.addEventListener('click', () => {
@@ -1220,7 +1280,7 @@ function renderResponseArea() {
       if (!real.includes(rs.selected) || !others.length) return;
       const go = (k) => compareResults({ label: nameOf(k), result: rs.byKey[k] }, { label: nameOf(rs.selected), result: rs.byKey[rs.selected] });
       if (others.length === 1) go(others[0]);
-      else openMenu('rb-compare', cmp, null, others.map((k) => ({ act: 'cmp:' + k, icon: '⇄', label: `with “${nameOf(k)}”`, run: () => go(k) })));
+      else openMenu('rb-compare', cmp, null, others.map((k) => ({ act: 'cmp:' + k, icon: 'swap', label: `with “${nameOf(k)}”`, run: () => go(k) })));
     });
     $$('.rb-tab', strip).forEach((el) => el.addEventListener('click', () => {
       rs.selected = el.dataset.key;
@@ -1260,9 +1320,10 @@ function renderResponse(result, inTabs = false) {
   const otherBody = shownBody && shownBody !== NO_BODY && state.activeBodyId && shownBody !== state.activeBodyId
     && state.bodies.some((b) => b.id === state.activeBodyId);
   bn.hidden = (!result.body_name || inTabs) && !otherBody;
-  bn.textContent = result.body_name || (state.bodies.find((b) => b.id === shownBody) || {}).name || '';
+  const bodyName = result.body_name || (state.bodies.find((b) => b.id === shownBody) || {}).name || '';
+  bn.innerHTML = otherBody ? `${icon('warning')} <span class="rbn-of">response of </span>${esc(bodyName)}` : esc(bodyName);
   bn.classList.toggle('other', !!otherBody);
-  bn.title = otherBody ? `This is the response of “${bn.textContent}”, not of the body you are viewing (“${(activeBody() || {}).name || ''}”), which has not been sent yet.` : 'The body this response belongs to';
+  bn.title = otherBody ? `This is the response of “${bodyName}”, not of the body you are viewing (“${(activeBody() || {}).name || ''}”), which has not been sent yet.` : 'The body this response belongs to';
   renderMethodTip(result);
   renderDependencyBadge(result.dependency);
   const st = $('#r-status');
@@ -1314,9 +1375,9 @@ function renderMethodTip(result) {
   let why = `GET returned ${code ?? 'an error'}.`;
   if (code === 405) why = `The server does not allow GET here (405 Method Not Allowed)${allowed.length ? `; it accepts ${allowed.map((m) => `<code>${esc(m)}</code>`).join(', ')}` : ''}.`;
   else if (hasBody) why = `GET returned ${code ?? 'an error'} and this request has a body; most servers ignore a body on GET.`;
-  tip.innerHTML = `<span class="r-tip-i">💡</span><span><strong>Tip:</strong> ${why} Try ${suggest.length > 1 ? 'another method, such as' : ''}</span>` +
+  tip.innerHTML = `<span class="r-tip-i">${icon('lightbulb')}</span><span><strong>Tip:</strong> ${why} Try ${suggest.length > 1 ? 'another method, such as' : ''}</span>` +
     suggest.map((m) => `<button type="button" class="link small r-tip-m" data-m="${esc(m)}">${esc(m)}</button>`).join('<span class="muted">·</span>') +
-    '<span class="grow"></span><button type="button" class="link small r-tip-x" title="Hide this tip">✕</button>';
+    '<span class="grow"></span><button type="button" class="link small r-tip-x" title="Hide this tip" aria-label="Hide this tip">' + icon('x') + '</button>';
   tip.hidden = false;
   $$('.r-tip-m', tip).forEach((b) => b.addEventListener('click', () => {
     const sel = $('#f-method');
@@ -1342,9 +1403,9 @@ function openRunModal(opts = {}) {
         `<span class="muted small">${i + 1}</span>` +
         `<span class="method m-${esc(s.method)}">${esc(s.method)}</span>` +
         `<span class="name">${esc(s.name)}${s.n > 1 ? ` <span class="bcount">×${s.n} bodies</span>` : ''}</span>` +
-        `<span class="ctl"><button class="icon" data-act="up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>` +
-        `<button class="icon" data-act="down" title="Move down" aria-label="Move down" ${i === order.length - 1 ? 'disabled' : ''}>▼</button>` +
-        `<button class="icon" data-act="rm" title="Remove from run" aria-label="Remove from run">✕</button></span>`;
+        `<span class="ctl"><button class="icon" data-act="up" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${icon('arrow-up')}</button>` +
+        `<button class="icon" data-act="down" title="Move down" aria-label="Move down" ${i === order.length - 1 ? 'disabled' : ''}>${icon('arrow-down')}</button>` +
+        `<button class="icon" data-act="rm" title="Remove from run" aria-label="Remove from run">${icon('x')}</button></span>`;
       $$('button', li).forEach((b) => b.addEventListener('click', () => {
         if (b.dataset.act === 'up') [order[i - 1], order[i]] = [order[i], order[i - 1]];
         if (b.dataset.act === 'down') [order[i + 1], order[i]] = [order[i], order[i + 1]];
@@ -1357,7 +1418,7 @@ function openRunModal(opts = {}) {
     $('#order-total').textContent = `${order.length} request(s), ${sends} send(s) in total.`;
   };
   runData.rows = []; runData.columns = []; runData.name = '';
-  // in order / in parallel is one setting (Settings → Requests, Send ▾, this dialog): never a stale per-run value
+  // in order / in parallel is one setting (Settings → Requests, the menu next to Send, this dialog): never a stale per-run value
   const parallel = !!appSettings.parallel;
   const concurrency = appSettings.concurrency || 8;
   openModal(opts.title || 'Run requests', `
@@ -1372,7 +1433,7 @@ function openRunModal(opts = {}) {
       <input type="checkbox" id="run-parallel" ${parallel ? 'checked' : ''} hidden>
     </div>
     <div class="muted small" id="run-order-hint"></div>
-    <div class="muted small">A request with several checked bodies is sent once per body. Use ▲▼ to reorder. The default is in Settings → Requests.</div>
+    <div class="muted small">A request with several checked bodies is sent once per body. Use ${icon('arrow-up')}${icon('arrow-down')} to reorder. The default is in Settings → Requests.</div>
     <div id="order-total" class="small" style="margin-top:6px"></div>
     <div class="small" style="margin-top:4px">Environment: ${env ? `<strong>${esc(env.name)}</strong>` : '<span class="muted">none (global variables only)</span>'}</div>
     <ul id="order-list" class="order-list"></ul>
@@ -1389,7 +1450,7 @@ function openRunModal(opts = {}) {
     </div>
   `, [
     { label: 'Cancel', onClick: closeModal },
-    { label: '▶ Start run', cls: 'accent', onClick: async () => {
+    { label: 'Start run', icon: 'play', cls: 'accent', onClick: async () => {
       if (!order.length) return toast('Nothing to run', 'error');
       const body = {
         request_ids: order.map((s) => s.id),
@@ -1460,7 +1521,7 @@ async function startRun(body) {
   } catch (e) { toast(e.message, 'error'); }
 }
 // "Run now": the selected requests straight away, with the last run's options and no name.
-// Replay the ⚡ flash on every press (the class is removed again when the animation ends).
+// Replay the lightning flash on every press (the class is removed again when the animation ends).
 function zap(btn) {
   if (!btn) return;
   btn.classList.remove('zap');
@@ -1472,7 +1533,7 @@ function runSelectedNow() {
   if (!state.selected.length) return;
   zap($('#btn-run-now'));
   const n = state.selected.reduce((a, s) => a + (s.n || 1), 0);
-  toast(`⚡ Running ${state.selected.length} request${state.selected.length === 1 ? '' : 's'} now (${n} send${n === 1 ? '' : 's'})`, 'ok');
+  toast(`Running ${state.selected.length} request${state.selected.length === 1 ? '' : 's'} now (${n} send${n === 1 ? '' : 's'})`, 'ok', null, 'zap');
   const last = lastRunOptions();
   startRun({ request_ids: state.selected.map((s) => s.id), name: '', parallel: !!appSettings.parallel, concurrency: appSettings.concurrency || 8,
              ...Object.fromEntries(RUN_OPTION_KEYS.filter((k) => k in last).map((k) => [k, last[k]])), iterations: 1, data: [] });
@@ -1569,7 +1630,7 @@ function resultRow(run, r) {
   return `<li class="result-item ${r.status === 'failed' ? 'failed' : ''}" data-rid="${r.id}">
     <span class="pos">${r.position}</span>
     <span class="name">${iter}<span class="method m-${esc(r.method)}">${esc(r.method)}</span> ${esc(r.request_name)}${r.body_name ? ` <span class="bn">· ${esc(r.body_name)}</span>` : ''}</span>
-    <span class="meta">${tests.length ? `<span class="tcount ${tf ? 'fail' : 'pass'}" title="${tests.length - tf} of ${tests.length} tests passed">${tf ? '✕' : '✓'} ${tests.length - tf}/${tests.length}</span>` : ''}<span class="status ${codeCls}">${code == null ? 'ERR' : code}</span><span class="muted">${fmtMs(r.duration_ms)}</span></span>
+    <span class="meta">${tests.length ? `<span class="tcount ${tf ? 'fail' : 'pass'}" title="${tests.length - tf} of ${tests.length} tests passed">${icon(tf ? 'x' : 'check')} ${tests.length - tf}/${tests.length}</span>` : ''}<span class="status ${codeCls}">${code == null ? 'ERR' : code}</span><span class="muted">${fmtMs(r.duration_ms)}</span></span>
   </li>`;
 }
 
@@ -1594,8 +1655,8 @@ function openResultModal(run, r) {
       ${r.request_id ? `<button class="small" id="res-goto">Open request</button>` : ''}
     </div>
     ${r.error ? `<pre class="mono err-text">${esc(r.error)}</pre>` : ''}
-    ${tests.length ? `<div class="detail-section"><h4>Tests</h4><ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${t.passed ? '✓' : '✕'}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul></div>` : ''}
-    ${ext.length ? `<div class="detail-section"><h4>Extracted variables</h4><ul class="test-results">${ext.map((e) => `<li class="${e.ok ? 'pass' : 'fail'}"><span class="mark">${e.ok ? '✓' : '✕'}</span><span class="tn mono">${esc(e.name)}${e.ok ? ' = ' + esc(String(e.value).slice(0, 120)) : ''}</span><span class="note muted small">${esc(e.ok ? e.scope : e.note)}</span></li>`).join('')}</ul></div>` : ''}
+    ${tests.length ? `<div class="detail-section"><h4>Tests</h4><ul class="test-results">${tests.map((t) => `<li class="${t.passed ? 'pass' : 'fail'}"><span class="mark">${icon(t.passed ? 'check' : 'x')}</span><span class="tn">${esc(t.name)}</span><span class="note muted small">${esc(t.note || '')}</span></li>`).join('')}</ul></div>` : ''}
+    ${ext.length ? `<div class="detail-section"><h4>Extracted variables</h4><ul class="test-results">${ext.map((e) => `<li class="${e.ok ? 'pass' : 'fail'}"><span class="mark">${icon(e.ok ? 'check' : 'x')}</span><span class="tn mono">${esc(e.name)}${e.ok ? ' = ' + esc(String(e.value).slice(0, 120)) : ''}</span><span class="note muted small">${esc(e.ok ? e.scope : e.note)}</span></li>`).join('')}</ul></div>` : ''}
     <div class="detail-section"><h4>Files</h4><div class="files">${files || '<span class="muted">none</span>'}</div></div>
     <div class="detail-section"><h4>Response body</h4><div id="res-viewer"></div></div>
     <div class="detail-section"><h4>Response headers</h4><pre class="mono">${esc((resp ? resp.headers : []).map(([k, v]) => `${k}: ${v}`).join('\n'))}</pre></div>
@@ -1617,7 +1678,7 @@ async function loadHistory(before = null) {
     const html = runs.map((r) => `
       <div class="history-item" data-id="${r.id}">
         <div class="line"><span class="name">${esc(r.name)}</span><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
-          <button class="icon link" data-del="${r.id}" title="Delete from run history (files are kept)" aria-label="Delete run from history">✕</button></div>
+          <button class="icon link" data-del="${r.id}" title="Delete from run history (files are kept)" aria-label="Delete run from history">${icon('x')}</button></div>
         <div class="line muted small"><span>${fmtDate(r.started_at)}</span><span>· ${r.completed}/${r.total} sent</span><span>· ${r.failed} failed</span>${r.options && r.options.environment ? `<span>· ${esc(r.options.environment)}</span>` : ''}</div>
       </div>`).join('') + (runs.length === RUN_PAGE ? `<button class="link small load-more" data-before="${runs[runs.length - 1].started_at}">Show older runs…</button>` : '');
     if (before) box.insertAdjacentHTML('beforeend', html); else box.innerHTML = html;
@@ -1749,7 +1810,7 @@ function dialog({ title, message = '', field = null, buttons, danger = false }) 
     }
     back.innerHTML = `
       <div class="dialog ${danger ? 'danger' : ''}" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title">
-        <div class="dialog-head"><span class="dialog-icon">${danger ? '!' : field ? '✎' : '?'}</span><h3 id="dlg-title">${esc(title)}</h3></div>
+        <div class="dialog-head"><span class="dialog-icon">${danger ? '!' : field ? icon('pencil') : '?'}</span><h3 id="dlg-title">${esc(title)}</h3></div>
         ${message ? `<div class="dialog-msg">${message}</div>` : ''}
         ${fieldHtml}
         <div class="dialog-foot"></div>
@@ -1842,7 +1903,7 @@ function folderOptions(excludeIds = new Set()) {
   const opts = [{ value: '', label: '— Top level (no folder) —' }];
   const walk = (parent, depth) => {
     state.folders.filter((f) => (f.parent_id || '') === parent && !excludeIds.has(f.id))
-      .forEach((f) => { opts.push({ value: f.id, label: `${'   '.repeat(depth)}📁 ${f.name}` }); walk(f.id, depth + 1); });
+      .forEach((f) => { opts.push({ value: f.id, label: `${'   '.repeat(depth)}${f.name}` }); walk(f.id, depth + 1); });
   };
   walk('', 0);
   return opts;
@@ -1897,7 +1958,7 @@ function requestRow(r, depth) {
     `<input type="checkbox" ${isSelected(r.id) ? 'checked' : ''} title="Select for run">` +
     (typeof isWsUrl === 'function' && isWsUrl(r.url) ? '<span class="method m-WS" title="WebSocket">WS</span>' : `<span class="method m-${esc(r.method)}">${esc(r.method)}</span>`) +
     `<div style="min-width:0"><div class="name">${esc(r.name)}${sendCount(r) > 1 ? `<span class="bcount" title="Checked bodies">×${sendCount(r)}</span>` : ''}</div><div class="sub">${tags}${esc(r.url)}</div></div>` +
-    '<button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">⋯</button>';
+    '<button class="more" title="More actions" aria-label="More actions" aria-haspopup="menu">' + icon('more') + '</button>';
   $('.more', li).addEventListener('click', (e) => { e.stopPropagation(); openReqMenu(r, e.currentTarget); });
   li.addEventListener('contextmenu', (e) => { e.preventDefault(); openReqMenu(r, li, { x: e.clientX, y: e.clientY }); });
   $('input', li).addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(r); });
@@ -1914,9 +1975,9 @@ function folderRow(f, depth, list, open) {
   const nSel = list.filter((r) => isSelected(r.id)).length;
   li.innerHTML =
     `<input type="checkbox" title="Select every request in this folder" ${list.length ? '' : 'disabled'} ${list.length && nSel === list.length ? 'checked' : ''}>` +
-    `<span class="fname"><span class="caret">▶</span><svg class="ficon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><span class="t">${esc(f.name)}</span></span>` +
+    `<span class="fname"><span class="caret">${icon('chevron-right')}</span><svg class="ficon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><span class="t">${esc(f.name)}</span></span>` +
     `<span class="fcount">${list.length}</span>` +
-    '<button class="more" title="Folder actions" aria-label="Folder actions" aria-haspopup="menu">⋯</button>';
+    '<button class="more" title="Folder actions" aria-label="Folder actions" aria-haspopup="menu">' + icon('more') + '</button>';
   const cb = $('input', li);
   cb.indeterminate = nSel > 0 && nSel < list.length;
   cb.addEventListener('click', (e) => {
@@ -2000,7 +2061,7 @@ function closeMenu() {
 function openMenu(key, anchor, at, items) {
   const already = $('#ctx-menu') && $('#ctx-menu').dataset.key === key;
   closeMenu();
-  if (already && !at) return; // a second click on ⋯ closes it
+  if (already && !at) return; // a second click on the more button closes it
   const m = document.createElement('div');
   m.id = 'ctx-menu';
   m.className = 'menu';
@@ -2012,7 +2073,7 @@ function openMenu(key, anchor, at, items) {
     b.setAttribute('role', 'menuitem');
     b.dataset.act = it.act;
     if (it.danger) b.className = 'danger';
-    b.innerHTML = `<span class="mi">${it.icon}</span>${esc(it.label)}`;
+    b.innerHTML = `<span class="mi">${icon(it.icon)}</span>${esc(it.label)}`;
     b.addEventListener('click', () => { closeMenu(); it.run(); });
     m.appendChild(b);
   });
@@ -2036,28 +2097,28 @@ function openMenu(key, anchor, at, items) {
 }
 function openReqMenu(r, anchor, at) {
   openMenu('r:' + r.id, anchor, at, [
-    { act: 'dup', icon: '⧉', label: 'Duplicate', run: () => duplicateRequestById(r.id) },
-    { act: 'move', icon: '↪', label: 'Move to folder…', run: () => moveRequestDialog(r) },
-    { act: 'share', icon: '🔗', label: 'Share link…', run: () => shareDialog('request', r.id, r.name) },
+    { act: 'dup', icon: 'copy', label: 'Duplicate', run: () => duplicateRequestById(r.id) },
+    { act: 'move', icon: 'move', label: 'Move to folder…', run: () => moveRequestDialog(r) },
+    { act: 'share', icon: 'link', label: 'Share link…', run: () => shareDialog('request', r.id, r.name) },
     '-',
-    { act: 'del', icon: '🗑', label: 'Delete', danger: true, run: () => deleteRequestById(r.id, r.name) },
+    { act: 'del', icon: 'trash', label: 'Delete', danger: true, run: () => deleteRequestById(r.id, r.name) },
   ]);
 }
 function openFolderMenu(f, anchor, at) {
   openMenu('f:' + f.id, anchor, at, [
-    { act: 'add-req', icon: '＋', label: 'Add request', run: () => newRequest(f.id) },
-    { act: 'add-folder', icon: '📁', label: 'Add folder', run: () => createFolder(f.id) },
-    { act: 'run', icon: '▶', label: 'Run folder', run: () => runFolder(f) },
+    { act: 'add-req', icon: 'plus', label: 'Add request', run: () => newRequest(f.id) },
+    { act: 'add-folder', icon: 'folder-plus', label: 'Add folder', run: () => createFolder(f.id) },
+    { act: 'run', icon: 'play', label: 'Run folder', run: () => runFolder(f) },
     '-',
-    { act: 'settings', icon: '⚙', label: 'Settings (auth, headers, variables)…', run: () => openFolderSettings(f) },
-    { act: 'export', icon: '🚀', label: 'Export as Postman collection', run: () => exportPostman(false, f.id) },
-    { act: 'docs', icon: '📄', label: 'Export documentation (Markdown)', run: () => exportDocs(f.id) },
-    { act: 'docs-html', icon: '🌐', label: 'Export documentation (HTML page)', run: () => exportDocs(f.id, 'html') },
-    { act: 'share', icon: '🔗', label: 'Share link…', run: () => shareDialog('folder', f.id, f.name) },
+    { act: 'settings', icon: 'settings', label: 'Settings (auth, headers, variables)…', run: () => openFolderSettings(f) },
+    { act: 'export', icon: 'package', label: 'Export as Postman collection', run: () => exportPostman(false, f.id) },
+    { act: 'docs', icon: 'file-text', label: 'Export documentation (Markdown)', run: () => exportDocs(f.id) },
+    { act: 'docs-html', icon: 'globe', label: 'Export documentation (HTML page)', run: () => exportDocs(f.id, 'html') },
+    { act: 'share', icon: 'link', label: 'Share link…', run: () => shareDialog('folder', f.id, f.name) },
     '-',
-    { act: 'rename', icon: '✎', label: 'Rename', run: () => renameFolder(f) },
-    { act: 'move', icon: '↪', label: 'Move to…', run: () => moveFolderDialog(f) },
-    { act: 'del', icon: '🗑', label: 'Delete', danger: true, run: () => deleteFolder(f) },
+    { act: 'rename', icon: 'pencil', label: 'Rename', run: () => renameFolder(f) },
+    { act: 'move', icon: 'move', label: 'Move to…', run: () => moveFolderDialog(f) },
+    { act: 'del', icon: 'trash', label: 'Delete', danger: true, run: () => deleteFolder(f) },
   ]);
 }
 
@@ -2271,15 +2332,15 @@ async function deleteProjectDialog(p) {
 function openProjectMenu(anchor) {
   const cur = projectsInfo.current;
   const items = projectsInfo.projects.map((p) => ({
-    act: 'p:' + p.id, icon: p.id === cur ? '✓' : '', label: p.name, run: () => switchProject(p.id),
+    act: 'p:' + p.id, icon: p.id === cur ? 'check' : '', label: p.name, run: () => switchProject(p.id),
   }));
   const others = projectsInfo.projects.filter((p) => p.id !== cur);
-  items.push('-', { act: 'new', icon: '＋', label: 'New project…', run: createProjectDialog });
-  items.push({ act: 'rename', icon: '✎', label: `Rename “${currentProject().name}”…`, run: renameProjectDialog });
-  items.push({ act: 'share', icon: '🔗', label: `Share “${currentProject().name}” with a link…`, run: () => shareDialog('project', '', currentProject().name) });
+  items.push('-', { act: 'new', icon: 'plus', label: 'New project…', run: createProjectDialog });
+  items.push({ act: 'rename', icon: 'pencil', label: `Rename “${currentProject().name}”…`, run: renameProjectDialog });
+  items.push({ act: 'share', icon: 'link', label: `Share “${currentProject().name}” with a link…`, run: () => shareDialog('project', '', currentProject().name) });
   if (others.length) {
     items.push('-');
-    others.forEach((p) => items.push({ act: 'del:' + p.id, icon: '🗑', label: `Delete “${p.name}”…`, danger: true, run: () => deleteProjectDialog(p) }));
+    others.forEach((p) => items.push({ act: 'del:' + p.id, icon: 'trash', label: `Delete “${p.name}”…`, danger: true, run: () => deleteProjectDialog(p) }));
   }
   openMenu('projects', anchor, null, items);
 }
@@ -2290,7 +2351,7 @@ function renderEnvSelect() {
   const active = state.envs.find((e) => e.id === state.activeEnvId);
   sel.innerHTML = '<option value="">No environment</option>' +
     state.envs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('') +
-    '<option disabled>──────────</option><option value="__new">＋ New environment…</option><option value="__manage">Manage environments…</option>';
+    '<option disabled>──────────</option><option value="__new">+ New environment…</option><option value="__manage">Manage environments…</option>';
   sel.value = active ? active.id : '';
   const picker = sel.closest('.env-picker');
   picker.classList.toggle('on', !!active);
@@ -2355,8 +2416,8 @@ function renderEnvManager() {
   root.innerHTML = `
     <div class="env-list">
       ${state.envs.map((e) => `<div class="env-item ${e.id === envSave.id ? 'active-edit' : ''}" data-id="${e.id}"><span class="en">${esc(e.name)}</span>${e.id === state.activeEnvId ? '<span class="live">active</span>' : ''}</div>`).join('') || '<div class="muted small">No environments yet.</div>'}
-      <button id="env-add" class="link" style="text-align:left">＋ New environment</button>
-      ${quick.length ? `<div class="muted small" style="margin-top:8px">Quick add</div><div class="env-quick">${quick.map((p) => `<span class="chip" data-preset="${esc(p.name)}">＋ ${esc(p.name)}</span>`).join('')}</div>` : ''}
+      <button id="env-add" class="link" style="text-align:left">${icon('plus')} New environment</button>
+      ${quick.length ? `<div class="muted small" style="margin-top:8px">Quick add</div><div class="env-quick">${quick.map((p) => `<span class="chip" data-preset="${esc(p.name)}">${icon('plus')} ${esc(p.name)}</span>`).join('')}</div>` : ''}
     </div>
     <div id="env-editor"></div>`;
   $$('.env-item', root).forEach((el) => el.addEventListener('click', async () => {
@@ -2383,11 +2444,11 @@ function renderEnvEditor() {
   box.innerHTML = `
     <div class="env-edit-head">
       <input id="env-name" value="${esc(env.name)}" placeholder="Environment name" spellcheck="false">
-      <button id="env-activate" class="${isActive ? '' : 'accent'}">${isActive ? '✓ Active' : 'Set active'}</button>
-      <button id="env-dup" class="icon-btn" title="Duplicate environment" aria-label="Duplicate environment">⧉</button>
-      <button id="env-del" class="icon-btn danger" title="Delete environment" aria-label="Delete environment">🗑</button>
+      <button id="env-activate" class="${isActive ? '' : 'accent'}">${isActive ? icon('check') + ' Active' : 'Set active'}</button>
+      <button id="env-dup" class="icon-btn" title="Duplicate environment" aria-label="Duplicate environment">${icon('copy')}</button>
+      <button id="env-del" class="icon-btn danger" title="Delete environment" aria-label="Delete environment">${icon('trash')}</button>
     </div>
-    <p class="muted small env-note">These values override global variables with the same name while this environment is active. Unchecked rows are ignored. 🔒 marks a secret: masked on screen and in saved history and run files. <span id="env-save-state" class="save-state saved">Saved</span></p>
+    <p class="muted small env-note">These values override global variables with the same name while this environment is active. Unchecked rows are ignored. ${icon('lock')} marks a secret: masked on screen and in saved history and run files. <span id="env-save-state" class="save-state saved">Saved</span></p>
     <div id="kv-env" class="kv"></div>`;
   $('#kv-env', box).dataset.secrets = '1';
   renderKv($('#kv-env', box), env.variables, true);
@@ -2522,7 +2583,7 @@ function conDetail(e) {
   general.push(['Environment', e.environment || 'none'], ['Source', e.source],
     ['Request', e.request_name + (e.body_name ? ` · body “${e.body_name}”` : '')], ['Sent at', new Date(e.ts * 1000).toLocaleString()]);
   return `<div class="c-detail">
-    ${e.error ? `<div class="c-err">✕ ${esc(e.error)}</div>` : ''}
+    ${e.error ? `<div class="c-err">${iconText('x', e.error)}</div>` : ''}
     <details open><summary>General</summary>${kvTable(general)}</details>
     <details open><summary>Request headers (${e.request.headers.length})</summary>${kvTable(e.request.headers)}</details>
     ${e.request.body ? `<details open><summary>Request body</summary>${conBody(e.request.body, undefined, e.request.body_truncated, e.seq, 'req')}</details>` : ''}
@@ -2547,7 +2608,7 @@ function renderConsole() {
     const open = con.expanded.has(e.seq);
     const label = e.request_name + (e.body_name ? ` · ${e.body_name}` : '');
     return `<div class="c-row ${open ? 'open' : ''} ${conIsError(e) ? 'err' : ''}" data-seq="${e.seq}" title="${esc(label)} (${esc(e.source)})">
-      <span class="caret">▶</span>
+      <span class="caret">${icon('chevron-right')}</span>
       <span class="ts">${fmtClock(e.ts)}</span>
       <span class="src">${esc(e.source)}</span>
       <span class="method m-${esc(e.method)}">${esc(e.method)}</span>
@@ -2678,7 +2739,7 @@ async function copyResponse() {
   if (!text) { toast('Nothing to copy', 'error'); return; }
   if (await copyText(text)) {
     btn.classList.add('done');
-    $('span', btn).textContent = 'Copied ✓';
+    $('span', btn).innerHTML = 'Copied ' + icon('check');
     clearTimeout(btn._t);
     btn._t = setTimeout(() => { btn.classList.remove('done'); $('span', btn).textContent = 'Copy'; }, 1500);
   } else toast('Could not copy to the clipboard', 'error');
@@ -2717,7 +2778,7 @@ async function saveSettings(patch) {
   } catch (e) { toast('Could not save settings: ' + e.message, 'error'); }
 }
 function openSettings(tab) {   // tab: the one to show ('git', 'network'…); also used as a click handler
-  const themes = [['dark', '☾', 'Dark'], ['light', '☀', 'Light'], ['system', '◐', 'System']];
+  const themes = [['dark', 'moon', 'Dark'], ['light', 'sun', 'Light'], ['system', 'contrast', 'System']];
   const s = appSettings;
   const sw = (id, label, desc, on) => `<label class="switch-row"><span class="txt"><b>${label}</b><span class="muted small">${desc}</span></span><span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></span></label>`;
   // a labelled field: the label above the control, an optional hint below (keeps every tab on one grid)
@@ -2731,7 +2792,7 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
       <div class="set-section">
         <h4>Appearance</h4>
         <div class="set-grid">
-          ${fld('Theme', `<div class="seg" id="set-theme" role="radiogroup" aria-label="Theme">${themes.map(([v, icon, label]) => `<button role="radio" data-theme="${v}" class="${s.theme === v ? 'on' : ''}" aria-checked="${s.theme === v}"><span>${icon}</span>${label}</button>`).join('')}</div>`, '', 'wide')}
+          ${fld('Theme', `<div class="seg" id="set-theme" role="radiogroup" aria-label="Theme">${themes.map(([v, ic, label]) => `<button role="radio" data-theme="${v}" class="${s.theme === v ? 'on' : ''}" aria-checked="${s.theme === v}"><span>${icon(ic)}</span>${label}</button>`).join('')}</div>`, '', 'wide')}
           ${fld('Layout', `<select id="set-layout"><option value="below" ${s.layout === 'below' ? 'selected' : ''}>Response below the request</option><option value="beside" ${s.layout === 'beside' ? 'selected' : ''}>Response beside the request</option></select>`, 'Also switchable from the status bar.')}
           ${fld('Font', `<select id="set-uifont">${UI_FONTS.map(([v, label, stack]) => `<option value="${v}" style="font-family:${esc(stack)}" ${(s.ui_font || 'inter') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`, 'For menus, labels and the sidebar.')}
           ${fld('Code font', `<select id="set-monofont">${MONO_FONTS.map(([v, label, stack]) => `<option value="${v}" style="font-family:${esc(stack)}" ${(s.mono_font || 'default') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`, 'For URLs, bodies and responses. A font that is not installed falls back to the default.')}
@@ -2742,10 +2803,10 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
         <h4>Requests</h4>
         <div class="switch-list">
           ${sw('set-ssl', 'Verify SSL certificates', 'Applies to every Send and run. Turn off only for local or test servers with self-signed or invalid certificates.', s.verify_ssl)}
-          <div id="set-ssl-warn" class="ssl-warn" ${s.verify_ssl ? 'hidden' : ''}>⚠ Certificates are not checked. Connections can be intercepted without warning.</div>
+          <div id="set-ssl-warn" class="ssl-warn" ${s.verify_ssl ? 'hidden' : ''}>${icon('warning')} Certificates are not checked. Connections can be intercepted without warning.</div>
           ${sw('set-redirects', 'Follow redirects', 'Default for every request; a request can override it in its Settings tab.', s.follow_redirects)}
           ${sw('set-cookies', 'Send and store cookies', 'Keep a cookie jar like a browser. Each request can opt out in its Settings tab.', s.send_cookies)}
-          ${sw('set-keyring', 'Keep 🔒 values in the system keychain', `The values of variables marked secret (environments and folders) are stored in ${s.keyring_name ? esc(s.keyring_name) : 'the operating system\'s credential store'} instead of this project\'s database file, which then holds no secrets. They stay on this computer: on another one, or after copying the data folder, type them in again.`, s.secrets_keyring)}
+          ${sw('set-keyring', `Keep ${icon('lock')} values in the system keychain`, `The values of variables marked secret (environments and folders) are stored in ${s.keyring_name ? esc(s.keyring_name) : 'the operating system\'s credential store'} instead of this project\'s database file, which then holds no secrets. They stay on this computer: on another one, or after copying the data folder, type them in again.`, s.secrets_keyring)}
           ${sw('set-parallel', 'Send in parallel', 'Send ×N (several bodies) and runs send everything at once instead of one after another. Fastest, but no order and no {{prev.…}}. The run dialog can override this per run.', s.parallel)}
         </div>
         <div class="set-grid">
@@ -2875,7 +2936,7 @@ function openSettings(tab) {   // tab: the one to show ('git', 'network'…); al
   const certs = (s.certs || []).map((c) => ({ ...c }));
   const drawCerts = () => {
     const box = $('#set-certs');
-    box.innerHTML = certs.length ? certs.map((c, i) => `<div class="cert-row"><input class="mono" data-i="${i}" data-k="host" value="${esc(c.host || '')}" placeholder="api.example.com"><input class="mono" data-i="${i}" data-k="cert" value="${esc(c.cert || '')}" placeholder="C:\\certs\\client.pem"><input class="mono" data-i="${i}" data-k="key" value="${esc(c.key || '')}" placeholder="key file (optional)"><button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove">✕</button></div>`).join('') : '<div class="muted small">No client certificates.</div>';
+    box.innerHTML = certs.length ? certs.map((c, i) => `<div class="cert-row"><input class="mono" data-i="${i}" data-k="host" value="${esc(c.host || '')}" placeholder="api.example.com"><input class="mono" data-i="${i}" data-k="cert" value="${esc(c.cert || '')}" placeholder="C:\\certs\\client.pem"><input class="mono" data-i="${i}" data-k="key" value="${esc(c.key || '')}" placeholder="key file (optional)"><button class="kv-del" data-del="${i}" title="Remove" aria-label="Remove">${icon('x')}</button></div>`).join('') : '<div class="muted small">No client certificates.</div>';
     $$('input', box).forEach((inp) => inp.addEventListener('change', () => { certs[inp.dataset.i][inp.dataset.k] = inp.value.trim(); saveSettings({ certs }); }));
     $$('[data-del]', box).forEach((b) => b.addEventListener('click', () => { certs.splice(Number(b.dataset.del), 1); saveSettings({ certs }); drawCerts(); }));
   };
@@ -3005,7 +3066,7 @@ function init() {
     if (e.key === 'Escape' && !$('#modal').hidden) closeModal();
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && state.current) {
       e.preventDefault();
-      // Shift: only the body being viewed, like its ➤ button
+      // Shift: only the body being viewed, like its send button
       if (e.shiftKey && activeBody() && $('#f-body-type').value !== 'none') sendOneBody(state.activeBodyId); else sendCurrent();
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && state.current) { e.preventDefault(); autosave.dirty = true; saveNow().then(() => toast('Saved', 'ok')); }

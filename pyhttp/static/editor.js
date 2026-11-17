@@ -343,7 +343,7 @@ function enhanceTextarea(ta, opts = {}) {
     state: C.EditorState.create({
       doc: ta.value,
       extensions: [
-        C.lineNumbers(), C.foldGutter({ openText: '▾', closedText: '▸' }), C.lintGutter(),
+        C.lineNumbers(), C.foldGutter({ markerDOM: (open) => { const m = document.createElement('span'); m.title = open ? 'Fold line' : 'Unfold line'; m.innerHTML = icon(open ? 'chevron-down' : 'chevron-right', 12); return m; } }), C.lintGutter(),
         C.highlightActiveLineGutter(), C.highlightActiveLine(), C.highlightSpecialChars(),
         C.history(), C.drawSelection(), C.dropCursor(), C.indentOnInput(), C.bracketMatching(),
         C.closeBrackets(), C.highlightSelectionMatches(), C.search({ top: true }),
@@ -413,11 +413,11 @@ function enhanceTextarea(ta, opts = {}) {
     status.hidden = false;
     if (res.empty) { status.textContent = ''; status.hidden = true; view.dispatch(C.setDiagnostics(view.state, [])); return res; }
     if (res.ok) {
-      status.classList.add('ok'); status.textContent = '✓ ' + res.message;
+      status.classList.add('ok'); status.innerHTML = iconText('check', res.message);
       view.dispatch(C.setDiagnostics(view.state, []));
     } else {
       status.classList.add('err');
-      status.textContent = `✕ Line ${res.line}, col ${res.col}: ${res.message}`;
+      status.innerHTML = iconText('x', `Line ${res.line}, col ${res.col}: ${res.message}`);
       status.title = 'Click to jump to the error';
       status.onclick = () => jumpTo(res.line, res.col);
       const from = posOf(res.line, res.col);

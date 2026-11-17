@@ -116,7 +116,7 @@ function renderMonitorPage() {
         <label class="switch-label" title="Pause or resume this monitor"><span class="switch"><input type="checkbox" data-act="toggle" ${m.enabled ? 'checked' : ''}><span></span></span>${m.enabled ? 'On' : 'Paused'}</label>
         <button data-act="edit">Edit</button>
         <button class="danger" data-act="del">Delete</button>
-        <button class="primary" data-act="run">▶ Run now</button>
+        <button class="primary" data-act="run">${icon('play')} Run now</button>
       </div>
     </div>
     <div class="page-tiles">
@@ -209,7 +209,7 @@ function renderMonitorOverview(view) {
       <div class="page-actions">
         <button data-act="pause-all" ${on ? '' : 'disabled'} title="Switch every monitor off">Pause all</button>
         <button data-act="resume-all" ${on === mon.list.length ? 'disabled' : ''} title="Switch every monitor on">Resume all</button>
-        <button data-act="run-all" ${on ? '' : 'disabled'} title="Send a check of every monitor that is on, now">▶ Run all now</button>
+        <button data-act="run-all" ${on ? '' : 'disabled'} title="Send a check of every monitor that is on, now">${icon('play')} Run all now</button>
         <button class="primary" data-act="new">+ New monitor</button>
       </div>
     </div>
@@ -372,11 +372,11 @@ function renderMockRoutes(m) {
     <td class="muted">${r.delay_ms ? fmtMs(r.delay_ms) : ''}</td>
     <td class="muted">${r.hits || 0}</td>
     <td class="mock-acts">
-      <button class="link small" data-act="up" title="Move up: the first matching route wins" ${i === 0 || q ? 'disabled' : ''}>↑</button>
-      <button class="link small" data-act="down" title="Move down" ${i === routes.length - 1 || q ? 'disabled' : ''}>↓</button>
+      <button class="link small" data-act="up" title="Move up: the first matching route wins" aria-label="Move up" ${i === 0 || q ? 'disabled' : ''}>${icon('arrow-up')}</button>
+      <button class="link small" data-act="down" title="Move down" aria-label="Move down" ${i === routes.length - 1 || q ? 'disabled' : ''}>${icon('arrow-down')}</button>
       <button class="link small" data-act="edit">Edit</button>
       <button class="link small" data-act="try" title="Open a new request pointing at this route">Try</button>
-      <button class="link small danger" data-act="del" title="Delete this route">✕</button>
+      <button class="link small danger" data-act="del" title="Delete this route" aria-label="Delete this route">${icon('x')}</button>
     </td></tr>`;
   }).join('');
   panel.innerHTML = `

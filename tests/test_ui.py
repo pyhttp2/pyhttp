@@ -1647,7 +1647,10 @@ def test_project_switch_from_topbar(page, servers):
     # the menu lists both, ticks the open one, and switching brings the other collection back
     page.click("#btn-project")
     labels = page.locator("#ctx-menu button").all_text_contents()
-    assert any("Default" in t for t in labels) and any("✓" in t and "Client X" in t for t in labels)
+    assert any("Default" in t for t in labels) and any("Client X" in t for t in labels)
+    # the open one carries the check icon, the other none
+    assert page.locator("#ctx-menu button:has-text('Client X') .mi svg.ic-check").count() == 1
+    assert page.locator("#ctx-menu button[data-act^='p:']:has-text('Default') .mi svg").count() == 0
     page.click("#ctx-menu button:has-text('Default')")
     page.wait_for_function("document.querySelector('#project-name').textContent === 'Default'")
     page.wait_for_selector("#req-list .req-item:has-text('In default')")

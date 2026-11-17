@@ -43,8 +43,8 @@
     <span class="brand-word">py<span>http</span></span>
   </div>
   <div class="topbar-actions">
-    <button id="btn-update" class="update-pill" hidden title="A newer version is available">⬆ Update</button>
-    <button id="btn-project" class="project-btn" title="Project: a separate workspace with its own requests, environments, history, mocks and monitors. Click to switch or create one"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span id="project-name">Project</span><span class="caret">▾</span></button>
+    <button id="btn-update" class="update-pill" hidden title="A newer version is available"><svg class="ic ic-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg> Update</button>
+    <button id="btn-project" class="project-btn" title="Project: a separate workspace with its own requests, environments, history, mocks and monitors. Click to switch or create one"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span id="project-name">Project</span><span class="caret"><svg class="ic ic-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></span></button>
     <button id="btn-git" class="git-btn" title="Git sync: keep this project's requests, environments and mocks in a Git repository, committed and pushed on every change"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.2v9.6M18 10.2c0 4-6 3-11.2 6.2"/></g></svg>Git<span id="git-dot" class="git-dot" hidden></span></button>
     <button id="btn-cloud" class="git-btn" title="Cloud sync: keep this project in step with your pyhttp account, on your other computers and on the web"><span id="cloud-dot" class="git-dot" hidden></span>Cloud</button>
     <div class="env-picker" title="Active environment: its variables override global variables">
@@ -53,7 +53,7 @@
     </div>
     <span class="tb-sep" aria-hidden="true"></span>
     <button id="btn-import" title="Import a pyhttp export, a Postman collection or environment, or a cURL command">Import</button>
-    <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export ▾</button>
+    <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export <svg class="ic ic-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
     <button id="btn-help" class="icon-btn settings-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
     <button id="btn-settings" class="icon-btn settings-btn" title="Settings: theme, SSL verification, redirects, proxy, certificates" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -95,7 +95,7 @@
           <span id="selected-count" class="muted small">0 selected</span>
           <button id="btn-clear-sel" class="link small" hidden>clear</button>
           <span class="run-group">
-            <button id="btn-run" class="accent" disabled title="Choose a name, order and options, then run">▶ Run selected</button>
+            <button id="btn-run" class="accent" disabled title="Choose a name, order and options, then run"><svg class="ic ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 5v14l11-7z" fill="currentColor"/></svg> Run selected</button>
             <button id="btn-run-now" class="icon" disabled title="Run now: skip the dialog and send the selected requests with the last run's options" aria-label="Run selected now"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z"/></svg></button>
           </span>
         </div>
@@ -157,14 +157,14 @@
         <button id="btn-code" class="icon-btn code-btn" title="Code snippet: cURL, Python, JavaScript… (Ctrl+Shift+C)" aria-label="Code snippet">&lt;/&gt;</button>
         <span class="send-group">
           <button id="btn-send" class="accent" title="Ctrl+Enter">Send</button>
-          <button id="btn-send-mode" class="accent send-mode" hidden title="How the checked bodies are sent: in order or in parallel">▾</button>
+          <button id="btn-send-mode" class="accent send-mode" hidden title="How the checked bodies are sent: in order or in parallel" aria-label="How the checked bodies are sent"><svg class="ic ic-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
         </span>
       </div>
       <div class="meta-bar">
         <span id="crumb" class="crumb"></span>
         <input id="f-name" class="name-inline" placeholder="Untitled request" title="Request name (click to rename)" spellcheck="false">
         <span id="meta-tags" class="meta-tags"></span>
-        <button id="btn-details" class="link small" title="Edit tags and description">Details ▾</button>
+        <button id="btn-details" class="link small" title="Edit tags and description">Details <svg class="ic ic-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
         <span class="grow"></span>
         <span id="save-state" class="save-state" title="Changes save automatically (Ctrl+S saves now)"></span>
       </div>
@@ -281,7 +281,7 @@
             <label class="field"><input type="checkbox" id="f-dep-retry" checked> If this request gets 401 or 403, refresh it and retry once</label>
             <div class="muted small" id="f-dep-status"></div>
           </div>
-          <p class="muted small">SSL verification, proxy, client certificates and the redirect default live in <button id="link-settings" class="link small" style="padding:0">⚙ Settings</button>.</p>
+          <p class="muted small">SSL verification, proxy, client certificates and the redirect default live in <button id="link-settings" class="link small" style="padding:0"><svg class="ic ic-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg> Settings</button>.</p>
         </div>
       </div>
       </div>
@@ -305,8 +305,8 @@
             <button data-tab="request">Request</button>
           </div>
           <button id="r-layout" class="copy-btn icon-only" title="Move the response to the right of the request" aria-label="Move the response beside the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="12" rx="1"/><rect x="9" y="2" width="5" height="12" rx="1" opacity=".45"/></svg></button>
-          <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)" aria-label="Maximize the response">⤢</button>
-          <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request" aria-label="Hide the response">▾</button>
+          <button id="r-max" class="copy-btn icon-only" title="Maximize the response (Esc restores)" aria-label="Maximize the response"><svg class="ic ic-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+          <button id="r-collapse" class="copy-btn icon-only" title="Hide the response to see the whole request" aria-label="Hide the response"><svg class="ic ic-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
           <button id="r-example" class="copy-btn icon-only" title="Pin this response to the request as an example (Examples tab): it goes into the documentation export and can answer a mock route" aria-label="Pin this response as an example">
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 4h6l-1 6 3 3H7l3-3-1-6zM12 13v7"/></svg>
           </button>
@@ -353,7 +353,7 @@
       <button data-tab="history" title="Collection runs and multi-body sends, newest first">Run history</button>
       <button data-tab="requests" title="Every request sent, newest first">Request history</button>
       <span class="grow"></span>
-      <button id="runs-close" class="icon-btn tabs-close" title="Hide this panel (the Runs button in the status bar brings it back)" aria-label="Hide the runs panel">✕</button>
+      <button id="runs-close" class="icon-btn tabs-close" title="Hide this panel (the Runs button in the status bar brings it back)" aria-label="Hide the runs panel"><svg class="ic ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
     </div>
     <div class="tab-panels grow-panels" id="runs-panels">
       <div id="run-current" class="tab-panel run-panel" data-panel="current">
@@ -385,7 +385,7 @@
     <span class="grow"></span>
     <button id="console-expand" class="link small" title="Expand or collapse all entries">Expand all</button>
     <button id="console-clear" class="link small" title="Clear the log">Clear</button>
-    <button id="console-close" class="icon-btn" title="Close console (Ctrl+Alt+C)" aria-label="Close console">✕</button>
+    <button id="console-close" class="icon-btn" title="Close console (Ctrl+Alt+C)" aria-label="Close console"><svg class="ic ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div id="console-list" class="console-list"></div>
 </section>
@@ -395,11 +395,11 @@
     Console <span id="console-count" class="sb-count"></span><span id="console-errcount" class="sb-count err" hidden></span>
   </button>
   <span id="sb-last" class="sb-last"></span>
-  <button id="sb-ssl" class="sb-ssl" hidden title="SSL certificate verification is off. Click to change.">⚠ SSL verification off</button>
-  <button id="sb-proxy" class="sb-ssl" hidden title="Requests go through a proxy. Click to change.">⇄ Proxy on</button>
-  <button id="sb-monitors" class="sb-ssl" hidden title="A monitor is failing. Click to see the checks.">⚠ Monitor failing</button>
+  <button id="sb-ssl" class="sb-ssl" hidden title="SSL certificate verification is off. Click to change."><svg class="ic ic-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10.3 4 2.4 17.8A2 2 0 0 0 4.1 20.8h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></svg> SSL verification off</button>
+  <button id="sb-proxy" class="sb-ssl" hidden title="Requests go through a proxy. Click to change."><svg class="ic ic-swap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M16 3.5 20 7.5l-4 4M20 7.5H4M8 20.5l-4-4 4-4M4 16.5h16"/></svg> Proxy on</button>
+  <button id="sb-monitors" class="sb-ssl" hidden title="A monitor is failing. Click to see the checks."><svg class="ic ic-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10.3 4 2.4 17.8A2 2 0 0 0 4.1 20.8h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></svg> Monitor failing</button>
   <span class="grow"></span>
-  <button id="sb-runs" class="status-btn" title="Show or hide the runs and history panel">▶ Runs &amp; history</button>
+  <button id="sb-runs" class="status-btn" title="Show or hide the runs and history panel"><svg class="ic ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 5v14l11-7z" fill="currentColor"/></svg> Runs &amp; history</button>
   <span id="sb-layout" class="sb-seg" title="Where the response is shown">
     <span class="sb-seg-label">Response</span>
     <button data-layout="below" class="on" title="Show the response below the request"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1" opacity=".45"/></svg>below</button>
@@ -422,7 +422,7 @@
 
 <div id="modal" class="modal-backdrop" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
-    <div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" class="link" aria-label="Close">✕</button></div>
+    <div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" class="link" aria-label="Close"><svg class="ic ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div id="modal-body" class="modal-body"></div>
     <div id="modal-foot" class="modal-foot"></div>
   </div>
