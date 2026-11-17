@@ -190,6 +190,15 @@ CREATE TABLE IF NOT EXISTS mock_calls (
     req_body    TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_mock_calls ON mock_calls(server_id, ts);
+CREATE TABLE IF NOT EXISTS flows (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    graph       TEXT NOT NULL DEFAULT '{}',
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL,
+    last_run_at REAL,
+    last_status TEXT
+);
 """
 
 _JSON_FIELDS = ("tags", "params", "headers", "bodies", "auth", "tests", "extract", "pre_vars", "options")
@@ -1648,6 +1657,62 @@ def update_monitor(monitor_id: str, **fields: Any) -> dict[str, Any] | None:
 def delete_monitor(monitor_id: str) -> bool:
     with _lock:
         cur = _c().execute("DELETE FROM monitors WHERE id = ?", (monitor_id,))
+        _c().commit()
+    return cur.rowcount > 0
+
+
+# -------------------------------------------------------------------- flows
+
+
+def _row_to_flow(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    try:
+        d["graph"] = json.loads(d["graph"]) or {}
+    except ValueError:
+        d["graph"] = {}
+    return d
+
+
+def list_flows() -> list[dict[str, Any]]:
+    with _lock:
+        rows = _c().execute("SELECT * FROM flows ORDER BY created_at").fetchall()
+    return [_row_to_flow(r) for r in rows]
+
+
+def get_flow(flow_id: str) -> dict[str, Any] | None:
+    with _lock:
+        row = _c().execute("SELECT * FROM flows WHERE id = ?", (flow_id,)).fetchone()
+    return _row_to_flow(row) if row else None
+
+
+def create_flow(name: str, graph: dict[str, Any]) -> dict[str, Any]:
+    fid = uuid.uuid4().hex
+    now = time.time()
+    with _lock:
+        _c().execute("INSERT INTO flows (id, name, graph, created_at, updated_at) VALUES (?,?,?,?,?)",
+                     (fid, str(name or "Flow"), json.dumps(graph), now, now))
+        _c().commit()
+    return get_flow(fid)  # type: ignore[return-value]
+
+
+def update_flow(flow_id: str, **fields: Any) -> dict[str, Any] | None:
+    """``name``, ``graph``, ``last_run_at``, ``last_status``. Only an edit moves ``updated_at``."""
+    fields = {k: v for k, v in fields.items() if k in ("name", "graph", "last_run_at", "last_status")}
+    if "graph" in fields:
+        fields["graph"] = json.dumps(fields["graph"])
+    if "name" in fields or "graph" in fields:
+        fields["updated_at"] = time.time()
+    if fields:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        with _lock:
+            _c().execute(f"UPDATE flows SET {cols} WHERE id = ?", (*fields.values(), flow_id))
+            _c().commit()
+    return get_flow(flow_id)
+
+
+def delete_flow(flow_id: str) -> bool:
+    with _lock:
+        cur = _c().execute("DELETE FROM flows WHERE id = ?", (flow_id,))
         _c().commit()
     return cur.rowcount > 0
 

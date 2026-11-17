@@ -44,6 +44,17 @@ only on `127.0.0.1`.
   (Ctrl/Cmd+Shift+Enter does the same for the body in the editor); its ⋯ menu
   duplicates, reorders or deletes a body without opening it.
 - **Search** across name, description, URL, tags and body names; filter by tag chips.
+- **Flows** (topbar → Flows): saved requests wired into a small program, drawn as blocks on
+  a canvas. Blocks: *Send request* (ports ok / fail), *Wait for email* (received / timeout),
+  *Set variable*, *If* (true / false), *Wait*, *Log*, *Stop*. Drag from a port to the block
+  that runs next; a port without a wire ends the flow. Values are templates: everything a
+  request can use, plus what the flow made (`{{name}}` from *Set variable*, and
+  `{{email.code}}`, `{{email.link}}`, `{{email.subject}}`, `{{email.from}}`, `{{email.text}}`
+  from the last email). A run shows each block's result as it finishes; what it sends is in
+  the history. *Wait for email* needs a mail system: pyhttp on the web gives every account a
+  test inbox, the desktop app has none (the block takes its "timeout" port). Use cases: sign
+  up, wait for the verification mail, send its code on; password reset; create, then poll
+  until ready; a smoke test that branches on a status.
 - **Monitors** (topbar → Monitors): picked requests are sent again every N
   minutes while the app is open. A check fails when a request errors, answers
   4xx/5xx or fails a test; failing monitors show in the status bar and can POST

@@ -22,6 +22,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/features.css">
+<link rel="stylesheet" href="/static/flows.css">
 </head>
 <body>
 <header class="topbar">
@@ -52,6 +53,7 @@
     <button id="btn-variables" title="Global variables, used by every environment">Variables</button>
     <button id="btn-cookies" title="Cookie jar: cookies stored from responses and sent with requests">Cookies</button>
     <button id="btn-monitors" title="Scheduled checks: picked requests sent on an interval while the app is open; failures are flagged and can ping a webhook">Monitors<span id="mon-badge" class="tab-n fail" hidden></span></button>
+    <button id="btn-flows" title="Flows: saved requests wired into a small program. Send a request, wait for an email, pick a value out of it, decide, send the next one">Flows</button>
     <button id="btn-mocks" title="Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on (http://host:port/mock/&lt;name&gt;/…)">Mocks<span id="mock-badge" class="tab-n" hidden></span></button>
     <button id="btn-import" title="Import a pyhttp export, a Postman collection or environment, or a cURL command">Import</button>
     <button id="btn-export" title="Export as pyhttp JSON or as a Postman collection">Export ▾</button>
@@ -395,5 +397,6 @@
 <script src="/static/codegen.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/features.js"></script>
+<script src="/static/flows.js"></script>
 </body>
 </html>

@@ -1,0 +1,71 @@
+/* ------------------------------------------------------------------ flows */
+.modal.flow-modal { width: min(1500px, 97vw); height: 92vh; max-height: 92vh; }
+.flow-modal .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 10px 12px; }
+.flow-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.flow-bar #flow-name { width: 220px; font-weight: 600; }
+.flow-adds { display: flex; gap: 4px; flex-wrap: wrap; }
+.flow-add { padding: 3px 8px; }
+.flow-main { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.flow-canvas { flex: 1; min-width: 0; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 20px 20px; }
+.flow-area { position: relative; width: 3200px; height: 2000px; }
+.flow-wires { position: absolute; inset: 0; width: 100%; height: 100%; }
+.fw { fill: none; stroke: var(--muted); stroke-width: 2; pointer-events: none; }
+.fw.p-ok, .fw.p-received, .fw.p-true { stroke: var(--ok); }
+.fw.p-fail, .fw.p-timeout, .fw.p-false { stroke: var(--danger); }
+.fw.fw-new { stroke: var(--primary); stroke-dasharray: 5 4; }
+.fw-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; pointer-events: stroke; }
+.fw-hit:hover { stroke: rgba(239, 68, 68, .25); }
+
+.flow-node { position: absolute; width: 210px; background: var(--bg-2); border: 1px solid var(--border); border-left: 4px solid var(--muted);
+  border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); user-select: none; }
+.flow-node.sel { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, .35); }
+.flow-node.t-start { border-left-color: var(--accent); }
+.flow-node.t-request { border-left-color: var(--primary); }
+.flow-node.t-email { border-left-color: #a855f7; }
+.flow-node.t-set { border-left-color: #14b8a6; }
+.flow-node.t-if { border-left-color: var(--warn); }
+.flow-node.t-stop { border-left-color: var(--danger); }
+.flow-node.r-running { box-shadow: 0 0 0 2px rgba(59, 130, 246, .7); }
+.flow-node.r-ok { box-shadow: 0 0 0 2px rgba(34, 197, 94, .7); }
+.flow-node.r-fail { box-shadow: 0 0 0 2px rgba(239, 68, 68, .8); }
+.fn-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 6px 5px 10px; cursor: grab; border-bottom: 1px solid var(--border); }
+.fn-head:active { cursor: grabbing; }
+.fn-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.fn-del { padding: 0 5px !important; color: var(--muted) !important; font-size: 12px; }
+.fn-del:hover { color: var(--danger) !important; text-decoration: none; }
+.fn-body { padding: 7px 10px; font-size: 13px; min-height: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fn-in { position: absolute; left: -8px; top: 9px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-2); border: 2px solid var(--muted); }
+.fn-ports { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding: 0 0 7px; }
+.fn-ports:empty { display: none; }
+.fn-port { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); cursor: crosshair; margin-right: -8px; padding-left: 14px; }
+.fn-port i { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); border: 2px solid var(--bg-2); box-shadow: 0 0 0 1px var(--muted); }
+.fn-port:hover i { background: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.fn-port.p-ok i, .fn-port.p-received i, .fn-port.p-true i { background: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+.fn-port.p-fail i, .fn-port.p-timeout i, .fn-port.p-false i { background: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+
+.flow-side { width: 330px; flex: none; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+.flow-config { flex: none; max-height: 55%; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 10px 12px; }
+.flow-config p { margin: 0 0 8px; }
+.flow-config-head { margin-bottom: 4px; }
+.flow-f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.flow-f input, .flow-f select { width: 100%; color: var(--text); }
+.flow-check { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.flow-log-head { flex: none; display: flex; align-items: center; gap: 8px; }
+.flow-log { flex: 1; min-height: 80px; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 6px; }
+.flow-log p { margin: 6px; }
+.flow-line { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 5px 7px; border-left: 3px solid var(--ok); border-radius: 4px; margin-bottom: 4px; background: var(--bg-2); cursor: pointer; font-size: 12px; }
+.flow-line.bad { border-left-color: var(--danger); }
+.flow-line.end { cursor: default; font-weight: 600; }
+.fl-what { color: var(--muted); }
+.fl-port { color: var(--text); }
+.fl-text { grid-column: 1 / -1; word-break: break-word; }
+.fl-ms { grid-row: 1; grid-column: 2; }
+
+.flow-inbox { background: var(--bg-3); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; line-height: 1.9; }
+.flow-mail-text { margin-top: 12px; max-height: 40vh; overflow: auto; background: var(--bg-3); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
+
+@media (max-width: 900px) {
+  .flow-main { flex-direction: column; }
+  .flow-side { width: auto; max-height: 45%; }
+}

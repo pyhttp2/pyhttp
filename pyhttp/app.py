@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (USER_AGENT, __version__, cloudsync, console, curl, db, docs, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
+from . import (USER_AGENT, __version__, cloudsync, console, curl, db, docs, flows, gitsync, mock, monitors, oauth2, openapi, postman, secretstore, wsclient,
                projects, runner, templating, updater)
 from .templating import build_context, render
 
@@ -114,6 +114,20 @@ class MonitorPatch(BaseModel):
     interval_s: int | None = None
     webhook_url: str | None = None
     enabled: bool | None = None
+
+
+class FlowIn(BaseModel):
+    name: str = "Flow"
+    graph: dict[str, Any] | None = None
+
+
+class FlowPatch(BaseModel):
+    name: str | None = None
+    graph: dict[str, Any] | None = None
+
+
+class FlowRunIn(BaseModel):
+    flow_id: str
 
 
 class MockRouteIn(BaseModel):
@@ -258,7 +272,7 @@ class DataFileIn(BaseModel):
 
 # Calls that edit nothing Git sync writes to files (sending, runs, history, cookies…): they do not
 # schedule a sync. Variables a script sets while sending go out with the next edit.
-_GIT_QUIET = ("/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
+_GIT_QUIET = ("/api/flow-runs", "/api/git", "/api/views", "/api/ws", "/api/send", "/api/runs", "/api/history", "/api/cookies", "/api/console", "/api/oauth",
               "/api/resolve", "/api/update", "/api/open-path", "/api/import/detect", "/api/import/parse")
 
 
@@ -511,6 +525,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     cloud = cloudsync.Syncer(data_dir, lambda: db.current().path, CloudProjects)   # idle until the user signs in
     sockets = wsclient.Manager()
+    flow_runs = flows.FlowManager()
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -525,6 +540,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             git.stop()
             cloud.stop()
             await sockets.close_all()
+            await flow_runs.stop_all()
             await asyncio.to_thread(git.flush)
 
     app = FastAPI(title="pyhttp", version=__version__, docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
@@ -1433,6 +1449,79 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         if not db.get_monitor(mid):
             raise HTTPException(404, "Monitor not found")
         return db.list_monitor_checks(mid, limit=min(max(limit, 1), 500))
+
+    # -------------------------------------------------------------- flows
+    # Saved requests wired into a small program (see flows.py). A run lives in this process;
+    # the UI reads its log with a long poll, like a WebSocket session.
+    def _flow_or_404(fid: str) -> dict[str, Any]:
+        flow = db.get_flow(fid)
+        if not flow:
+            raise HTTPException(404, "Flow not found")
+        return flow
+
+    def _flow_graph(graph: dict[str, Any] | None) -> dict[str, Any]:
+        try:
+            return flows.clean_graph(graph) if graph is not None else flows.new_graph()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/flows")
+    def list_flows() -> dict[str, Any]:
+        """The flows, and what the app can do in one: ``mail`` is the address the Email block
+        receives on, or empty where there is no mail system (the desktop app)."""
+        system = flows.mail()
+        bounds = flows.limits()
+        return {"flows": db.list_flows(), "mail": system.address() if system else "",
+                "limits": {"steps": bounds.steps, "wait_seconds": bounds.wait_seconds, "blocks": flows.MAX_BLOCKS}}
+
+    @app.post("/api/flows", status_code=201)
+    def create_flow(body: FlowIn) -> dict[str, Any]:
+        return db.create_flow(body.name.strip()[:flows.MAX_NAME] or "Flow", _flow_graph(body.graph))
+
+    @app.get("/api/flows/{fid}")
+    def get_flow(fid: str) -> dict[str, Any]:
+        return _flow_or_404(fid)
+
+    @app.put("/api/flows/{fid}")
+    def update_flow(fid: str, body: FlowPatch) -> dict[str, Any]:
+        _flow_or_404(fid)
+        fields: dict[str, Any] = {}
+        if body.name is not None:
+            fields["name"] = body.name.strip()[:flows.MAX_NAME] or "Flow"
+        if body.graph is not None:
+            fields["graph"] = _flow_graph(body.graph)
+        return db.update_flow(fid, **fields)  # type: ignore[return-value]
+
+    @app.delete("/api/flows/{fid}")
+    def delete_flow(fid: str) -> dict[str, Any]:
+        if not db.delete_flow(fid):
+            raise HTTPException(404, "Flow not found")
+        return {"ok": True}
+
+    @app.post("/api/flow-runs", status_code=201)
+    async def start_flow(body: FlowRunIn) -> dict[str, Any]:
+        flow = _flow_or_404(body.flow_id)
+        try:
+            return flow_runs.start(flow).snapshot()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    def _flow_run_or_404(rid: str) -> flows.Run:
+        run = flow_runs.runs.get(rid)
+        if run is None:
+            raise HTTPException(404, "This flow run is no longer kept. Run the flow again.")
+        return run
+
+    @app.get("/api/flow-runs/{rid}")
+    async def flow_run(rid: str, after: int = Query(0), wait: float = Query(0)) -> dict[str, Any]:
+        """The run's state and its log lines after number ``after``. With ``wait`` (seconds, at
+        most 25) the call stays open until something happens."""
+        return await _flow_run_or_404(rid).wait(after, min(max(wait, 0.0), 25.0))
+
+    @app.post("/api/flow-runs/{rid}/cancel")
+    async def cancel_flow(rid: str) -> dict[str, Any]:
+        _flow_run_or_404(rid)
+        return {"cancelled": flow_runs.cancel(rid)}
 
     # ------------------------------------------------------------ mock servers
     # Mocks are answered by this very app, so they live on the port pyhttp already
