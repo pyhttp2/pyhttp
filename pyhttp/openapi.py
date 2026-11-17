@@ -25,9 +25,31 @@ def parse_text(text: str) -> Any:
     except ImportError:
         raise ValueError("not valid JSON (YAML needs the PyYAML package)") from None
     try:
-        return yaml.safe_load(text)
+        data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ValueError(f"not valid JSON or YAML: {exc}") from None
+    # YAML aliases (&a ... *a) share one object: written out again, nine aliases nine deep are
+    # 387 million nodes from a few hundred bytes
+    if _nodes(data, MAX_NODES) > MAX_NODES:
+        raise ValueError("the file is too large once its YAML aliases are written out")
+    return data
+
+
+MAX_NODES = 2_000_000       # values in a spec, counting what an alias points to each time it is used
+MAX_EXAMPLE_NODES = 20_000  # values in one generated example body
+
+
+def _nodes(value: Any, limit: int) -> int:
+    """How many values are in ``value``, counted the way a serialiser walks it. Stops past ``limit``."""
+    seen, stack = 0, [value]
+    while stack and seen <= limit:
+        item = stack.pop()
+        seen += 1
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return seen
 
 
 # ------------------------------------------------------------------ OpenAPI
@@ -41,6 +63,7 @@ def is_openapi(data: Any) -> bool:
 class _Spec:
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
+        self._room = MAX_EXAMPLE_NODES   # left for the example being built (schemas that refer to each other fan out)
 
     def deref(self, obj: Any, seen: frozenset[str] = frozenset()) -> Any:
         """Follow a local $ref (#/components/...); unknown or circular refs become {}."""
@@ -58,6 +81,11 @@ class _Spec:
 
     def example(self, schema: Any, depth: int = 0, seen: frozenset[str] = frozenset()) -> Any:
         """A sample value for a JSON schema: example, default, enum[0], or a typed placeholder."""
+        if depth == 0 and not seen:
+            self._room = MAX_EXAMPLE_NODES
+        self._room -= 1
+        if self._room < 0:
+            return None
         if isinstance(schema, dict) and isinstance(schema.get("$ref"), str):
             ref = schema["$ref"]
             if ref in seen:

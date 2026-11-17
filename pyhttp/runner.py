@@ -456,7 +456,8 @@ async def _execute_once(req: dict[str, Any], ctx: dict[str, Any], on_chunk: Any 
             req, report, local_vars = scripts.run_pre_request(pre_code, req, ctx["vars"], db.set_variable)
             ctx["vars"].update(local_vars)
         else:
-            report = jsengine.run(pre_code, _js_state(req, ctx, None), event="prerequest")
+            # in a thread: the app keeps answering while a script runs (or spins until its time is up)
+            report = await asyncio.to_thread(jsengine.run, pre_code, _js_state(req, ctx, None), event="prerequest")
             if report["ok"] and report.get("request"):
                 req = _apply_js_request(req, report["request"])
             extracted_by_script += _apply_js_vars(report, req, ctx)
@@ -637,7 +638,7 @@ async def _execute_once(req: dict[str, Any], ctx: dict[str, Any], on_chunk: Any 
         "_json": parsed,
         "_content": raw,
     }
-    _finish(result, req, ctx)
+    await asyncio.to_thread(_finish, result, req, ctx)   # tests, extractions and test scripts: not on the event loop
     return result
 
 

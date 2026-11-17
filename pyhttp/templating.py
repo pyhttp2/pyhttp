@@ -26,6 +26,10 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 _TOKEN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+# The most one rendered text may come to. A variable used many times, or a variable holding the
+# output of the last such text, multiplies: without an end, a few lines ask for gigabytes.
+MAX_OUTPUT = 64 * 1024 * 1024
+MAX_RANDOM_STRING = 100_000
 _SEG = re.compile(r"^([^\[\]]*)((?:\[\d+\])*)$")
 _IDX = re.compile(r"\[(\d+)\]")
 _FIRST_NAMES = ["Alex", "Sam", "Maria", "Chen", "Priya", "Omar", "Lena", "Ravi", "Nina", "Jonas"]
@@ -45,7 +49,7 @@ DYNAMIC: dict[str, Callable[[list[str]], Any]] = {
     "$date": lambda a: datetime.now().strftime(a[0] if a else "%Y-%m-%d"),
     "$time": lambda a: datetime.now().strftime("%H:%M:%S"),
     "$randomInt": lambda a: random.randint(int(a[0]), int(a[1])) if len(a) >= 2 else random.randint(0, int(a[0]) if a else 1000),
-    "$randomString": lambda a: _random_string(int(a[0]) if a else 10),
+    "$randomString": lambda a: _random_string(min(max(int(a[0]), 0), MAX_RANDOM_STRING) if a else 10),
     "$randomBoolean": lambda a: random.choice([True, False]),
     "$randomEmail": lambda a: f"{_random_string(8).lower()}@example.com",
     "$randomFirstName": lambda a: random.choice(_FIRST_NAMES),
@@ -118,14 +122,21 @@ def render(text: str | None, ctx: dict[str, Any]) -> str:
     if not text or "{{" not in text:
         return text or ""
 
+    room = MAX_OUTPUT - len(text)
+
     def repl(m: re.Match[str]) -> str:
+        nonlocal room
         try:
             value = resolve(m.group(1), ctx)
         except _Missing:
             return m.group(0)
         if value is None:
             return m.group(0)
-        return to_text(value)
+        out = to_text(value)
+        room -= len(out)
+        if room < 0:
+            raise ValueError(f"The text grows past {MAX_OUTPUT // (1024 * 1024)} MB when its {{{{variables}}}} are filled in")
+        return out
 
     return _TOKEN.sub(repl, text)
 
