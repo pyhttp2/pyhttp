@@ -1407,7 +1407,9 @@ let tabsSignature = '';
 function renderReqTabs() {
   const box = $('#req-tabs');
   const cur = tabKey(state.current);
-  tabs.list = tabs.list.filter((t) => t.id === 'draft' ? (cur === 'draft') : state.requests.some((r) => r.id === t.id) || t.id === cur);
+  // a search or tag filter narrows state.requests: the tabs of the requests it hides stay open
+  const filtered = !!(state.q || state.tag);
+  tabs.list = tabs.list.filter((t) => t.id === 'draft' ? (cur === 'draft') : filtered || state.requests.some((r) => r.id === t.id) || t.id === cur);
   box.hidden = tabs.list.length === 0;
   const items = tabs.list.map((t) => {
     const r = t.id === 'draft' ? state.current : (cur === t.id ? state.current : state.requests.find((x) => x.id === t.id));
@@ -1421,7 +1423,68 @@ function renderReqTabs() {
       '<button class="rt-add" title="New request (Ctrl+N)">+</button>';
   }
   $$('.req-tab', box).forEach((el) => { $('.rt-dot', el).hidden = !(el.dataset.key === cur && autosave.dirty); });
+  saveSession();
 }
+
+// ---------------------------------------------------- the last session
+// The open tabs, their order, the one in front and the section of the rail are kept in the
+// project (/api/session), so a refresh of the web page or a restart of the desktop app reopens
+// them. Nothing is written until the saved session has been put back, or the empty window of
+// a fresh start would overwrite it.
+const session = { restored: false, sent: '', timer: null };
+function sessionNow() {
+  const cur = tabKey(state.current);
+  const flows = typeof flowUi !== 'undefined' ? flowUi : null;
+  return JSON.stringify({ tabs: tabs.list.map((t) => t.id).filter((id) => id !== 'draft'),
+                          current: cur && cur !== 'draft' ? cur : null, place: location.hash || '',
+                          // the flow in front stays the one in front while another section shows
+                          flow_tabs: flows ? flows.tabs.slice() : [],
+                          flow: flows ? (flows.flow ? flows.flow.id : flows.restore || null) : null });
+}
+function sendSession(body, keepalive = false) {
+  session.sent = body;
+  fetch('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive })
+    .catch(() => { if (session.sent === body) session.sent = ''; });
+}
+function saveSession() {
+  if (!session.restored) return;
+  const body = sessionNow();
+  clearTimeout(session.timer);
+  session.timer = null;
+  if (body === session.sent) return;
+  session.timer = setTimeout(() => { session.timer = null; sendSession(body); }, 400);
+}
+function flushSession() {
+  if (!session.restored || session.timer === null) return;
+  clearTimeout(session.timer);
+  session.timer = null;
+  sendSession(sessionNow(), true);
+}
+async function restoreSession() {
+  let saved = {};
+  try { saved = (await api('/session')) || {}; } catch { /* an older server: start empty */ }
+  try {
+    const known = new Set(state.requests.map((r) => r.id));
+    const ids = Array.isArray(saved.tabs) ? saved.tabs.filter((id) => known.has(id)) : [];
+    if (ids.length && !state.current) {
+      tabs.list = ids.map((id) => ({ id }));
+      const front = ids.includes(saved.current) ? saved.current : ids[ids.length - 1];
+      try { await openRequest(front); } catch { renderReqTabs(); }
+    }
+    if (typeof restoreFlowSession === 'function') restoreFlowSession(saved.flow_tabs, saved.flow);
+    // the section that was open: an address that names one (a link, the web page's refresh) wins
+    if (!location.hash && typeof saved.place === 'string' && /^#[\w-]+(\/[\w%.-]+)?$/.test(saved.place)
+        && typeof restorePlace === 'function') {
+      try { history.replaceState(history.state, '', saved.place); } catch { /* sandboxed */ }
+      restorePlace();
+    }
+  } finally {
+    session.restored = true;
+    session.sent = sessionNow();
+    saveSession();
+  }
+}
+window.addEventListener('pagehide', flushSession);
 // drag a tab left or right to reorder
 let tabDrag = null;
 function bindTabDrag(box) {
@@ -1509,6 +1572,11 @@ function bindShortcuts() {
     if (!$('#modal').hidden || $('.dialog-backdrop')) return;
     if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newRequest(state.current ? state.current.folder_id : null); return; }
     if (mod && !e.shiftKey && e.key.toLowerCase() === 'd' && state.current && state.current.id) { e.preventDefault(); duplicateRequestById(state.current.id); return; }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'w' && $('.layout').classList.contains('flow-mode')) {
+      e.preventDefault();   // the Flows section: the flow's tab, not a request's hidden behind it
+      if (flowUi.flow) closeFlowTab(flowUi.flow.id);
+      return;
+    }
     if (mod && !e.shiftKey && e.key.toLowerCase() === 'w' && state.current) { e.preventDefault(); closeTab(tabKey(state.current)); return; }
     if (mod && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); if (!sidebarShown()) setSidebar(true); $('#search').focus(); $('#search').select(); return; }
     if (mod && e.key === '\\') { e.preventDefault(); setSidebar(!sidebarShown()); return; }
@@ -2091,6 +2159,7 @@ async function loadMonitors(render = true) {
   let data;
   try { data = await api('/monitors'); } catch { return; }
   mon.list = data.monitors;
+  mon.loaded = true;
   const sb = $('#sb-monitors');
   sb.hidden = !data.failing;
   sb.innerHTML = icon('warning') + (data.failing === 1 ? ' 1 monitor failing' : ` ${data.failing} monitors failing`);
@@ -2166,6 +2235,7 @@ async function loadMocks(render = true) {
   let data;
   try { data = await api('/mocks'); } catch { return; }
   mocks.list = data.mocks;
+  mocks.loaded = true;
   mocks.baseUrl = data.base_url;
   const badge = $('#mock-badge');
   badge.hidden = !data.enabled;
@@ -2652,7 +2722,7 @@ function gitChanged(redraw = false) {
 // Called after every call that changes something. With Git sync on, the server commits a few
 // seconds after an edit; the status is polled every 4 seconds, which could miss that short
 // "waiting to be committed" state altogether. Ask again right after the edit instead.
-const GIT_QUIET = /^\/(git|send|ws|resolve|views|history|runs|console|oauth|cookies|open-path|update|import\/(detect|parse))/;
+const GIT_QUIET = /^\/(git|session|send|ws|resolve|views|history|runs|console|oauth|cookies|open-path|update|import\/(detect|parse))/;
 function gitNudge(path) {
   if (/^\/(variables|import)/.test(path || '')) wsLoadGlobals();   // global variables changed
   else if (/^\/(environments|folders)/.test(path || '')) setTimeout(wsRefresh, 0);

@@ -1135,6 +1135,42 @@ def test_monitor_scheduler_and_webhook(client, echo_url):
     assert mon["last_status"] == "fail" and mon["last_run_at"]
 
 
+def test_monitor_check_that_breaks_is_stored(client, echo_url, monkeypatch):
+    """A check that raises still leaves a failed row with the reason, so the status, the history
+    and the uptime agree (it used to say "failing" beside 100% uptime and an empty history)."""
+    import asyncio
+
+    from pyhttp import monitors as mons
+
+    rid = client.post("/api/requests", json={"name": "Fine", "url": echo_url + "/get"}).json()["id"]
+    mid = client.post("/api/monitors", json={"name": "Breaks", "request_ids": [rid], "interval_s": 60}).json()["id"]
+
+    async def broken(monitor):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(mons, "run_check", broken)
+
+    async def go():
+        await asyncio.gather(*mons.MonitorScheduler().tick())
+
+    asyncio.run(go())
+    mon = client.get("/api/monitors").json()["monitors"][0]
+    assert mon["last_status"] == "fail"
+    assert [c["ok"] for c in mon["recent"]] == [False]
+    checks = client.get(f"/api/monitors/{mid}/checks").json()
+    assert "disk full" in checks[0]["results"][0]["error"]
+
+
+def test_session_is_kept(client):
+    """The open tabs, the one in front and the section come back after a refresh or a restart."""
+    assert client.get("/api/session").json() == {}
+    saved = client.put("/api/session", json={"tabs": ["a", "b", 3], "current": "b", "place": "#monitors",
+                                             "flow_tabs": ["f1", "f2", None], "flow": "f2"}).json()
+    assert saved == {"tabs": ["a", "b"], "current": "b", "place": "#monitors", "flow_tabs": ["f1", "f2"], "flow": "f2"}
+    assert client.get("/api/session").json() == saved
+    assert "ui_session" not in client.get("/api/settings").json()   # not an app setting: never copied to a new project
+
+
 def test_send_stream(client, echo_url):
     """/api/send-stream: NDJSON events — status first, chunks as they arrive, then the full result."""
     with client.stream("POST", "/api/send-stream", json={"name": "SSE", "url": echo_url + "/sse"}) as r:

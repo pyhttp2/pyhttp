@@ -7,7 +7,7 @@
 // another block to wire them, click a wire to remove it. Changes save as they are made.
 // mailState: 'ready' (there is a test inbox), 'sign_in' (there is one after signing in to the
 // pyhttp cloud: the desktop app), 'offline' (signed in, the cloud does not answer)
-const flowUi = { list: [], mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
+const flowUi = { list: [], tabs: [], listed: false, restore: null, mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
                  loaded: false, poll: null, search: '',
                  checked: new Set(),      // flows ticked in the list, for Run selected
                  batch: null,             // the Run selected going (or just ended): its snapshot
@@ -47,6 +47,7 @@ const flowByEmail = (flow) => { const s = flowStart(flow); return !!(s && s.conf
 async function loadFlows() {
   const data = await api('/flows');
   flowUi.list = data.flows;
+  flowUi.listed = true;
   const before = flowUi.mailState + flowUi.mail;
   flowUi.mail = data.mail || '';
   flowUi.mailState = data.mail_state || (data.mail ? 'ready' : 'sign_in');
@@ -92,6 +93,12 @@ async function refreshFlows(quiet = false) {
   try { await loadFlows(); } catch (err) { if (!quiet) toast(err.message, 'error'); return; }
   renderFlowList();
   renderFlowInbox();
+  renderFlowTabs();
+  if (flowUi.restore) {   // the flow that was open before a refresh (pages.js restorePlace)
+    const f = flowUi.list.find((x) => x.id === flowUi.restore);
+    flowUi.restore = null;
+    if (f) { openFlow(f); return; }
+  }
   if (!flowUi.flow) renderFlowView();
 }
 
@@ -231,7 +238,8 @@ function renderFlowList() {
       if (!await confirmDialog('Delete flow?', `${strong(f.name)} will be removed. The requests it sends stay.`, { okLabel: 'Delete', danger: true })) return;
       try { await api('/flows/' + f.id, { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); }
       flowUi.checked.delete(f.id);
-      if (flowUi.flow && flowUi.flow.id === f.id) { clearTimeout(flowUi.saveTimer); flowUi.flow = null; flowUi.run = null; renderFlowView(); }
+      flowUi.tabs = flowUi.tabs.filter((id) => id !== f.id);
+      if (flowUi.flow && flowUi.flow.id === f.id) { clearTimeout(flowUi.saveTimer); flowUi.flow = null; flowUi.run = null; renderFlowView(); if (typeof savePlace === 'function') savePlace(); }
       refreshFlows();
     });
   });
@@ -406,9 +414,20 @@ function renderFlowInbox() {
     return;
   }
   box.innerHTML = `<div class="muted small">Your test inbox</div>
-    <div class="flow-inbox-row"><code title="${esc(flowUi.mail)}">${esc(flowUi.mail)}</code></div>
-    <div class="flow-inbox-row"><button class="link small" id="flow-addr-copy">Copy address</button><button class="link small" id="flow-inbox-open">Open inbox</button></div>`;
-  $('#flow-addr-copy').addEventListener('click', async () => { if (await copyText(flowUi.mail)) toast('Address copied', 'ok'); });
+    <div class="flow-inbox-addr">
+      <span class="flow-inbox-mark">${icon('mail')}</span>
+      <code title="${esc(flowUi.mail)}">${esc(flowUi.mail)}</code>
+      <button class="icon-btn flow-inbox-btn" id="flow-addr-copy" title="Copy address" aria-label="Copy address">${icon('copy')}</button>
+      <button class="icon-btn flow-inbox-btn" id="flow-inbox-open" title="Open inbox" aria-label="Open inbox">${icon('inbox')}</button>
+    </div>`;
+  const copyButton = $('#flow-addr-copy');
+  copyButton.addEventListener('click', async () => {
+    if (!await copyText(flowUi.mail)) return;
+    toast('Address copied', 'ok');
+    copyButton.innerHTML = icon('check');
+    copyButton.classList.add('done');
+    setTimeout(() => { copyButton.innerHTML = icon('copy'); copyButton.classList.remove('done'); }, 1400);
+  });
   $('#flow-inbox-open').addEventListener('click', openFlowInbox);
 }
 
@@ -422,6 +441,83 @@ async function newFlow(folder = '') {
     const name = $('#flow-name');
     if (name) { name.focus(); name.select(); }
   } catch (err) { toast(err.message, 'error'); }
+}
+
+// ------------------------------------------------------------ the open flows' tabs
+// Like the request tabs: a flow that is opened gets a tab, and stays open until its tab is
+// closed. The tabs, their order and the one in front are part of the last session
+// (features.js), so they come back after a refresh of the web page or a restart of the app.
+const FLOW_TAB_MARK = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="5" rx="1.2"/><rect x="14" y="15" width="7" height="5" rx="1.2"/><path d="M10 6.5h3.5a2 2 0 0 1 2 2V15"/></g></svg>';
+let flowTabsSig = '';
+
+function flowTabsAdd(id) {
+  if (id && !flowUi.tabs.includes(id)) flowUi.tabs.push(id);
+  renderFlowTabs();
+}
+
+function renderFlowTabs() {
+  const box = $('#flow-tabs');
+  if (!box) return;
+  const cur = flowUi.flow ? flowUi.flow.id : null;
+  // the list is read only once the Flows section is opened: until then every saved tab is kept
+  if (flowUi.listed) flowUi.tabs = flowUi.tabs.filter((id) => id === cur || flowUi.list.some((f) => f.id === id));
+  const items = flowUi.tabs.map((id) => {
+    const f = id === cur ? flowUi.flow : flowUi.list.find((x) => x.id === id);
+    return f ? { id, name: f.name || 'Untitled flow', active: id === cur } : null;
+  }).filter(Boolean);
+  box.hidden = !items.length;
+  const sig = JSON.stringify(items);
+  if (sig !== flowTabsSig) {
+    flowTabsSig = sig;
+    box.innerHTML = items.map((it) => `<div class="req-tab flow-tab ${it.active ? 'active' : ''}" data-id="${esc(it.id)}" title="${esc(it.name)}">
+      <span class="flow-tab-mark">${FLOW_TAB_MARK}</span><span class="rt-name">${esc(it.name)}</span>
+      <button class="rt-close" title="Close (Ctrl+W)" aria-label="Close ${esc(it.name)}">${icon('x')}</button></div>`).join('')
+      + '<button class="rt-add" title="New flow">+</button>';
+  }
+  if (typeof saveSession === 'function') saveSession();
+}
+
+async function closeFlowTab(id) {
+  const i = flowUi.tabs.indexOf(id);
+  if (i === -1) return;
+  flowUi.tabs.splice(i, 1);
+  if (flowUi.flow && flowUi.flow.id === id) {
+    const nextId = flowUi.tabs[Math.min(i, flowUi.tabs.length - 1)];
+    const next = nextId && flowUi.list.find((f) => f.id === nextId);
+    if (next) { await openFlow(next); return; }
+    await flushFlowSave();
+    flowUi.flow = null;
+    flowUi.selected = null;
+    flowUi.run = null;
+    renderFlowList();
+    renderFlowView();
+    if (typeof savePlace === 'function') savePlace();
+  }
+  renderFlowTabs();
+}
+
+function bindFlowTabs() {
+  const box = $('#flow-tabs');
+  if (!box) return;
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('.rt-add')) { newFlow(''); return; }
+    const el = e.target.closest('.flow-tab');
+    if (!el) return;
+    if (e.target.closest('.rt-close')) { closeFlowTab(el.dataset.id); return; }
+    const f = flowUi.list.find((x) => x.id === el.dataset.id);
+    if (f) openFlow(f);
+  });
+  box.addEventListener('auxclick', (e) => { const el = e.target.closest('.flow-tab'); if (el && e.button === 1) closeFlowTab(el.dataset.id); });
+}
+
+// The flows of the last session (features.js restoreSession): their tabs at once, the one in
+// front as soon as the list is read (now, when the Flows section is already showing).
+function restoreFlowSession(ids, front) {
+  const saved = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string');
+  flowUi.tabs = [...saved, ...flowUi.tabs.filter((id) => !saved.includes(id))];
+  if (!flowUi.flow && typeof front === 'string' && front && !flowUi.restore) flowUi.restore = front;
+  renderFlowTabs();
+  if (flowUi.restore && $('.layout').classList.contains('flow-mode')) refreshFlows(true);
 }
 
 // -------------------------------------------------------------- the inbox
@@ -500,6 +596,7 @@ function renderFlowView() {
     flow.name = e.target.value;
     const label = $(`.flow-item[data-id="${CSS.escape(flow.id)}"] .flow-item-name`);
     if (label) label.textContent = flow.name;
+    renderFlowTabs();
     scheduleFlowSave();
   });
   $$('.flow-add').forEach((b) => b.addEventListener('click', () => addFlowBlock(b.dataset.type)));
@@ -572,9 +669,11 @@ async function openFlow(flow) {
   flowUi.selected = null;
   flowUi.run = null;
   flowUi.marks = {};
+  flowTabsAdd(flow.id);
   renderFlowList();
   renderFlowView();
   showLastFlowRun(flow);
+  if (typeof savePlace === 'function') savePlace();
 }
 
 // the newest run still kept by the app: one started by an email is seen this way
@@ -1419,6 +1518,7 @@ function initFlows() {
     if ($('.layout').classList.contains('no-side') && $('#btn-sidebar')) $('#btn-sidebar').click();
   }));
   $('#btn-flow-new').addEventListener('click', () => newFlow(''));
+  bindFlowTabs();
   bindFlowListDrop();
   $('#flow-search').addEventListener('input', (e) => { flowUi.search = e.target.value; renderFlowList(); });
   window.addEventListener('resize', () => { if ($('#flow-wires') && flowUi.flow) drawFlowWires(); });

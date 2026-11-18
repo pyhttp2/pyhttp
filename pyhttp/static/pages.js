@@ -24,6 +24,35 @@ function onSection(name) {
   pages.callTimer = null;
   if (name === 'monitors') { renderMonitors(); loadMonitors(true); }
   if (name === 'mocks') { renderMocks(); loadMocks(true); }
+  savePlace();
+}
+
+// ------------------------------------------- where you are, kept in the URL so a refresh stays put
+// #flows, #monitors, #mocks, with the open item after a slash (#monitors/<id>). Requests is the
+// plain address. replaceState: moving around does not fill the browser's Back history.
+const PLACE_TABS = ['flows', 'monitors', 'mocks'];
+const activeTab = () => { const b = $('#side-tabs button[data-tab].active'); return b ? b.dataset.tab : 'collection'; };
+
+function savePlace() {
+  const tab = activeTab();
+  const id = tab === 'monitors' ? pages.monitor : tab === 'mocks' ? pages.mock
+    : tab === 'flows' && typeof flowUi !== 'undefined' && flowUi.flow ? flowUi.flow.id : null;
+  const hash = PLACE_TABS.includes(tab) ? '#' + tab + (id ? '/' + encodeURIComponent(id) : '') : '';
+  if (location.hash !== hash) {
+    try { history.replaceState(history.state, '', hash || location.pathname + location.search); } catch { /* sandboxed */ }
+  }
+  if (typeof saveSession === 'function') saveSession();   // the section is part of the last session (features.js)
+}
+
+function restorePlace() {
+  const [tab, raw] = location.hash.slice(1).split('/');
+  if (!PLACE_TABS.includes(tab)) return;
+  let id = null;
+  try { id = raw ? decodeURIComponent(raw) : null; } catch { /* a mangled address */ }
+  if (tab === 'monitors') pages.monitor = id;
+  if (tab === 'mocks') pages.mock = id;
+  if (tab === 'flows' && id && typeof flowUi !== 'undefined') flowUi.restore = id;   // opened once the list is read (flows.js)
+  showSection(tab);
 }
 
 const pageTile = (label, value, cls = '') => `<div class="page-tile ${cls}"><div class="pt-label">${label}</div><div class="pt-value">${value}</div></div>`;
@@ -49,13 +78,13 @@ function showMonitors(id) {
 
 function renderMonitors() {
   renderMonitorList();
-  if (currentSection() === 'monitors') renderMonitorPage();
+  if (currentSection() === 'monitors') { renderMonitorPage(); savePlace(); }
 }
 
 function renderMonitorList() {
   const ul = $('#mon-list');
   if (!ul) return;
-  if (pages.monitor && !monitorById(pages.monitor)) pages.monitor = null;
+  if (pages.monitor && mon.loaded && !monitorById(pages.monitor)) pages.monitor = null;   // not before the list is read: a refresh restores it
   const counts = { all: mon.list.length, fail: mon.list.filter((m) => monitorState(m) === 'fail').length,
                    off: mon.list.filter((m) => !m.enabled).length };
   $('#mon-filter').innerHTML = [['all', 'All'], ['fail', 'Failing'], ['off', 'Paused']].map(([key, label]) =>
@@ -269,13 +298,13 @@ function showMock(id, tab) {
 
 function renderMocks() {
   renderMockList();
-  if (currentSection() === 'mocks') renderMockPage();
+  if (currentSection() === 'mocks') { renderMockPage(); savePlace(); }
 }
 
 function renderMockList() {
   const ul = $('#mock-list');
   if (!ul) return;
-  if (pages.mock && !mockById(pages.mock)) pages.mock = null;
+  if (pages.mock && mocks.loaded && !mockById(pages.mock)) pages.mock = null;
   const q = pages.mockSearch.trim().toLowerCase();
   const shown = mocks.list.filter((m) => !q || m.name.toLowerCase().includes(q) || (m.slug || '').includes(q));
   if (!shown.length) {
@@ -523,6 +552,7 @@ function initPages() {
   $('#btn-mock-new').addEventListener('click', () => mockDialog());
   $('#mon-search').addEventListener('input', (e) => { pages.monSearch = e.target.value; renderMonitorList(); });
   $('#mock-search').addEventListener('input', (e) => { pages.mockSearch = e.target.value; renderMockList(); });
+  restorePlace();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPages);

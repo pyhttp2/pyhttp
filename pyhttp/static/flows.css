@@ -12,7 +12,11 @@
 .layout.flow-mode.no-side { grid-template-columns: 1fr; }
 .layout.flow-mode .runs { display: none; }
 .layout.flow-mode #editor-section { overflow: hidden; padding: 10px 12px; }
-.layout.flow-mode #editor-section > :not(#flow-view) { display: none !important; }
+.layout.flow-mode #editor-section > :not(#flow-view):not(#flow-tabs) { display: none !important; }
+.layout:not(.flow-mode) #flow-tabs { display: none !important; }
+.flow-tabs { margin: -4px 0 8px; }
+.flow-tab .flow-tab-mark { display: inline-flex; color: var(--muted); flex: none; }
+.flow-tab.active .flow-tab-mark { color: var(--primary); }
 .layout.flow-mode #flow-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .flow-empty { margin: auto; max-width: 560px; }
 @media (max-width: 1180px) { .layout.flow-mode { grid-template-columns: var(--side-w, 280px) minmax(380px, 1fr); } }
@@ -42,6 +46,14 @@
 .flow-inbox-row { display: flex; gap: 6px; align-items: center; margin-top: 3px; min-width: 0; }
 .flow-inbox-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-inbox-row button { padding-left: 0; }
+.flow-inbox-addr { display: flex; align-items: center; gap: 2px; margin-top: 5px; min-width: 0;
+  padding: 2px 2px 2px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-3); }
+.flow-inbox-addr code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: none; padding: 0; font-size: 12px; }
+.flow-inbox-mark { display: inline-flex; color: var(--muted); margin-right: 4px; flex: none; }
+.flow-inbox-btn { min-width: 26px; height: 26px; padding: 2px 5px; font-size: 15px; color: var(--muted); }
+.flow-inbox-btn:hover { color: var(--text); background: var(--bg-4); }
+.flow-inbox-btn.done { color: var(--ok); }
 
 /* the editor */
 .flow-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex: none; }

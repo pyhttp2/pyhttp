@@ -86,6 +86,8 @@ def page(browser, servers):
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.errors = errors  # type: ignore[attr-defined]
+    # every test starts with an empty window: no tabs or section left open by the one before
+    page.request.put(app_url.rstrip("/") + "/api/session", data={"tabs": [], "current": None, "place": "", "flow_tabs": [], "flow": None})
     page.goto(app_url)
     page.wait_for_selector("#btn-new")
     yield page
@@ -2011,3 +2013,67 @@ def test_dragging_the_empty_canvas_moves_the_view(page, servers):
     assert (start["x"], start["y"]) == (140, 110)
     page.request.delete(f"{app_url}/api/flows/{flow['id']}")
     page.click("#side-tabs button[data-tab='collection']")
+
+
+def test_last_session_comes_back(page, servers):
+    """The open request tabs, the one in front, the section and the open flow survive a refresh of
+    the page and a fresh start (the desktop app reopened: the plain address, a new window)."""
+    app_url, echo_url = servers
+    names = ("Session A", "Session B")
+    reqs = [page.request.post(app_url + "/api/requests", data={"name": n, "url": echo_url + "/echo"}).json() for n in names]
+    flow = page.request.post(app_url + "/api/flows", data={"name": "Session flow"}).json()
+    page.reload()
+    page.wait_for_selector("#btn-new")
+    for n in names:
+        page.click(f"#req-list >> text={n}")
+        page.wait_for_function(f"document.querySelector('#f-name').value === '{n}'")
+    page.locator("#req-tabs .req-tab", has_text="Session A").click()
+    page.wait_for_function("document.querySelector('#f-name').value === 'Session A'")
+    page.click("#side-tabs button[data-tab='flows']")
+    page.click("#flow-list >> text=Session flow")
+    page.wait_for_function("document.querySelector('#flow-name') && document.querySelector('#flow-name').value === 'Session flow'")
+    page.wait_for_function(f"location.hash === '#flows/{flow['id']}'")
+
+    def check():
+        page.wait_for_function("document.querySelector('#flow-name') && document.querySelector('#flow-name').value === 'Session flow'")
+        assert page.evaluate("document.querySelector('#side-tabs button.active').dataset.tab") == "flows"
+        assert [t.strip() for t in page.locator("#req-tabs .req-tab .rt-name").all_text_contents()] == list(names)
+        assert page.evaluate("document.querySelector('#f-name').value") == "Session A"
+
+    page.wait_for_timeout(600)   # the session is saved a moment after the last change
+    page.reload()                # the web page refreshed
+    check()
+    page.goto(app_url)           # a fresh start: no address of a section
+    check()
+    assert [t.strip() for t in page.locator("#flow-tabs .flow-tab .rt-name").all_text_contents()] == ["Session flow"]
+
+    # refreshed while another section showed: the flow is still open when Flows is picked again
+    page.click("#side-tabs button[data-tab='collection']")
+    page.wait_for_function("location.hash === ''")
+    page.wait_for_timeout(600)
+    page.reload()
+    page.wait_for_selector("#btn-new")
+    page.wait_for_function("document.querySelector('#f-name').value === 'Session A'")
+    page.click("#side-tabs button[data-tab='flows']")
+    check()
+
+    # a second flow gets a tab of its own; closing the front tab shows the one left, closing that empties the view
+    other = page.request.post(app_url + "/api/flows", data={"name": "Other flow"}).json()
+    page.click("#side-tabs button[data-tab='collection']")
+    page.click("#side-tabs button[data-tab='flows']")
+    page.click("#flow-list >> text=Other flow")
+    page.wait_for_function("document.querySelector('#flow-name').value === 'Other flow'")
+    assert [t.strip() for t in page.locator("#flow-tabs .flow-tab .rt-name").all_text_contents()] == ["Session flow", "Other flow"]
+    page.locator("#flow-tabs .flow-tab.active .rt-close").click()
+    page.wait_for_function("document.querySelector('#flow-name').value === 'Session flow'")
+    page.keyboard.press("Control+w")
+    page.wait_for_selector("#flow-empty-new")
+    assert page.locator("#flow-tabs").is_hidden()
+    assert page.locator("#req-tabs .req-tab").count() == 2          # Ctrl+W in Flows left the request tabs alone
+    page.wait_for_timeout(600)
+    page.reload()
+    page.wait_for_selector("#flow-empty-new")                       # closed stays closed
+    page.request.delete(f"{app_url}/api/flows/{flow['id']}")
+    page.request.delete(f"{app_url}/api/flows/{other['id']}")
+    for r in reqs:
+        page.request.delete(f"{app_url}/api/requests/{r['id']}")

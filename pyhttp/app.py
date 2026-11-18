@@ -1019,6 +1019,29 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
         # that cannot be used is a ValueError, answered 400 with the reason
         return {**db.update_settings(body), "keyring_name": secretstore.label()}
 
+    # ------------------------------------------------------- the last session
+    # What the window had open (the request tabs, the one in front, the section of the rail), so
+    # a refresh of the web page or a restart of the desktop app brings it back. Kept in the
+    # project's database, apart from the app settings: it is not copied into a new project.
+    @app.get("/api/session")
+    def get_session() -> dict[str, Any]:
+        try:
+            saved = json.loads(db.get_setting("ui_session") or "{}")
+        except ValueError:
+            saved = {}
+        return saved if isinstance(saved, dict) else {}
+
+    @app.put("/api/session")
+    def put_session(body: dict[str, Any]) -> dict[str, Any]:
+        tabs = [str(t) for t in (body.get("tabs") or []) if isinstance(t, str)][:200]
+        current = body.get("current") if isinstance(body.get("current"), str) else None
+        place = str(body.get("place") or "")[:300]
+        flow_tabs = [str(t) for t in (body.get("flow_tabs") or []) if isinstance(t, str)][:200]
+        flow = body.get("flow") if isinstance(body.get("flow"), str) else None
+        saved = {"tabs": tabs, "current": current, "place": place, "flow_tabs": flow_tabs, "flow": flow}
+        db.set_setting("ui_session", json.dumps(saved))
+        return saved
+
     # ------------------------------------------------------------- variables
     @app.get("/api/variables")
     def get_variables() -> dict[str, str]:

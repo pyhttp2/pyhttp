@@ -8,6 +8,7 @@ the same rule the collection runner uses.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -17,6 +18,7 @@ from . import USER_AGENT, db, runner
 from .templating import build_context
 
 TICK_SECONDS = 5.0  # how often the scheduler looks for due monitors
+log = logging.getLogger(__name__)
 
 
 async def run_check(monitor: dict[str, Any]) -> dict[str, Any]:
@@ -108,9 +110,26 @@ class MonitorScheduler:
         return tasks
 
     async def _run(self, monitor: dict[str, Any]) -> None:
+        started = time.time()
         try:
             await run_check(monitor)
-        except Exception:  # noqa: BLE001
-            db.update_monitor(monitor["id"], last_status="fail")
+        except Exception as exc:  # noqa: BLE001
+            # The check broke before it could store its row. Store one anyway, with the reason:
+            # without it the monitor said "failing" while its history and uptime (both read from
+            # the stored rows) showed nothing wrong.
+            log.exception("monitor %s: the check failed to run", monitor.get("id"))
+            error = f"the check could not run: {exc}" if str(exc) else f"the check could not run ({type(exc).__name__})"
+            try:
+                db.add_monitor_check(monitor["id"], {
+                    "ts": started, "ok": False, "failed": 1, "total": 1,
+                    "duration_ms": round((time.time() - started) * 1000, 1),
+                    "results": [{"request_id": None, "name": monitor.get("name") or "check", "ok": False, "error": error}],
+                })
+            except Exception:  # noqa: BLE001
+                log.exception("monitor %s: could not store the failed check", monitor.get("id"))
+            try:
+                db.update_monitor(monitor["id"], last_status="fail")
+            except Exception:  # noqa: BLE001
+                pass
         finally:
             self._running.discard(monitor["id"])

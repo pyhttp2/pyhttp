@@ -52,6 +52,7 @@ const ICONS = {
   'moon': '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   'contrast': '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
   'mail': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
+  'inbox': '<path d="M3 13.5 5.6 5.7A1.5 1.5 0 0 1 7 4.7h10a1.5 1.5 0 0 1 1.4 1L21 13.5V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 13.5h5l1.5 2.5h5l1.5-2.5h5"/>',
 };
 function icon(name, size) {
   const body = ICONS[name];
@@ -3107,7 +3108,8 @@ function init() {
   $('#link-settings').addEventListener('click', openSettings);
   loadExpanded();
   loadProjects();
-  loadRequests();
+  // the tabs of the last session reopen once the list they point into is read
+  loadRequests().then(() => restoreSession(), () => restoreSession());
   loadEnvironments();
   loadHistory();
 }
