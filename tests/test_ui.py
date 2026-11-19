@@ -790,7 +790,7 @@ def test_history_panel_oauth_secrets_resize_and_openapi(page, servers):
     # request history lives in the right-hand panel, next to Current run / Run history;
     # the sidebar's own tabs are the requests and the flows
     assert page.locator("#side-tabs button").evaluate_all(
-        "(buttons) => buttons.map((b) => b.dataset.tab)") == ["collection", "flows", "monitors", "mocks"]
+        "(buttons) => buttons.map((b) => b.dataset.tab)") == ["collection", "flows", "monitors", "mocks", "inbox"]
     assert page.locator("#runs-tabs button").all_text_contents()[:3] == ["Current run", "Run history", "Request history"]
     page.click("#runs-tabs button[data-tab='requests']")
     count = "document.querySelectorAll('#history-list .h-item').length"
@@ -1881,7 +1881,7 @@ def test_the_rail_is_the_navigation(page, servers):
     """Sections and tools are on the left rail; the top bar keeps the project, the environment
     and the app's own actions."""
     rail = page.locator(".rail button").evaluate_all("(buttons) => buttons.map((b) => (b.querySelector('.rail-label') || b).textContent.trim())")
-    assert rail == ["Requests", "Flows", "Monitors", "Mocks", "Envs", "Variables", "Cookies", "Inbox"]
+    assert rail == ["Requests", "Flows", "Monitors", "Mocks", "Inbox", "Envs", "Variables", "Cookies"]
     in_topbar = page.locator(".topbar button").evaluate_all("(buttons) => buttons.filter((b) => b.offsetParent !== null).map((b) => b.id)")
     assert not {"btn-envs", "btn-variables", "btn-cookies", "btn-inbox", "btn-monitors", "btn-mocks"} & set(in_topbar)
     assert {"btn-project", "btn-import", "btn-export", "btn-help", "btn-settings"} <= set(in_topbar)
@@ -1895,7 +1895,7 @@ def test_the_rail_is_the_navigation(page, servers):
         page.wait_for_selector(view + " .page-empty, " + view + " .page-head")
         assert page.is_hidden("#modal") and not page.is_visible("#runs-panel")
     page.click("#side-tabs button[data-tab='collection']")
-    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie"), ("#btn-inbox", "Test inbox")):
+    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie")):
         page.click(button)
         page.wait_for_selector("#modal:not([hidden])")
         assert title.lower() in page.inner_text("#modal-title").lower(), button
@@ -2150,3 +2150,58 @@ def test_last_session_comes_back(page, servers):
     page.request.delete(f"{app_url}/api/flows/{other['id']}")
     for r in reqs:
         page.request.delete(f"{app_url}/api/requests/{r['id']}")
+
+
+def test_inbox_is_a_section(page, servers):
+    """Inbox on the rail: the messages in the sidebar, the one picked fills the middle."""
+    # signed out (the desktop app): the page says how to get an inbox
+    page.click("#btn-inbox")
+    page.wait_for_selector("#mail-view:visible")
+    assert "Sign in to receive email" in page.inner_text("#mail-view")
+    assert not page.is_visible("#editor-form") and not page.is_visible("#runs-panel")
+    # with an inbox (answers of the cloud, stood in for here)
+    messages = [
+        {"id": "a" * 16, "from": "Shop <no-reply@shop.test>", "to": "me@inbox.pyhttp.com", "subject": "Your code", "received_at": 1700000100, "size": 120},
+        {"id": "b" * 16, "from": "news@shop.test", "to": "me@inbox.pyhttp.com", "subject": "Welcome", "received_at": 1700000000, "size": 80},
+    ]
+    full = {m["id"]: {**m, "text": f"Hello\nopen https://shop.test/verify?{m['id']} now"} for m in messages}
+    deleted = []
+
+    def mail(route):
+        url, method = route.request.url, route.request.method
+        mid = url.rsplit("/", 1)[-1].split("?")[0]
+        if method == "DELETE":
+            deleted.append(mid)
+            return route.fulfill(json={"ok": True})
+        if mid in full:
+            return route.fulfill(json=full[mid])
+        listed = [m for m in messages if m["id"] not in deleted]
+        return route.fulfill(json={"address": "me@inbox.pyhttp.com", "kept": 50, "messages": listed})
+    page.route("**/api/mail**", mail)
+    page.evaluate("localStorage.removeItem('pyhttp.mailSeen')")
+    page.click("#btn-mail-refresh")
+    page.wait_for_selector("#mail-list .mail-item")
+    assert page.locator("#mail-list .page-item-name").all_text_contents() == ["Your code", "Welcome"]
+    assert page.locator("#mail-list .mail-item.unread").count() == 2 and page.inner_text("#inbox-badge") == "2"
+    assert "me@inbox.pyhttp.com" in page.inner_text("#mail-addr")
+    page.click("#mail-list .mail-item:has-text('Your code')")
+    page.wait_for_selector("#mail-view .mail-body")
+    assert page.inner_text("#mail-view h2") == "Your code"
+    assert page.get_attribute("#mail-view .mail-body a", "href") == "https://shop.test/verify?" + "a" * 16
+    assert page.locator("#mail-list .mail-item.unread").count() == 1 and page.inner_text("#inbox-badge") == "1"
+    assert page.evaluate("location.hash") == "#inbox/" + "a" * 16
+    # older, then delete it: the next one opens
+    page.click("#mail-view [data-act=older]")
+    page.wait_for_function("document.querySelector('#mail-view h2') && document.querySelector('#mail-view h2').textContent === 'Welcome'")
+    assert page.is_hidden("#inbox-badge")
+    page.click("#mail-view [data-act=del]")
+    page.wait_for_function("document.querySelectorAll('#mail-list .mail-item').length === 1")
+    assert deleted == ["b" * 16]
+    page.wait_for_function("document.querySelector('#mail-view h2') && document.querySelector('#mail-view h2').textContent === 'Your code'")
+    # a second click on the open section hides the sidebar, as for the others
+    page.click("#btn-inbox")
+    assert not page.is_visible(".sidebar") and page.is_visible("#mail-view")
+    page.click("#btn-inbox")
+    page.unroute("**/api/mail**")
+    page.click("#side-tabs button[data-tab='collection']")
+    assert page.is_visible("#req-list")

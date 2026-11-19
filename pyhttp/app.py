@@ -1574,8 +1574,12 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     @app.get("/api/mail")
     def mail_listing() -> dict[str, Any]:
+        system = flow_runs.mail_system()
+        if system is None or not hasattr(system, "listing"):
+            # not an error: the Inbox section shows how to get one (the app asks on every start)
+            return {"state": "sign_in", "address": "", "kept": 0, "messages": []}
         try:
-            return _inbox().listing()
+            return system.listing()
         except cloudsync.CloudError as exc:
             raise HTTPException(502, str(exc)) from exc
 

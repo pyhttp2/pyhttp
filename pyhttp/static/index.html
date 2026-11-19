@@ -66,12 +66,12 @@
     <button data-tab="flows" class="rail-btn" title="Flows: saved requests wired into a small program. Send a request, wait for an email, pick a value out of it, decide, send the next one"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="5" rx="1.2"/><rect x="14" y="15" width="7" height="5" rx="1.2"/><path d="M10 6.5h3.5a2 2 0 0 1 2 2V15"/></g></svg>Flows</button>
     <button id="btn-monitors" data-tab="monitors" class="rail-btn" title="Scheduled checks: picked requests sent on an interval while the app is open; failures are flagged and can ping a webhook"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></g></svg><span class="rail-label">Monitors</span><span id="mon-badge" class="tab-n fail" hidden></span></button>
     <button id="btn-mocks" data-tab="mocks" class="rail-btn" title="Mock servers: fake endpoints answered by pyhttp itself, on the port it already runs on (http://host:port/mock/&lt;name&gt;/…)"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></g></svg><span class="rail-label">Mocks</span><span id="mock-badge" class="tab-n" hidden></span></button>
+    <button id="btn-inbox" data-tab="inbox" class="rail-btn" title="Test inbox: an email address of your own that flows can wait for mail on. Read what arrived"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></g></svg><span class="rail-label">Inbox</span><span id="inbox-badge" class="tab-n" hidden></span></button>
   </div>
   <div class="rail-group" role="group" aria-label="Data used by requests">
     <button id="btn-envs" class="rail-btn" title="Create and edit environments (Dev, QA, Prod…)"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></g></svg><span class="rail-label">Envs</span></button>
     <button id="btn-variables" class="rail-btn" title="Global variables, used by every environment"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4c-2 0-3 1-3 3v2.5c0 1.4-.8 2.5-2 2.5 1.2 0 2 1.1 2 2.5V17c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2.5c0 1.4.8 2.5 2 2.5-1.2 0-2 1.1-2 2.5V17c0 2-1 3-3 3"/><path d="m10 9.5 4 5M14 9.5l-4 5"/></g></svg><span class="rail-label">Variables</span></button>
     <button id="btn-cookies" class="rail-btn" title="Cookie jar: cookies stored from responses and sent with requests"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12.5A8.5 8.5 0 1 1 11.5 3.5a3.5 3.5 0 0 0 4 4 3.5 3.5 0 0 0 5 5z"/><path d="M9 9.5h.01M8 14.5h.01M13 16h.01M12.5 11.5h.01"/></g></svg><span class="rail-label">Cookies</span></button>
-    <button id="btn-inbox" class="rail-btn" title="Test inbox: an email address of your own that flows can wait for mail on. Read what arrived"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></g></svg><span class="rail-label">Inbox</span></button>
   </div>
 </nav>
 
@@ -122,6 +122,14 @@
         </div>
         <ul id="mock-list" class="page-list"></ul>
       </div>
+      <div class="tab-panel side-panel" data-panel="inbox" hidden>
+        <div class="sidebar-head">
+          <input id="mail-search" type="search" placeholder="Search mail…" autocomplete="off">
+          <button id="btn-mail-refresh" class="icon-btn" title="Check for new mail" aria-label="Check for new mail"><svg class="ic ic-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+        </div>
+        <div id="mail-addr" class="mail-addr"></div>
+        <ul id="mail-list" class="page-list"></ul>
+      </div>
     </div>
   </aside>
 
@@ -135,6 +143,7 @@
     <!-- the Monitors and Mocks sections (pages.js) -->
     <div id="monitor-view" class="page-view"></div>
     <div id="mock-view" class="page-view"></div>
+    <div id="mail-view" class="page-view"></div>
     <div id="editor-empty" class="empty">
       <svg class="empty-mark" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M21 3 10.5 13.5M21 3l-6.5 18-4-7.5L3 9.5z"/></svg>
       <p>Select a request on the left, or create a new one.</p>

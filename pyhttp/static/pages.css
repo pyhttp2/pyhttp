@@ -7,9 +7,11 @@
 .layout[data-section] .runs { display: none; }
 .layout[data-section] #editor-section { overflow: hidden; padding: 14px 18px; }
 .layout[data-section="monitors"] #editor-section > :not(#monitor-view),
-.layout[data-section="mocks"] #editor-section > :not(#mock-view) { display: none !important; }
+.layout[data-section="mocks"] #editor-section > :not(#mock-view),
+.layout[data-section="inbox"] #editor-section > :not(#mail-view) { display: none !important; }
 .layout[data-section="monitors"] #monitor-view,
-.layout[data-section="mocks"] #mock-view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 12px; }
+.layout[data-section="mocks"] #mock-view,
+.layout[data-section="inbox"] #mail-view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 12px; }
 @media (max-width: 1180px) { .layout[data-section] { grid-template-columns: var(--side-w, 280px) minmax(380px, 1fr); } }
 @media (max-width: 960px) { .layout[data-section], .layout[data-section].no-side { grid-template-columns: 1fr; } .page-view { min-height: 80vh; } }
 
@@ -77,3 +79,20 @@
 .page-table .mon-spark i { width: 5px; }
 .page-empty { margin: auto; max-width: 560px; }
 .mon-spark i { background: var(--ok); }
+
+/* ---------------------------------------------------------------- the inbox */
+.mail-addr { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px; border-bottom: 1px solid var(--border); flex: none; min-width: 0; }
+.mail-addr code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.mail-item { grid-template-columns: 8px 1fr auto; }
+.mail-item .mail-dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.mail-item.unread .mail-dot { background: var(--primary); }
+.mail-item.unread .page-item-name { font-weight: 700; }
+.mail-item:not(.unread) .page-item-name { font-weight: 400; }
+.mail-when { font-size: 11px; white-space: nowrap; align-self: start; padding-top: 2px; }
+.mail-head h2 { white-space: normal; overflow-wrap: anywhere; }
+.mail-meta { display: grid; gap: 4px; font-size: 13px; }
+.mail-meta > div { display: grid; grid-template-columns: 80px 1fr; gap: 10px; min-width: 0; }
+.mail-meta > div > span:last-child { overflow-wrap: anywhere; }
+.mail-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.mail-body pre { margin: 0; padding: 0; border: 0; background: none; max-height: none; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.mail-body a { color: var(--primary); }

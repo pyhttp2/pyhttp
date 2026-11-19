@@ -7,6 +7,7 @@
 const pages = {
   monitor: null, monFilter: 'all', monSearch: '', checks: {}, checksFor: null, failuresOnly: false,
   mock: null, mockTab: 'routes', mockSearch: '', routeSearch: '', unmatchedOnly: false, calls: [], callTimer: null,
+  mail: null, mailSearch: '', mailTimer: null,
 };
 
 const currentSection = () => $('.layout').dataset.section || 'collection';
@@ -18,10 +19,17 @@ function showSection(name) {
 
 function onSection(name) {
   const layout = $('.layout');
-  if (name === 'monitors' || name === 'mocks') layout.dataset.section = name;
+  if (name === 'monitors' || name === 'mocks' || name === 'inbox') layout.dataset.section = name;
   else delete layout.dataset.section;
   clearInterval(pages.callTimer);
   pages.callTimer = null;
+  clearInterval(pages.mailTimer);
+  pages.mailTimer = null;
+  if (name === 'inbox') {
+    renderInbox();
+    loadInbox();
+    pages.mailTimer = setInterval(() => { if (!document.hidden) loadInbox(true); }, 15000);   // new mail shows by itself
+  }
   if (name === 'monitors') { renderMonitors(); loadMonitors(true); }
   if (name === 'mocks') { renderMocks(); loadMocks(true); }
   savePlace();
@@ -30,12 +38,12 @@ function onSection(name) {
 // ------------------------------------------- where you are, kept in the URL so a refresh stays put
 // #flows, #monitors, #mocks, with the open item after a slash (#monitors/<id>). Requests is the
 // plain address. replaceState: moving around does not fill the browser's Back history.
-const PLACE_TABS = ['flows', 'monitors', 'mocks'];
+const PLACE_TABS = ['flows', 'monitors', 'mocks', 'inbox'];
 const activeTab = () => { const b = $('#side-tabs button[data-tab].active'); return b ? b.dataset.tab : 'collection'; };
 
 function savePlace() {
   const tab = activeTab();
-  const id = tab === 'monitors' ? pages.monitor : tab === 'mocks' ? pages.mock
+  const id = tab === 'monitors' ? pages.monitor : tab === 'mocks' ? pages.mock : tab === 'inbox' ? pages.mail
     : tab === 'flows' && typeof flowUi !== 'undefined' && flowUi.flow ? flowUi.flow.id : null;
   const hash = PLACE_TABS.includes(tab) ? '#' + tab + (id ? '/' + encodeURIComponent(id) : '') : '';
   if (location.hash !== hash) {
@@ -51,6 +59,7 @@ function restorePlace() {
   try { id = raw ? decodeURIComponent(raw) : null; } catch { /* a mangled address */ }
   if (tab === 'monitors') pages.monitor = id;
   if (tab === 'mocks') pages.mock = id;
+  if (tab === 'inbox') pages.mail = id;
   if (tab === 'flows' && id && typeof flowUi !== 'undefined') flowUi.restore = id;   // opened once the list is read (flows.js)
   showSection(tab);
 }
@@ -544,6 +553,194 @@ function renderMockOverview(view) {
   $$('.page-row', view).forEach((tr) => tr.addEventListener('click', () => { pages.mock = tr.dataset.id; renderMocks(); }));
 }
 
+// ===================================================================== inbox
+// The test inbox as a section: the messages in the sidebar, newest first, and the one picked in
+// the middle of the window. Messages are text only (the cloud keeps no HTML or attachments).
+// Which ones were opened is remembered in this browser only.
+const mailBox = { loaded: false, state: 'loading', problem: '', address: '', kept: 0, list: [], open: null, openId: null };
+const MAIL_SEEN_KEY = 'pyhttp.mailSeen';
+function mailSeen() { try { return new Set(JSON.parse(localStorage.getItem(MAIL_SEEN_KEY) || '[]')); } catch { return new Set(); } }
+function markMailSeen(id) {
+  const seen = mailSeen();
+  if (seen.has(id)) return;
+  seen.add(id);
+  // only ids still in the inbox are worth keeping
+  const keep = [...seen].filter((x) => x === id || mailBox.list.some((m) => m.id === x));
+  try { localStorage.setItem(MAIL_SEEN_KEY, JSON.stringify(keep)); } catch { /* private window */ }
+}
+const mailFrom = (from) => { const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from || ''); return m && m[1] ? m[1] : (from || '(unknown sender)'); };
+// the text, escaped, with its web addresses as links
+const mailLinkify = (text) => esc(text || '').replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g,
+  (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+
+async function loadInbox(quiet = false) {
+  const before = mailBox.state + '|' + mailBox.list.map((m) => m.id).join();
+  try {
+    const data = await api('/mail');
+    if (data.state === 'sign_in') throw new Error('Sign in to the pyhttp cloud to have a test inbox');
+    mailBox.state = 'ready';
+    mailBox.address = data.address || '';
+    mailBox.kept = data.kept || 0;
+    mailBox.list = data.messages || [];
+  } catch (err) {
+    // 404: no inbox here (the desktop app, signed out); anything else: the cloud did not answer
+    mailBox.state = /sign in/i.test(err.message) ? 'sign_in' : 'offline';
+    mailBox.problem = err.message;
+    mailBox.list = [];
+    if (!quiet && mailBox.state === 'offline') toast(err.message, 'error');
+  }
+  mailBox.loaded = true;
+  if (pages.mail && !mailBox.list.some((m) => m.id === pages.mail)) { pages.mail = null; mailBox.open = null; }
+  const changed = before !== mailBox.state + '|' + mailBox.list.map((m) => m.id).join();
+  // a check that found nothing new leaves the message being read alone (and its scroll position)
+  if (quiet && !changed && pages.mail) renderMailList();
+  else renderInbox();
+}
+
+function renderInbox() {
+  renderMailList();
+  if (currentSection() === 'inbox') { renderMailPage(); savePlace(); }
+}
+
+function updateInboxBadge() {
+  const badge = $('#inbox-badge');
+  if (!badge) return;
+  const seen = mailSeen();
+  const n = mailBox.list.filter((m) => !seen.has(m.id)).length;
+  badge.hidden = !n;
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.title = `${n} unread`;
+}
+
+function renderMailList() {
+  const ul = $('#mail-list');
+  if (!ul) return;
+  updateInboxBadge();
+  const addr = $('#mail-addr');
+  if (mailBox.state === 'ready') {
+    addr.innerHTML = `<span class="flow-inbox-mark">${icon('mail')}</span><code title="${esc(mailBox.address)}">${esc(mailBox.address)}</code>
+      <button class="icon-btn flow-inbox-btn" data-act="copy" title="Copy address" aria-label="Copy address">${icon('copy')}</button>`;
+    $('[data-act=copy]', addr).addEventListener('click', async () => { if (await copyText(mailBox.address)) toast('Address copied', 'ok'); });
+  } else addr.innerHTML = '';
+  addr.hidden = mailBox.state !== 'ready';
+  if (!mailBox.loaded) { ul.innerHTML = '<li class="page-none muted small">Loading…</li>'; return; }
+  if (mailBox.state !== 'ready') { ul.innerHTML = ''; return; }
+  const terms = pages.mailSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = mailBox.list.filter((m) => {
+    const hay = `${m.subject || ''} ${m.from || ''} ${m.to || ''}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+  if (!shown.length) {
+    ul.innerHTML = `<li class="page-none muted small">${mailBox.list.length ? 'No message matches.' : 'No mail yet.'}</li>`;
+    return;
+  }
+  const seen = mailSeen();
+  ul.innerHTML = shown.map((m) => `<li class="page-item mail-item ${pages.mail === m.id ? 'active' : ''} ${seen.has(m.id) ? '' : 'unread'}" data-id="${esc(m.id)}" tabindex="0" title="${esc(m.subject || '(no subject)')}">
+      <span class="mail-dot" aria-hidden="true"></span>
+      <span class="page-item-text"><span class="page-item-name">${esc(m.subject || '(no subject)')}</span>
+        <span class="page-item-meta muted">${esc(mailFrom(m.from))}</span></span>
+      <span class="mail-when muted" title="${esc(fmtDate(m.received_at))}">${esc(agoText(m.received_at))}</span>
+    </li>`).join('');
+  $$('.mail-item', ul).forEach((li) => {
+    const open = () => openMail(li.dataset.id);
+    li.addEventListener('click', open);
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') open();
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const next = e.key === 'ArrowDown' ? li.nextElementSibling : li.previousElementSibling;
+        if (next && next.classList.contains('mail-item')) { next.focus(); openMail(next.dataset.id); }
+      }
+    });
+  });
+}
+
+async function openMail(id) {
+  pages.mail = id;
+  markMailSeen(id);
+  renderInbox();
+  const li = $(`#mail-list .mail-item[data-id="${CSS.escape(id)}"]`);
+  if (li && document.activeElement && document.activeElement.closest && document.activeElement.closest('#mail-list')) li.focus();
+}
+
+async function renderMailPage() {
+  const view = $('#mail-view');
+  if (!view) return;
+  if (mailBox.state === 'sign_in' || mailBox.state === 'offline') {
+    const signIn = mailBox.state === 'sign_in';
+    view.innerHTML = `<div class="empty page-empty">
+      <svg class="empty-mark" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></g></svg>
+      ${signIn ? `<p>Sign in to receive email.</p>
+      <p class="muted small">Your account has a test inbox: an address like <code>name@inbox.pyhttp.com</code>. Sign-up and password-reset emails sent to it show here, and flows can wait for them.</p>
+      <p><button class="primary" data-act="signin">Sign in to pyhttp cloud</button></p>`
+      : `<p>The pyhttp cloud is not reachable.</p><p class="muted small">${esc(mailBox.problem)}</p><p><button data-act="retry">Try again</button></p>`}
+    </div>`;
+    const b = $('[data-act=signin]', view);
+    if (b) b.addEventListener('click', () => { const c = $('#btn-cloud'); if (c) c.click(); });
+    const r = $('[data-act=retry]', view);
+    if (r) r.addEventListener('click', () => loadInbox());
+    return;
+  }
+  if (!pages.mail) {
+    view.innerHTML = `<div class="empty page-empty">
+      <svg class="empty-mark" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></g></svg>
+      <p>${mailBox.list.length ? 'Pick a message on the left to read it.' : 'Nothing received yet.'}</p>
+      <p class="muted small">Mail to <code>${esc(mailBox.address)}</code>, or any <code>${esc(mailBox.address.replace('@', '+anything@'))}</code>, lands here.
+        Use it to sign up in the app you test; a flow can wait for the message and send its code back.<br>The newest ${mailBox.kept} messages are kept, as text: no attachments.</p>
+      ${mailBox.address ? '<p><button class="primary" data-act="copy">Copy address</button></p>' : ''}
+    </div>`;
+    const c = $('[data-act=copy]', view);
+    if (c) c.addEventListener('click', async () => { if (await copyText(mailBox.address)) toast('Address copied', 'ok'); });
+    return;
+  }
+  const id = pages.mail;
+  if (mailBox.openId !== id || !mailBox.open) {
+    if (mailBox.openId !== id) { mailBox.open = null; view.innerHTML = '<div class="empty page-empty muted">Loading…</div>'; }
+    mailBox.openId = id;
+    try {
+      const m = await api('/mail/' + encodeURIComponent(id));
+      if (pages.mail !== id) return;   // another one was picked meanwhile
+      mailBox.open = m;
+    } catch (err) {
+      if (pages.mail !== id) return;
+      view.innerHTML = `<div class="empty page-empty"><p>${esc(err.message)}</p></div>`;
+      return;
+    }
+  }
+  const m = mailBox.open;
+  const i = mailBox.list.findIndex((x) => x.id === id);
+  view.innerHTML = `
+    <div class="page-head mail-head">
+      <div class="page-title"><h2 title="${esc(m.subject || '(no subject)')}">${esc(m.subject || '(no subject)')}</h2></div>
+      <div class="page-actions">
+        <button class="icon-btn" data-act="newer" title="Newer message" aria-label="Newer message" ${i <= 0 ? 'disabled' : ''}>${icon('arrow-up')}</button>
+        <button class="icon-btn" data-act="older" title="Older message" aria-label="Older message" ${i < 0 || i >= mailBox.list.length - 1 ? 'disabled' : ''}>${icon('arrow-down')}</button>
+        <button data-act="copy" title="Copy the text of this message">${icon('copy')} Copy text</button>
+        <button class="danger" data-act="del" title="Delete this message">${icon('trash')} Delete</button>
+      </div>
+    </div>
+    <div class="page-card mail-meta">
+      <div><span class="muted">From</span><span>${esc(m.from || '')}</span></div>
+      <div><span class="muted">To</span><span>${esc(m.to || '')}</span></div>
+      <div><span class="muted">Received</span><span>${esc(fmtDate(m.received_at))} <span class="muted">· ${esc(agoText(m.received_at))}${m.size ? ' · ' + esc(fmtBytes(m.size)) : ''}</span></span></div>
+    </div>
+    ${m.truncated ? '<div class="muted small">The message was longer than your plan keeps; the end is cut off.</div>' : ''}
+    <div class="page-card mail-body"><pre>${mailLinkify(m.text) || '<span class="muted">(no text)</span>'}</pre></div>`;
+  const go = (j) => { const x = mailBox.list[j]; if (x) openMail(x.id); };
+  $('[data-act=newer]', view).addEventListener('click', () => go(i - 1));
+  $('[data-act=older]', view).addEventListener('click', () => go(i + 1));
+  $('[data-act=copy]', view).addEventListener('click', async () => { if (await copyText(m.text || '')) toast('Text copied', 'ok'); });
+  $('[data-act=del]', view).addEventListener('click', async () => {
+    const next = mailBox.list[i + 1] || mailBox.list[i - 1] || null;
+    try { await api('/mail/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (err) { toast(err.message, 'error'); return; }
+    mailBox.list = mailBox.list.filter((x) => x.id !== id);
+    pages.mail = next ? next.id : null;
+    if (next) markMailSeen(next.id);
+    renderInbox();
+    toast('Message deleted', 'ok');
+  });
+}
+
 function initPages() {
   const tabs = $('#side-tabs');
   if (!tabs) return;
@@ -552,6 +749,9 @@ function initPages() {
   $('#btn-mock-new').addEventListener('click', () => mockDialog());
   $('#mon-search').addEventListener('input', (e) => { pages.monSearch = e.target.value; renderMonitorList(); });
   $('#mock-search').addEventListener('input', (e) => { pages.mockSearch = e.target.value; renderMockList(); });
+  $('#mail-search').addEventListener('input', (e) => { pages.mailSearch = e.target.value; renderMailList(); });
+  $('#btn-mail-refresh').addEventListener('click', () => loadInbox());
+  loadInbox(true);   // the unread count on the rail
   restorePlace();
 }
 

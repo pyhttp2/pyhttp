@@ -190,7 +190,7 @@ def test_without_a_mail_system_the_email_block_says_so(client):  # noqa: F811
     assert listing["mail"] == "" and listing["mail_state"] == "sign_in" and listing["email_start"] is False
     result = run(client, graph([block("email", "mail")], ("start", "out", "mail")))
     assert result["state"] == "failed" and "Sign in to the pyhttp cloud" in result["message"]
-    assert client.get("/api/mail").status_code == 404 and "Sign in" in client.get("/api/mail").json()["detail"]
+    assert client.get("/api/mail").json() == {"state": "sign_in", "address": "", "kept": 0, "messages": []}
 
 
 class FakeAccount:
