@@ -142,6 +142,8 @@ button.icon svg.ic, .copy-btn svg.ic, .status-btn svg.ic { width: 16px; height: 
 .tag-bar-toggle .n { font-weight: 400; font-variant-numeric: tabular-nums; }
 .tag-bar-on { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-bar-on svg.ic { width: 12px; height: 12px; flex: none; }
+.tag-bar-howto { padding: 2px 0 6px 21px; }
+.tag-bar.empty .tag-bar-toggle .n { font-style: italic; }
 .tag-bar-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 6px; max-height: 120px; overflow: auto; }
 .item-tags { color: var(--accent); }
 .tag-why { color: var(--danger); margin: -4px 0 8px; }

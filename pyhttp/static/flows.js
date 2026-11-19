@@ -209,7 +209,8 @@ function renderFlowList() {
   const q = flowUi.search.trim().toLowerCase();
   const tags = countTags(flowUi.list);
   if (flowUi.tag && !tags.some((t) => t.tag === flowUi.tag)) flowUi.tag = '';   // its last flow lost the tag
-  renderTagBar($('#flow-tag-filter'), 'flows', tags, flowUi.tag, (tag) => { flowUi.tag = tag; renderFlowList(); });
+  renderTagBar($('#flow-tag-filter'), 'flows', tags, flowUi.tag, (tag) => { flowUi.tag = tag; renderFlowList(); },
+    'Open a flow, then the tag button next to its name.');
   const shown = flowUi.list.filter((f) => (!q || f.name.toLowerCase().includes(q) || String(f.folder || '').toLowerCase().includes(q)
     || (f.tags || []).some((t) => t.toLowerCase().includes(q))) && (!flowUi.tag || (f.tags || []).includes(flowUi.tag)));
   if (!shown.length) {

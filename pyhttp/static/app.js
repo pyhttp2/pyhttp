@@ -422,7 +422,8 @@ async function loadRequests() {
 }
 
 function renderTags() {
-  renderTagBar($('#tag-filter'), 'requests', state.tags, state.tag, (tag) => { state.tag = tag; loadRequests(); });
+  renderTagBar($('#tag-filter'), 'requests', state.tags, state.tag, (tag) => { state.tag = tag; loadRequests(); },
+    'Open a request, then Details: type its tags there.');
 }
 
 // --------------------------------------------------------------------- tags
@@ -496,21 +497,26 @@ const tagBarOpen = (key) => { try { return localStorage.getItem('pyhttp.tagbar.'
  * not push the list down; unfolded, a chip per tag. The tag filtering the list shows in the
  * folded line too, with an × to show everything again: a filter is never hidden.
  * Folded or not is remembered per section (key) in this browser.
+ *
+ * With no tags yet the line still shows ("none yet"), and unfolded it says how to add them
+ * (howTo): a filter that appears only once something is tagged is never found. Without howTo
+ * (the inbox: its tags are not typed) nothing shows until there is something to filter.
  */
-function renderTagBar(box, key, tags, active, pick) {
+function renderTagBar(box, key, tags, active, pick, howTo = '') {
   if (!box) return;
-  if (!tags.length && !active) { box.hidden = true; box.innerHTML = ''; return; }
+  if (!tags.length && !active && !howTo) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
+  box.classList.toggle('empty', !tags.length && !active);
   const open = tagBarOpen(key);
   box.classList.toggle('open', open);
   box.innerHTML = `<div class="tag-bar-head">
-      <button type="button" class="tag-bar-toggle" aria-expanded="${open}" title="${open ? 'Hide the tags' : 'Show the tags, to show only what has one'}">${icon('chevron-right')}${icon('tag')}Tags<span class="n">${tags.length}</span></button>
+      <button type="button" class="tag-bar-toggle" aria-expanded="${open}" title="${open ? 'Hide the tags' : 'Show the tags, to show only what has one'}">${icon('chevron-right')}${icon('tag')}Tags<span class="n">${tags.length || 'none yet'}</span></button>
       ${active ? `<button type="button" class="chip active tag-bar-on" title="Showing only what is tagged #${esc(active)}. Click to show everything">#${esc(active)}${icon('x')}</button>` : ''}
-    </div>${open ? `<div class="tag-bar-chips">${tags.map(({ tag, count }) =>
+    </div>${open && !tags.length ? `<div class="tag-bar-howto muted small">${esc(howTo)}</div>` : ''}${open && tags.length ? `<div class="tag-bar-chips">${tags.map(({ tag, count }) =>
       `<button type="button" class="chip ${tag === active ? 'active' : ''}" data-tag="${esc(tag)}" title="${tag === active ? 'Show everything again' : `Show only what is tagged #${esc(tag)}`}">#${esc(tag)}<span class="n">${count}</span></button>`).join('')}</div>` : ''}`;
   $('.tag-bar-toggle', box).addEventListener('click', () => {
     try { localStorage.setItem('pyhttp.tagbar.' + key, open ? '0' : '1'); } catch { /* private window */ }
-    renderTagBar(box, key, tags, active, pick);
+    renderTagBar(box, key, tags, active, pick, howTo);
   });
   const on = $('.tag-bar-on', box);
   if (on) on.addEventListener('click', () => pick(''));

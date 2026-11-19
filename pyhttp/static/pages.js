@@ -103,7 +103,8 @@ function renderMonitorList() {
   const q = pages.monSearch.trim().toLowerCase();
   const tags = countTags(mon.list);
   if (pages.monTag && !tags.some((t) => t.tag === pages.monTag)) pages.monTag = '';
-  renderTagBar($('#mon-tag-filter'), 'monitors', tags, pages.monTag, (tag) => { pages.monTag = tag; renderMonitorList(); });
+  renderTagBar($('#mon-tag-filter'), 'monitors', tags, pages.monTag, (tag) => { pages.monTag = tag; renderMonitorList(); },
+    'Open a monitor, press Edit, and type its tags.');
   const shown = mon.list.filter((m) => (!q || m.name.toLowerCase().includes(q) || (m.tags || []).some((t) => t.toLowerCase().includes(q)))
     && (!pages.monTag || (m.tags || []).includes(pages.monTag))
     && (pages.monFilter === 'all' || (pages.monFilter === 'fail' ? monitorState(m) === 'fail' : !m.enabled)));
@@ -322,7 +323,8 @@ function renderMockList() {
   const q = pages.mockSearch.trim().toLowerCase();
   const tags = countTags(mocks.list);
   if (pages.mockTag && !tags.some((t) => t.tag === pages.mockTag)) pages.mockTag = '';
-  renderTagBar($('#mock-tag-filter'), 'mocks', tags, pages.mockTag, (tag) => { pages.mockTag = tag; renderMockList(); });
+  renderTagBar($('#mock-tag-filter'), 'mocks', tags, pages.mockTag, (tag) => { pages.mockTag = tag; renderMockList(); },
+    'Open a mock server, press Edit, and type its tags.');
   const shown = mocks.list.filter((m) => (!q || m.name.toLowerCase().includes(q) || (m.slug || '').includes(q) || (m.tags || []).some((t) => t.toLowerCase().includes(q)))
     && (!pages.mockTag || (m.tags || []).includes(pages.mockTag)));
   if (!shown.length) {

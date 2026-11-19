@@ -2280,6 +2280,14 @@ def test_tags_filter_folded_and_on_every_section(page, servers):
 
     # a flow: tags from its header, and the limits are said before saving
     page.click("#side-tabs button[data-tab='flows']")
+    # nothing tagged yet: the line shows anyway, and says how to tag
+    page.wait_for_selector("#flow-tag-filter .tag-bar-toggle")
+    assert "none yet" in page.inner_text("#flow-tag-filter .tag-bar-toggle")
+    # read in the same tick as the click: no later redraw of the list can cover for the bar
+    howto = page.evaluate("""() => { document.querySelector('#flow-tag-filter .tag-bar-toggle').click();
+        const how = document.querySelector('#flow-tag-filter:not([hidden]) .tag-bar-howto'); return how && how.textContent; }""")
+    assert howto and "tag button next to its name" in howto
+    page.click("#flow-tag-filter .tag-bar-toggle")
     page.click("#btn-flow-new")
     page.wait_for_selector("#flow-tags")
     page.click("#flow-tags")
