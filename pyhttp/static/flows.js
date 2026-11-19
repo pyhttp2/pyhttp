@@ -7,7 +7,7 @@
 // another block to wire them, click a wire to remove it. Changes save as they are made.
 // mailState: 'ready' (there is a test inbox), 'sign_in' (there is one after signing in to the
 // pyhttp cloud: the desktop app), 'offline' (signed in, the cloud does not answer)
-const flowUi = { list: [], tabs: [], listed: false, restore: null, mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
+const flowUi = { tag: '', list: [], tabs: [], listed: false, restore: null, mail: '', mailState: 'sign_in', mailProblem: '', emailStart: false, limits: {}, flow: null, selected: null, saveTimer: null, saving: null, run: null, marks: {},
                  loaded: false, poll: null, search: '',
                  checked: new Set(),      // flows ticked in the list, for Run selected
                  batch: null,             // the Run selected going (or just ended): its snapshot
@@ -136,7 +136,7 @@ function flowItemHtml(f, depth) {
     <input type="checkbox" class="flow-tick" ${flowUi.checked.has(f.id) ? 'checked' : ''} aria-label="Tick ${esc(f.name)} to run it with others" title="Tick to run it with others">
     ${flowBadge(f)}
     <span class="flow-item-text"><span class="flow-item-name">${esc(f.name)}</span>
-      <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">' + icon('mail') + ' on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when}</span></span>
+      <span class="flow-item-meta muted">${flowByEmail(f) ? '<span class="flow-auto" title="Starts by itself when a matching email arrives">' + icon('mail') + ' on email</span> · ' : ''}${blocks} block${blocks === 1 ? '' : 's'}${when} ${tagsInline(f.tags)}</span></span>
     <button class="link flow-item-act" data-act="move" title="Move to a folder" aria-label="Move to a folder">${icon('folder')}</button>
     <button class="link flow-item-act" data-act="copy" title="Duplicate this flow" aria-label="Duplicate">${icon('copy')}</button>
     <button class="link flow-item-act danger" data-act="del" title="Delete this flow" aria-label="Delete">${icon('x')}</button>
@@ -207,12 +207,16 @@ function renderFlowList() {
   if (!ul) return;
   renderFlowSelBar();
   const q = flowUi.search.trim().toLowerCase();
-  const shown = flowUi.list.filter((f) => !q || f.name.toLowerCase().includes(q) || String(f.folder || '').toLowerCase().includes(q));
+  const tags = countTags(flowUi.list);
+  if (flowUi.tag && !tags.some((t) => t.tag === flowUi.tag)) flowUi.tag = '';   // its last flow lost the tag
+  renderTagBar($('#flow-tag-filter'), 'flows', tags, flowUi.tag, (tag) => { flowUi.tag = tag; renderFlowList(); });
+  const shown = flowUi.list.filter((f) => (!q || f.name.toLowerCase().includes(q) || String(f.folder || '').toLowerCase().includes(q)
+    || (f.tags || []).some((t) => t.toLowerCase().includes(q))) && (!flowUi.tag || (f.tags || []).includes(flowUi.tag)));
   if (!shown.length) {
-    ul.innerHTML = `<li class="flow-none muted small">${flowUi.list.length ? 'No flow matches the search.' : 'No flows yet. Press “+ New”.'}</li>`;
+    ul.innerHTML = `<li class="flow-none muted small">${flowUi.list.length ? 'No flow matches.' : 'No flows yet. Press “+ New”.'}</li>`;
     return;
   }
-  ul.innerHTML = flowBranchHtml(flowTree(shown), 0, !!q);
+  ul.innerHTML = flowBranchHtml(flowTree(shown), 0, !!q || !!flowUi.tag);
   $$('.flow-folder-row .flow-tick', ul).forEach((box) => { box.indeterminate = !!box.dataset.some; });
 
   $$('.flow-item', ul).forEach((li) => {
@@ -231,7 +235,7 @@ function renderFlowList() {
     });
     $('[data-act=move]', li).addEventListener('click', () => moveFlows([f.id]));
     $('[data-act=copy]', li).addEventListener('click', async () => {
-      try { await api('/flows', { method: 'POST', body: { name: f.name + ' copy', graph: f.graph, folder: f.folder || '' } }); } catch (err) { toast(err.message, 'error'); }
+      try { await api('/flows', { method: 'POST', body: { name: f.name + ' copy', graph: f.graph, folder: f.folder || '', tags: f.tags || [] } }); } catch (err) { toast(err.message, 'error'); }
       refreshFlows();
     });
     $('[data-act=del]', li).addEventListener('click', async () => {
@@ -525,6 +529,9 @@ function restoreFlowSession(ids, front) {
 function openFlowInbox() { showSection('inbox'); }
 
 // ------------------------------------------------- the middle of the window
+const flowTagsLabel = (flow) => (flow.tags && flow.tags.length
+  ? `${icon('tag')} ${flow.tags.map((t) => '#' + esc(t)).join(' ')}` : `${icon('tag')} Add tags`);
+
 function renderFlowView() {
   const view = $('#flow-view');
   if (!view) return;
@@ -545,6 +552,7 @@ function renderFlowView() {
   view.innerHTML = `
     <div class="flow-bar">
       <input id="flow-name" value="${esc(flow.name)}" aria-label="Flow name" title="Flow name (click to rename)" maxlength="120" spellcheck="false">
+      <button id="flow-tags" class="small flow-tags" title="Tags: the Flows list can show only the flows with one">${flowTagsLabel(flow)}</button>
       <span class="flow-adds" role="group" aria-label="Add a block">${add}</span>
       <span class="grow"></span>
       <span id="flow-saved" class="save-state"></span>
@@ -568,6 +576,14 @@ function renderFlowView() {
       </div>
     </div>`;
   if (flowUi.ask) { clearInterval(flowUi.ask.clock); flowUi.ask = null; }   // its panel went with the old view
+  $('#flow-tags').addEventListener('click', () => editTagsDialog(`Tags of “${flow.name}”`, flow.tags || [], async (tags) => {
+    const saved = await api('/flows/' + flow.id, { method: 'PUT', body: { tags } });
+    flow.tags = saved.tags;
+    const listed = flowUi.list.find((x) => x.id === flow.id);
+    if (listed) listed.tags = saved.tags;
+    $('#flow-tags').innerHTML = flowTagsLabel(flow);
+    renderFlowList();
+  }));
   $('#flow-name').addEventListener('input', (e) => {
     flow.name = e.target.value;
     const label = $(`.flow-item[data-id="${CSS.escape(flow.id)}"] .flow-item-name`);

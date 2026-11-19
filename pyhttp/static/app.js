@@ -9,6 +9,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 // the text beside it and sizes it in em, so it follows the font size of its button (size = px overrides).
 const ICONS = {
   'x': '<path d="M18 6 6 18M6 6l12 12"/>',
+  'tag': '<path d="M3.5 11.6V4.5a1 1 0 0 1 1-1h7.1l8.9 8.9-8.1 8.1z"/><circle cx="8" cy="8" r="1.4"/>',
   'check': '<path d="M20 6 9 17l-5-5"/>',
   'plus': '<path d="M12 5v14M5 12h14"/>',
   'play': '<path d="M7 5v14l11-7z" fill="currentColor"/>',
@@ -421,19 +422,102 @@ async function loadRequests() {
 }
 
 function renderTags() {
-  const box = $('#tag-filter');
-  box.innerHTML = '';
-  state.tags.forEach(({ tag, count }) => {
-    const chip = document.createElement('span');
-    chip.className = 'chip' + (state.tag === tag ? ' active' : '');
-    chip.innerHTML = `${esc(tag)}<span class="n">${count}</span>`;
-    chip.addEventListener('click', () => {
-      state.tag = state.tag === tag ? '' : tag;
-      loadRequests();
-    });
-    box.appendChild(chip);
-  });
+  renderTagBar($('#tag-filter'), 'requests', state.tags, state.tag, (tag) => { state.tag = tag; loadRequests(); });
 }
+
+// --------------------------------------------------------------------- tags
+// Requests, flows, monitors and mock servers carry tags; the sidebar of each section filters
+// by them. The limits are the server's (db.py MAX_TAGS, MAX_TAG_LENGTH), said here before saving.
+const TAG_MAX = 20;
+const TAG_MAX_LEN = 32;
+
+/** "a, #b, a" → {tags: ['a', 'b'], problem}: problem says why it cannot be saved as it is. */
+function parseTags(text) {
+  const tags = [];
+  String(text || '').split(',').forEach((raw) => {
+    const t = raw.trim().replace(/^#+/, '').trim();
+    if (t && !tags.includes(t)) tags.push(t);
+  });
+  const long = tags.find((t) => t.length > TAG_MAX_LEN);
+  let problem = '';
+  if (long) problem = `“${long.length > 24 ? long.slice(0, 24) + '…' : long}” is ${long.length} characters long: a tag has ${TAG_MAX_LEN} at most.`;
+  else if (tags.length > TAG_MAX) problem = `${tags.length} tags: an item has ${TAG_MAX} at most.`;
+  return { tags, problem };
+}
+
+/** {tag, count} for every tag of the items, most used first. */
+function countTags(items) {
+  const n = new Map();
+  items.forEach((it) => (it.tags || []).forEach((t) => n.set(t, (n.get(t) || 0) + 1)));
+  return [...n].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+
+/** A field to type tags in, with how many there are and, over a limit, why it cannot be saved. */
+function tagFieldHtml(id, tags) {
+  return `<label class="field">Tags <input id="${id}" class="grow" value="${esc((tags || []).join(', '))}" placeholder="comma separated, e.g. prod, payments" autocomplete="off" spellcheck="false">
+      <span id="${id}-n" class="tag-count muted small"></span></label>
+    <div id="${id}-why" class="tag-why small" role="alert" hidden></div>`;
+}
+/** Wires a field made by tagFieldHtml; returns a function giving parseTags of what is typed. */
+function bindTagField(id) {
+  const input = $('#' + id);
+  const show = () => {
+    const got = parseTags(input.value);
+    $(`#${id}-n`).textContent = `${got.tags.length}/${TAG_MAX}`;
+    $(`#${id}-n`).classList.toggle('over', got.tags.length > TAG_MAX);
+    $(`#${id}-why`).hidden = !got.problem;
+    $(`#${id}-why`).textContent = got.problem;
+    input.classList.toggle('invalid', !!got.problem);
+    return got;
+  };
+  input.addEventListener('input', show);
+  show();
+  return show;
+}
+
+/** A small dialog to change the tags of one thing; save(tags) does the saving. */
+function editTagsDialog(title, tags, save) {
+  openModal(title, tagFieldHtml('tags-edit', tags), [
+    { label: 'Cancel', onClick: closeModal },
+    { label: 'Save', cls: 'primary', onClick: async () => {
+      const got = read();
+      if (got.problem) { $('#tags-edit').focus(); return; }
+      try { await save(got.tags); closeModal(); } catch (err) { toast(err.message, 'error'); }
+    } },
+  ]);
+  const read = bindTagField('tags-edit');
+  $('#tags-edit').focus();
+  $('#tags-edit').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#modal-foot button.primary').click(); } });
+}
+
+const tagBarOpen = (key) => { try { return localStorage.getItem('pyhttp.tagbar.' + key) === '1'; } catch { return false; } };
+/**
+ * The tag filter of a section's sidebar. Folded at first to one line ("Tags 5"), so it does
+ * not push the list down; unfolded, a chip per tag. The tag filtering the list shows in the
+ * folded line too, with an × to show everything again: a filter is never hidden.
+ * Folded or not is remembered per section (key) in this browser.
+ */
+function renderTagBar(box, key, tags, active, pick) {
+  if (!box) return;
+  if (!tags.length && !active) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const open = tagBarOpen(key);
+  box.classList.toggle('open', open);
+  box.innerHTML = `<div class="tag-bar-head">
+      <button type="button" class="tag-bar-toggle" aria-expanded="${open}" title="${open ? 'Hide the tags' : 'Show the tags, to show only what has one'}">${icon('chevron-right')}${icon('tag')}Tags<span class="n">${tags.length}</span></button>
+      ${active ? `<button type="button" class="chip active tag-bar-on" title="Showing only what is tagged #${esc(active)}. Click to show everything">#${esc(active)}${icon('x')}</button>` : ''}
+    </div>${open ? `<div class="tag-bar-chips">${tags.map(({ tag, count }) =>
+      `<button type="button" class="chip ${tag === active ? 'active' : ''}" data-tag="${esc(tag)}" title="${tag === active ? 'Show everything again' : `Show only what is tagged #${esc(tag)}`}">#${esc(tag)}<span class="n">${count}</span></button>`).join('')}</div>` : ''}`;
+  $('.tag-bar-toggle', box).addEventListener('click', () => {
+    try { localStorage.setItem('pyhttp.tagbar.' + key, open ? '0' : '1'); } catch { /* private window */ }
+    renderTagBar(box, key, tags, active, pick);
+  });
+  const on = $('.tag-bar-on', box);
+  if (on) on.addEventListener('click', () => pick(''));
+  $$('.tag-bar-chips .chip', box).forEach((c) => c.addEventListener('click', () => pick(c.dataset.tag === active ? '' : c.dataset.tag)));
+}
+/** Tags of an item in a list row: "#a #b", or nothing. */
+const tagsInline = (tags) => (tags && tags.length ? `<span class="item-tags">${tags.map((t) => '#' + esc(t)).join(' ')}</span>` : '');
 
 // ------------------------------------------------- keyboard list navigation
 // ArrowUp/Down move a focus ring over the visible requests; Enter opens, Space
@@ -545,7 +629,8 @@ function readEditor() {
   return {
     name: $('#f-name').value.trim() || 'Untitled',
     description: $('#f-description').value,
-    tags: $('#f-tags').value.split(',').map((t) => t.trim()).filter(Boolean),
+    // what is over a limit is not kept (the field says so: requestTagsHint)
+    tags: parseTags($('#f-tags').value).tags.filter((t) => t.length <= TAG_MAX_LEN).slice(0, TAG_MAX),
     method: $('#f-method').value,
     url: $('#f-url').value.trim(),
     params: readKv($('#kv-params')),
@@ -1043,8 +1128,16 @@ function saveOnExit() {
 }
 
 // ------------------------------------------------------- compact header
+function requestTagsHint() {
+  const got = parseTags($('#f-tags').value);
+  const why = $('#f-tags-why');
+  why.hidden = !got.problem;
+  why.textContent = got.problem ? got.problem + (got.tags.length > TAG_MAX ? ` Only the first ${TAG_MAX} are kept.` : ' It is not kept.') : '';
+  $('#f-tags').classList.toggle('invalid', !!got.problem);
+}
 function renderMetaTags() {
-  const tags = $('#f-tags').value.split(',').map((t) => t.trim()).filter(Boolean);
+  const tags = parseTags($('#f-tags').value).tags;
+  requestTagsHint();
   const box = $('#meta-tags');
   box.innerHTML = tags.map((t) => `<span class="chip">#${esc(t)}</span>`).join('');
   $$('.chip', box).forEach((c) => c.addEventListener('click', () => toggleDetails(true)));

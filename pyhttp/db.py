@@ -376,6 +376,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     add("folders", "position", "INTEGER NOT NULL DEFAULT 0")
     add("folders", "views", "TEXT NOT NULL DEFAULT '[]'")
     add("flows", "folder", "TEXT NOT NULL DEFAULT ''")
+    add("flows", "tags", "TEXT NOT NULL DEFAULT '[]'")
+    add("monitors", "tags", "TEXT NOT NULL DEFAULT '[]'")
+    add("mock_servers", "tags", "TEXT NOT NULL DEFAULT '[]'")
     add("run_results", "body_name", "TEXT")
     add("run_results", "iteration", "INTEGER NOT NULL DEFAULT 1")
     add("run_results", "tests", "TEXT NOT NULL DEFAULT '[]'")
@@ -568,12 +571,29 @@ def _kv_rows(rows: Any) -> list[dict[str, Any]]:
     return out
 
 
-def normalize_request(data: dict[str, Any]) -> dict[str, Any]:
+MAX_TAGS = 20          # per request, flow, monitor or mock server (the UI says so before saving)
+MAX_TAG_LENGTH = 32    # characters per tag
+
+
+def clean_tags(raw: Any) -> list[str]:
+    """Tags as typed: trimmed, a leading # dropped, each once, in the order given."""
     tags: list[str] = []
-    for t in data.get("tags") or []:
-        t = str(t).strip()
+    for t in raw or []:
+        t = str(t).strip().lstrip("#").strip()[:MAX_TAG_LENGTH]
         if t and t not in tags:
             tags.append(t)
+    return tags[:MAX_TAGS]
+
+
+def _tags_of(value: Any) -> list[str]:
+    try:
+        return clean_tags(json.loads(value or "[]"))
+    except (TypeError, ValueError):
+        return []
+
+
+def normalize_request(data: dict[str, Any]) -> dict[str, Any]:
+    tags = clean_tags(data.get("tags"))
     try:
         timeout = float(data.get("timeout") or 30)
     except (TypeError, ValueError):
@@ -1622,6 +1642,7 @@ def _row_to_monitor(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["request_ids"] = json.loads(d["request_ids"])
     d["enabled"] = bool(d["enabled"])
+    d["tags"] = _tags_of(d.get("tags"))
     return d
 
 
@@ -1641,11 +1662,11 @@ def create_monitor(data: dict[str, Any]) -> dict[str, Any]:
     mid = uuid.uuid4().hex
     with _lock:
         _c().execute(
-            "INSERT INTO monitors (id, name, request_ids, interval_s, enabled, webhook_url, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO monitors (id, name, request_ids, interval_s, enabled, webhook_url, created_at, tags) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             (mid, str(data.get("name") or "Monitor"), json.dumps(list(data.get("request_ids") or [])),
              max(10, int(data.get("interval_s") or 300)), 1 if data.get("enabled", True) else 0,
-             str(data.get("webhook_url") or ""), time.time()),
+             str(data.get("webhook_url") or ""), time.time(), json.dumps(clean_tags(data.get("tags")))),
         )
         _c().commit()
     return get_monitor(mid)  # type: ignore[return-value]
@@ -1658,6 +1679,8 @@ def update_monitor(monitor_id: str, **fields: Any) -> dict[str, Any] | None:
         fields["interval_s"] = max(10, int(fields["interval_s"]))
     if "enabled" in fields:
         fields["enabled"] = 1 if fields["enabled"] else 0
+    if "tags" in fields:
+        fields["tags"] = json.dumps(clean_tags(fields["tags"]))
     if fields:
         cols = ", ".join(f"{k} = ?" for k in fields)
         with _lock:
@@ -1682,6 +1705,7 @@ def _row_to_flow(row: sqlite3.Row) -> dict[str, Any]:
         d["graph"] = json.loads(d["graph"]) or {}
     except ValueError:
         d["graph"] = {}
+    d["tags"] = _tags_of(d.get("tags"))
     return d
 
 
@@ -1697,22 +1721,24 @@ def get_flow(flow_id: str) -> dict[str, Any] | None:
     return _row_to_flow(row) if row else None
 
 
-def create_flow(name: str, graph: dict[str, Any], folder: str = "") -> dict[str, Any]:
+def create_flow(name: str, graph: dict[str, Any], folder: str = "", tags: Any = None) -> dict[str, Any]:
     fid = uuid.uuid4().hex
     now = time.time()
     with _lock:
-        _c().execute("INSERT INTO flows (id, name, graph, created_at, updated_at, folder) VALUES (?,?,?,?,?,?)",
-                     (fid, str(name or "Flow"), json.dumps(graph), now, now, str(folder or "")))
+        _c().execute("INSERT INTO flows (id, name, graph, created_at, updated_at, folder, tags) VALUES (?,?,?,?,?,?,?)",
+                     (fid, str(name or "Flow"), json.dumps(graph), now, now, str(folder or ""), json.dumps(clean_tags(tags))))
         _c().commit()
     return get_flow(fid)  # type: ignore[return-value]
 
 
 def update_flow(flow_id: str, **fields: Any) -> dict[str, Any] | None:
-    """``name``, ``graph``, ``folder``, ``last_run_at``, ``last_status``. Only an edit moves ``updated_at``."""
-    fields = {k: v for k, v in fields.items() if k in ("name", "graph", "folder", "last_run_at", "last_status")}
+    """``name``, ``graph``, ``folder``, ``tags``, ``last_run_at``, ``last_status``. Only an edit moves ``updated_at``."""
+    fields = {k: v for k, v in fields.items() if k in ("name", "graph", "folder", "tags", "last_run_at", "last_status")}
     if "graph" in fields:
         fields["graph"] = json.dumps(fields["graph"])
-    if "name" in fields or "graph" in fields or "folder" in fields:
+    if "tags" in fields:
+        fields["tags"] = json.dumps(clean_tags(fields["tags"]))
+    if "name" in fields or "graph" in fields or "folder" in fields or "tags" in fields:
         fields["updated_at"] = time.time()
     if fields:
         cols = ", ".join(f"{k} = ?" for k in fields)
@@ -1828,6 +1854,7 @@ def _row_to_mock(row: sqlite3.Row) -> dict[str, Any]:
     d["enabled"] = bool(d["enabled"])
     d["cors"] = bool(d["cors"])
     d["log_calls"] = bool(d["log_calls"])
+    d["tags"] = _tags_of(d.get("tags"))
     return d
 
 
@@ -1886,11 +1913,11 @@ def create_mock(data: dict[str, Any]) -> dict[str, Any]:
     slug = mock_slug(data.get("slug") or name)
     with _lock:
         _c().execute(
-            "INSERT INTO mock_servers (id, name, slug, description, enabled, delay_ms, cors, log_calls, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO mock_servers (id, name, slug, description, enabled, delay_ms, cors, log_calls, created_at, tags) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (mid, name, slug, str(data.get("description") or ""), 1 if data.get("enabled", True) else 0,
              max(0.0, float(data.get("delay_ms") or 0)), 1 if data.get("cors", True) else 0,
-             1 if data.get("log_calls", True) else 0, time.time()),
+             1 if data.get("log_calls", True) else 0, time.time(), json.dumps(clean_tags(data.get("tags")))),
         )
         _c().commit()
     for route in data.get("routes") or []:
@@ -1907,6 +1934,8 @@ def update_mock(mock_id: str, **fields: Any) -> dict[str, Any] | None:
             fields[key] = 1 if fields[key] else 0
     if "delay_ms" in fields:
         fields["delay_ms"] = max(0.0, float(fields["delay_ms"]))
+    if "tags" in fields:
+        fields["tags"] = json.dumps(clean_tags(fields["tags"]))
     if fields:
         cols = ", ".join(f"{k} = ?" for k in fields)
         with _lock:

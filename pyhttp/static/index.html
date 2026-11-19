@@ -87,7 +87,7 @@
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 11v5M9.5 13.5h5"/></svg>
           </button>
         </div>
-        <div id="tag-filter" class="tag-filter"></div>
+        <div id="tag-filter" class="tag-bar" hidden></div>
         <div class="select-bar">
           <label title="Select everything currently shown"><input type="checkbox" id="select-all"> All shown</label>
           <span id="selected-count" class="muted small">0 selected</span>
@@ -105,6 +105,7 @@
           <input id="flow-search" type="search" placeholder="Search flows…" autocomplete="off">
           <button id="btn-flow-new" class="primary" title="New flow">+<span class="btn-text"> New</span></button>
         </div>
+        <div id="flow-tag-filter" class="tag-bar" hidden></div>
         <ul id="flow-list" class="flow-list"></ul>
         <div id="flow-inbox" class="flow-inbox" hidden></div>
       </div>
@@ -114,6 +115,7 @@
           <button id="btn-mon-new" class="primary" title="Monitor requests on a schedule">+<span class="btn-text"> New</span></button>
         </div>
         <div id="mon-filter" class="page-filter" role="group" aria-label="Show"></div>
+        <div id="mon-tag-filter" class="tag-bar" hidden></div>
         <ul id="mon-list" class="page-list"></ul>
       </div>
       <div class="tab-panel side-panel" data-panel="mocks" hidden>
@@ -121,6 +123,7 @@
           <input id="mock-search" type="search" placeholder="Search mock servers…" autocomplete="off">
           <button id="btn-mock-new" class="primary" title="Add a mock server">+<span class="btn-text"> New</span></button>
         </div>
+        <div id="mock-tag-filter" class="tag-bar" hidden></div>
         <ul id="mock-list" class="page-list"></ul>
       </div>
       <div class="tab-panel side-panel" data-panel="inbox" hidden>
@@ -129,6 +132,7 @@
           <button id="btn-mail-refresh" class="icon-btn" title="Check for new mail" aria-label="Check for new mail"><svg class="ic ic-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
         </div>
         <div id="mail-addr" class="mail-addr"></div>
+        <div id="mail-tag-filter" class="tag-bar" hidden></div>
         <ul id="mail-list" class="page-list"></ul>
       </div>
     </div>
@@ -180,6 +184,7 @@
       </div>
       <div id="details" class="details" hidden>
         <label class="field">Tags <input id="f-tags" class="grow" placeholder="comma separated, e.g. auth, users, smoke"></label>
+        <div id="f-tags-why" class="tag-why small" role="alert" hidden></div>
         <div class="row tight">
           <span class="muted small grow">Description (Markdown)</span>
           <button id="btn-desc-preview" class="link small">Preview</button>

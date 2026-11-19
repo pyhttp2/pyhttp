@@ -2219,6 +2219,14 @@ def test_inbox_is_a_section(page, servers):
     assert page.locator("#mail-list .page-item-name").all_text_contents() == ["Your code", "Welcome"]
     assert page.locator("#mail-list .mail-item.unread").count() == 2 and page.inner_text("#inbox-badge") == "2"
     assert "me@inbox.pyhttp.com" in page.inner_text("#mail-addr")
+    # the sender's domain is a message's tag
+    page.evaluate("localStorage.removeItem('pyhttp.tagbar.mail')")
+    page.click("#mail-tag-filter .tag-bar-toggle")
+    assert page.locator("#mail-tag-filter .chip").all_text_contents() == ["#shop.test2"]
+    page.click("#mail-tag-filter .chip")
+    assert page.locator("#mail-list .mail-item").count() == 2
+    page.click("#mail-tag-filter .tag-bar-on")
+    page.click("#mail-tag-filter .tag-bar-toggle")
     page.click("#mail-list .mail-item:has-text('Your code')")
     page.wait_for_selector("#mail-view .mail-body")
     assert page.inner_text("#mail-view h2") == "Your code"
@@ -2240,3 +2248,81 @@ def test_inbox_is_a_section(page, servers):
     page.unroute("**/api/mail**")
     page.click("#side-tabs button[data-tab='collection']")
     assert page.is_visible("#req-list")
+
+
+def test_tags_filter_folded_and_on_every_section(page, servers):
+    """Each section's tags are folded to one line at first; unfolded they filter the list. A
+    tag in use shows even folded. Flows, monitors and mock servers take tags; the limits are
+    said before saving."""
+    app_url, echo_url = servers
+    page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('pyhttp.tagbar.')).forEach((k) => localStorage.removeItem(k))")
+    post = lambda path, body: page.request.post(app_url + path, data=body).json()
+    post("/api/requests", {"name": "Tagged A", "method": "GET", "url": echo_url + "/echo", "tags": ["smoke", "auth"]})
+    post("/api/requests", {"name": "Tagged B", "method": "GET", "url": echo_url + "/echo", "tags": ["smoke"]})
+    page.reload()
+    page.wait_for_selector("#tag-filter .tag-bar-toggle")
+    # folded: one line, no chips
+    assert page.locator("#tag-filter .tag-bar-chips").count() == 0
+    assert "Tags" in page.inner_text("#tag-filter .tag-bar-toggle") and page.get_attribute("#tag-filter .tag-bar-toggle", "aria-expanded") == "false"
+    page.click("#tag-filter .tag-bar-toggle")
+    page.click("#tag-filter .tag-bar-chips .chip[data-tag='auth']")
+    page.wait_for_function("document.querySelectorAll('#req-list .req-item').length === 1")
+    # folded again, the tag in use stays in sight, and clears with one click
+    page.click("#tag-filter .tag-bar-toggle")
+    assert page.inner_text("#tag-filter .tag-bar-on") == "#auth"
+    page.click("#tag-filter .tag-bar-on")
+    page.wait_for_function("document.querySelectorAll('#req-list .req-item').length >= 2")
+    # folded or not is remembered
+    page.click("#tag-filter .tag-bar-toggle")
+    page.reload()
+    page.wait_for_selector("#tag-filter .tag-bar-chips")
+    page.click("#tag-filter .tag-bar-toggle")
+
+    # a flow: tags from its header, and the limits are said before saving
+    page.click("#side-tabs button[data-tab='flows']")
+    page.click("#btn-flow-new")
+    page.wait_for_selector("#flow-tags")
+    page.click("#flow-tags")
+    page.fill("#tags-edit", ", ".join(f"t{i}" for i in range(21)))
+    assert page.inner_text("#tags-edit-n") == "21/20" and "20 at most" in page.inner_text("#tags-edit-why")
+    page.click("#modal-foot button.primary")
+    assert page.is_visible("#modal")            # not saved
+    page.fill("#tags-edit", "nightly, " + "x" * 33)
+    assert "32 at most" in page.inner_text("#tags-edit-why")
+    page.fill("#tags-edit", "#nightly, signup")
+    assert page.is_hidden("#tags-edit-why")
+    page.click("#modal-foot button.primary")
+    page.wait_for_selector("#modal", state="hidden")
+    assert "#nightly #signup" in page.inner_text("#flow-tags")
+    assert "#nightly" in page.inner_text("#flow-list .flow-item .item-tags")
+    page.click("#flow-tag-filter .tag-bar-toggle")
+    assert page.locator("#flow-tag-filter .chip").all_text_contents() == ["#nightly1", "#signup1"]
+    page.click("#flow-tag-filter .tag-bar-toggle")
+
+    # a monitor: tags in its dialog
+    page.click("#btn-monitors")
+    page.click("#btn-mon-new")
+    page.fill("#mon-name", "Tagged monitor")
+    page.locator("#mon-pick .mon-pick-row:has-text('Tagged A') input").check()
+    page.fill("#mon-tags", "prod")
+    page.click("#modal-foot button.primary")
+    page.wait_for_selector("#mon-list .mon-item:has-text('Tagged monitor') .item-tags")
+    assert page.is_visible("#mon-tag-filter .tag-bar-toggle")
+
+    # a mock server: tags in its dialog
+    page.click("#btn-mocks")
+    page.click("#btn-mock-new")
+    page.fill("#mk-name", "Tagged mock")
+    page.fill("#mk-tags", "payments")
+    page.click("#modal-foot button.primary")
+    page.wait_for_selector("#mock-list .mock-item:has-text('Tagged mock') .item-tags")
+
+    # clean up
+    for m in page.request.get(app_url + "/api/monitors").json()["monitors"]:
+        page.request.delete(f"{app_url}/api/monitors/{m['id']}")
+    for m in page.request.get(app_url + "/api/mocks").json()["mocks"]:
+        page.request.delete(f"{app_url}/api/mocks/{m['id']}")
+    for f in page.request.get(app_url + "/api/flows").json()["flows"]:
+        page.request.delete(f"{app_url}/api/flows/{f['id']}")
+    page.click("#side-tabs button[data-tab='collection']")
+    forget(page, app_url, "Tagged A", "Tagged B")

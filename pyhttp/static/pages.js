@@ -8,6 +8,7 @@ const pages = {
   monitor: null, monFilter: 'all', monSearch: '', checks: {}, checksFor: null, failuresOnly: false,
   mock: null, mockTab: 'routes', mockSearch: '', routeSearch: '', unmatchedOnly: false, calls: [], callTimer: null,
   mail: null, mailSearch: '', mailTimer: null,
+  monTag: '', mockTag: '', mailTag: '',
 };
 
 const currentSection = () => $('.layout').dataset.section || 'collection';
@@ -100,7 +101,11 @@ function renderMonitorList() {
     `<button class="chip ${pages.monFilter === key ? 'active' : ''}" data-filter="${key}">${label}<span class="n">${counts[key]}</span></button>`).join('');
   $$('#mon-filter .chip').forEach((b) => b.addEventListener('click', () => { pages.monFilter = b.dataset.filter; renderMonitorList(); }));
   const q = pages.monSearch.trim().toLowerCase();
-  const shown = mon.list.filter((m) => (!q || m.name.toLowerCase().includes(q))
+  const tags = countTags(mon.list);
+  if (pages.monTag && !tags.some((t) => t.tag === pages.monTag)) pages.monTag = '';
+  renderTagBar($('#mon-tag-filter'), 'monitors', tags, pages.monTag, (tag) => { pages.monTag = tag; renderMonitorList(); });
+  const shown = mon.list.filter((m) => (!q || m.name.toLowerCase().includes(q) || (m.tags || []).some((t) => t.toLowerCase().includes(q)))
+    && (!pages.monTag || (m.tags || []).includes(pages.monTag))
     && (pages.monFilter === 'all' || (pages.monFilter === 'fail' ? monitorState(m) === 'fail' : !m.enabled)));
   if (!shown.length) {
     ul.innerHTML = `<li class="page-none muted small">${mon.list.length ? 'No monitor matches.' : 'No monitors yet. Press “+ New”.'}</li>`;
@@ -109,7 +114,7 @@ function renderMonitorList() {
   ul.innerHTML = shown.map((m) => `<li class="page-item mon-item ${m.enabled ? '' : 'off'} ${pages.monitor === m.id ? 'active' : ''}" data-id="${m.id}" tabindex="0">
       <span class="page-dot s-${monitorState(m)}" title="${monitorState(m)}"></span>
       <span class="page-item-text"><span class="page-item-name">${esc(m.name)}</span>
-        <span class="page-item-meta muted mon-meta">${m.request_ids.length} request${m.request_ids.length === 1 ? '' : 's'} · every ${fmtInterval(m.interval_s)}${m.last_run_at ? ` · ${agoText(m.last_run_at)}` : ''}</span></span>
+        <span class="page-item-meta muted mon-meta">${m.request_ids.length} request${m.request_ids.length === 1 ? '' : 's'} · every ${fmtInterval(m.interval_s)}${m.last_run_at ? ` · ${agoText(m.last_run_at)}` : ''} ${tagsInline(m.tags)}</span></span>
       <label class="switch tiny" title="Pause or resume this monitor"><input type="checkbox" data-act="toggle" ${m.enabled ? 'checked' : ''}><span></span></label>
     </li>`).join('');
   $$('.mon-item', ul).forEach((li) => {
@@ -315,7 +320,11 @@ function renderMockList() {
   if (!ul) return;
   if (pages.mock && mocks.loaded && !mockById(pages.mock)) pages.mock = null;
   const q = pages.mockSearch.trim().toLowerCase();
-  const shown = mocks.list.filter((m) => !q || m.name.toLowerCase().includes(q) || (m.slug || '').includes(q));
+  const tags = countTags(mocks.list);
+  if (pages.mockTag && !tags.some((t) => t.tag === pages.mockTag)) pages.mockTag = '';
+  renderTagBar($('#mock-tag-filter'), 'mocks', tags, pages.mockTag, (tag) => { pages.mockTag = tag; renderMockList(); });
+  const shown = mocks.list.filter((m) => (!q || m.name.toLowerCase().includes(q) || (m.slug || '').includes(q) || (m.tags || []).some((t) => t.toLowerCase().includes(q)))
+    && (!pages.mockTag || (m.tags || []).includes(pages.mockTag)));
   if (!shown.length) {
     ul.innerHTML = `<li class="page-none muted small">${mocks.list.length ? 'No mock server matches.' : 'No mock servers yet. Press “+ New”.'}</li>`;
     return;
@@ -325,7 +334,7 @@ function renderMockList() {
     return `<li class="page-item mock-item ${m.enabled ? '' : 'off'} ${pages.mock === m.id ? 'active' : ''}" data-id="${m.id}" tabindex="0">
       <span class="page-dot s-${m.enabled ? 'pass' : 'off'}" title="${m.enabled ? 'answering' : 'off'}"></span>
       <span class="page-item-text"><span class="page-item-name">${esc(m.name)}</span>
-        <span class="page-item-meta muted mon-meta">/mock/${esc(m.slug)} · ${routes} route${routes === 1 ? '' : 's'} · ${m.hits} call${m.hits === 1 ? '' : 's'}</span></span>
+        <span class="page-item-meta muted mon-meta">/mock/${esc(m.slug)} · ${routes} route${routes === 1 ? '' : 's'} · ${m.hits} call${m.hits === 1 ? '' : 's'} ${tagsInline(m.tags)}</span></span>
       <label class="switch tiny" title="${m.enabled ? 'Stop answering requests' : 'Start answering requests'}"><input type="checkbox" data-act="toggle" ${m.enabled ? 'checked' : ''}><span></span></label>
     </li>`;
   }).join('');
@@ -568,6 +577,8 @@ function markMailSeen(id) {
   const keep = [...seen].filter((x) => x === id || mailBox.list.some((m) => m.id === x));
   try { localStorage.setItem(MAIL_SEEN_KEY, JSON.stringify(keep)); } catch { /* private window */ }
 }
+// a message's tag is where it came from: the sender's domain
+const mailDomain = (from) => { const m = /@([^\s>]+)>?\s*$/.exec(from || ''); return m ? m[1].toLowerCase() : ''; };
 const mailFrom = (from) => { const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from || ''); return m && m[1] ? m[1] : (from || '(unknown sender)'); };
 // the text, escaped, with its web addresses as links
 const mailLinkify = (text) => esc(text || '').replace(/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g,
@@ -626,9 +637,12 @@ function renderMailList() {
   if (!mailBox.loaded) { ul.innerHTML = '<li class="page-none muted small">Loading…</li>'; return; }
   if (mailBox.state !== 'ready') { ul.innerHTML = ''; return; }
   const terms = pages.mailSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const tags = countTags(mailBox.list.map((m) => ({ tags: mailDomain(m.from) ? [mailDomain(m.from)] : [] })));
+  if (pages.mailTag && !tags.some((t) => t.tag === pages.mailTag)) pages.mailTag = '';
+  renderTagBar($('#mail-tag-filter'), 'mail', tags, pages.mailTag, (tag) => { pages.mailTag = tag; renderMailList(); });
   const shown = mailBox.list.filter((m) => {
     const hay = `${m.subject || ''} ${m.from || ''} ${m.to || ''}`.toLowerCase();
-    return terms.every((t) => hay.includes(t));
+    return terms.every((t) => hay.includes(t)) && (!pages.mailTag || mailDomain(m.from) === pages.mailTag);
   });
   if (!shown.length) {
     ul.innerHTML = `<li class="page-none muted small">${mailBox.list.length ? 'No message matches.' : 'No mail yet.'}</li>`;

@@ -114,7 +114,7 @@ button.link { font-weight: 400; }
 /* --------------------------------------------------------------- sidebar */
 .sidebar-head { padding: 10px; gap: 6px; }
 .select-bar { padding: 6px 10px; }
-.tag-filter { padding: 6px 10px; }
+.tag-bar { padding: 3px 10px; }
 .req-item { padding: 5px 6px 5px 10px; grid-template-columns: 20px 50px 1fr 28px; }
 /* inside a folder: indented one step per level, with a guide line down from each folder above,
    under its checkbox, so what a folder holds reads as inside it (a file explorer's tree) */

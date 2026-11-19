@@ -2245,6 +2245,7 @@ function monitorDialog(existing = null) {
       <select id="mon-unit"><option value="60" ${unit === 60 ? 'selected' : ''}>minutes</option><option value="1" ${unit === 1 ? 'selected' : ''}>seconds</option><option value="3600" ${unit === 3600 ? 'selected' : ''}>hours</option></select>
       <span class="muted small">while the app is open</span></label>
     <label class="field">Webhook <input id="mon-hook" class="grow mono" value="${esc(m.webhook_url || '')}" placeholder="optional: a URL to POST to when a check fails"></label>
+    ${tagFieldHtml('mon-tags', m.tags)}
     <div class="muted small" style="margin-bottom:6px">Requests, sent in this order (extractions and <code>{{prev.…}}</code> work between them):</div>
     <input id="mon-pick-q" type="search" placeholder="Filter requests…" autocomplete="off" style="width:100%;margin-bottom:6px">
     <div id="mon-pick" class="mon-pick">${state.requests.map(reqRow).join('') || '<p class="muted small">No requests yet: create one first.</p>'}</div>
@@ -2253,8 +2254,10 @@ function monitorDialog(existing = null) {
     { label: existing ? 'Save' : 'Create monitor', cls: 'primary', onClick: async () => {
       const ids = $$('#mon-pick input:checked').map((i) => i.value);
       const every = Math.max(1, parseInt($('#mon-every').value, 10) || 5) * parseInt($('#mon-unit').value, 10);
+      const tags = readMonTags();
+      if (tags.problem) { $('#mon-tags').focus(); return; }
       const body = { name: $('#mon-name').value.trim() || 'Monitor', request_ids: ids,
-                     interval_s: Math.max(10, every), webhook_url: $('#mon-hook').value.trim() };
+                     interval_s: Math.max(10, every), webhook_url: $('#mon-hook').value.trim(), tags: tags.tags };
       try {
         const saved = existing ? await api('/monitors/' + existing.id, { method: 'PATCH', body })
                                : await api('/monitors', { method: 'POST', body });
@@ -2265,6 +2268,7 @@ function monitorDialog(existing = null) {
       } catch (err) { toast(err.message, 'error'); }
     } },
   ]);
+  const readMonTags = bindTagField('mon-tags');
   $('#mon-pick-q').addEventListener('input', (e) => {
     const q = e.target.value.toLowerCase();
     $$('#mon-pick .mon-pick-row').forEach((row) => { row.hidden = q && !row.textContent.toLowerCase().includes(q); });
@@ -2309,6 +2313,7 @@ function mockDialog(existing = null) {
     <label class="field">Base URL <span class="mono muted small">${esc(mocks.baseUrl || '/mock')}/</span>
       <input id="mk-slug" class="mono" value="${esc(m.slug || '')}" placeholder="from the name" style="width:170px"></label>
     <label class="field">Note <input id="mk-desc" class="grow" value="${esc(m.description || '')}" placeholder="optional, shown in the list"></label>
+    ${tagFieldHtml('mk-tags', m.tags)}
     <label class="field">Slow every answer by <input id="mk-delay" type="number" min="0" step="50" value="${m.delay_ms || 0}" style="width:90px">
       <span class="muted small">ms — to see how your app behaves on a slow API</span></label>
     <label class="field"><input type="checkbox" id="mk-cors" ${m.cors ? 'checked' : ''}> Send CORS headers and answer preflights
@@ -2318,8 +2323,10 @@ function mockDialog(existing = null) {
   `, [
     { label: 'Cancel', onClick: closeModal },
     { label: existing ? 'Save' : 'Create mock server', cls: 'primary', onClick: async () => {
+      const tags = readMockTags();
+      if (tags.problem) { $('#mk-tags').focus(); return; }
       const body = { name: $('#mk-name').value.trim(), slug: $('#mk-slug').value.trim(),
-                     description: $('#mk-desc').value.trim(),
+                     description: $('#mk-desc').value.trim(), tags: tags.tags,
                      delay_ms: Math.max(0, parseFloat($('#mk-delay').value) || 0),
                      cors: $('#mk-cors').checked, log_calls: $('#mk-log').checked };
       if (!body.name) { toast('Give the mock server a name', 'error'); return; }
@@ -2334,6 +2341,7 @@ function mockDialog(existing = null) {
       } catch (err) { toast(err.message, 'error'); }
     } },
   ]);
+  const readMockTags = bindTagField('mk-tags');
   $('#mk-name').focus();
 }
 

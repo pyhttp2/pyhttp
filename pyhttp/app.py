@@ -106,6 +106,7 @@ class MonitorIn(BaseModel):
     interval_s: int = 300
     webhook_url: str = ""
     enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
 
 
 class MonitorPatch(BaseModel):
@@ -114,18 +115,21 @@ class MonitorPatch(BaseModel):
     interval_s: int | None = None
     webhook_url: str | None = None
     enabled: bool | None = None
+    tags: list[str] | None = None
 
 
 class FlowIn(BaseModel):
     name: str = "Flow"
     graph: dict[str, Any] | None = None
     folder: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
 class FlowPatch(BaseModel):
     name: str | None = None
     graph: dict[str, Any] | None = None
     folder: str | None = None
+    tags: list[str] | None = None
 
 
 class FlowRunIn(BaseModel):
@@ -196,6 +200,7 @@ class MockIn(BaseModel):
     cors: bool = True
     log_calls: bool = True
     routes: list[MockRouteIn] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
 class MockPatch(BaseModel):
@@ -206,6 +211,7 @@ class MockPatch(BaseModel):
     delay_ms: float | None = None
     cors: bool | None = None
     log_calls: bool | None = None
+    tags: list[str] | None = None
 
 
 class MockSeedIn(BaseModel):
@@ -1604,7 +1610,7 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
 
     @app.post("/api/flows", status_code=201)
     def create_flow(body: FlowIn) -> dict[str, Any]:
-        return db.create_flow(body.name.strip()[:flows.MAX_NAME] or "Flow", _flow_graph(body.graph), _flow_folder(body.folder))
+        return db.create_flow(body.name.strip()[:flows.MAX_NAME] or "Flow", _flow_graph(body.graph), _flow_folder(body.folder), body.tags)
 
     # folders of flows: a flow's ``folder`` is the folder's name ("" = none); "A/B" nests B in A
     @app.post("/api/flows/move")
@@ -1645,6 +1651,8 @@ def create_app(data_dir: Path, project: str | None = None) -> FastAPI:
             fields["graph"] = _flow_graph(body.graph)
         if body.folder is not None:
             fields["folder"] = _flow_folder(body.folder)
+        if body.tags is not None:
+            fields["tags"] = body.tags
         return db.update_flow(fid, **fields)  # type: ignore[return-value]
 
     @app.delete("/api/flows/{fid}")

@@ -131,8 +131,24 @@ button.icon svg.ic, .copy-btn svg.ic, .status-btn svg.ic { width: 16px; height: 
 /* --------------------------------------------------------------- sidebar */
 .sidebar-head { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
 .sidebar-head input { flex: 1; }
-.tag-filter { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); max-height: 110px; overflow: auto; }
-.tag-filter:empty { display: none; }
+/* a section's tag filter (renderTagBar in app.js): one line folded, the chips unfolded */
+.tag-bar { padding: 4px 10px; border-bottom: 1px solid var(--border); flex: none; }
+.tag-bar-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tag-bar-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 2px; background: none; border: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.tag-bar-toggle:hover { color: var(--text); background: none; }
+.tag-bar-toggle svg.ic { width: 14px; height: 14px; }
+.tag-bar-toggle .ic-chevron-right { transition: transform .12s; }
+.tag-bar.open .tag-bar-toggle .ic-chevron-right { transform: rotate(90deg); }
+.tag-bar-toggle .n { font-weight: 400; font-variant-numeric: tabular-nums; }
+.tag-bar-on { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-bar-on svg.ic { width: 12px; height: 12px; flex: none; }
+.tag-bar-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 6px; max-height: 120px; overflow: auto; }
+.item-tags { color: var(--accent); }
+.tag-why { color: var(--danger); margin: -4px 0 8px; }
+.tag-count.over { color: var(--danger); font-weight: 600; }
+input.invalid { border-color: var(--danger); }
+.flow-tags { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); background: none; border-color: transparent; }
+.flow-tags:hover { color: var(--text); border-color: var(--border); }
 .chip {
   background: var(--bg-4); border: 1px solid var(--border); border-radius: 999px;
   padding: 2px 10px; font-size: 12px; cursor: pointer; user-select: none;
@@ -276,7 +292,7 @@ pre { margin: 0; background: var(--bg-2); border: 1px solid var(--border); borde
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 6px; border: 2px solid var(--bg-2); }
 ::-webkit-scrollbar-thumb:hover { background: #3a4352; }
-.topbar, .sidebar-head, .select-bar, .tag-filter, .req-list, .tabs, .result-list,
+.topbar, .sidebar-head, .select-bar, .tag-bar, .req-list, .tabs, .result-list,
 .history-item, .run-actions, .modal-head, .modal-foot, .order-list, button, label {
   user-select: none; -webkit-user-select: none;
 }
