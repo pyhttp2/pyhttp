@@ -116,6 +116,16 @@ button.link { font-weight: 400; }
 .select-bar { padding: 6px 10px; }
 .tag-filter { padding: 6px 10px; }
 .req-item { padding: 5px 6px 5px 10px; grid-template-columns: 20px 50px 1fr 28px; }
+/* inside a folder: indented one step per level, with a guide line down from each folder above,
+   under its checkbox, so what a folder holds reads as inside it (a file explorer's tree) */
+.req-item, .folder-item { --indent: 20px; position: relative; padding-left: calc(10px + var(--depth, 0) * var(--indent)); }
+/* a layer of its own: hover, selected and active rows set their background and keep the lines */
+.req-item::before, .folder-item::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 10px; pointer-events: none;
+  width: calc(var(--depth, 0) * var(--indent));
+  background: repeating-linear-gradient(to right, transparent 0 9px, var(--tree-line) 9px 10px, transparent 10px var(--indent));
+}
+:root { --tree-line: color-mix(in srgb, var(--muted) 35%, transparent); }
 .req-item .name { font-weight: 500; font-size: 13px; }
 .req-item .tag { color: color-mix(in srgb, var(--primary) 70%, var(--muted)); }
 .req-item.selected { background: color-mix(in srgb, var(--primary) 9%, transparent); }
