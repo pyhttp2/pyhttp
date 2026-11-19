@@ -1074,7 +1074,7 @@ def test_run_responses_show_in_editor(page, servers):
     strip = page.locator("#resp-bodies").bounding_box()
     assert strip["height"] < 50, strip
     cur = page.locator("#resp-bodies .rb-current")
-    assert cur.locator(".rb-name").text_content() == "valid #1" and "1 of 6" in cur.text_content()
+    assert cur.locator(".rb-name").text_content() == "valid #1" and page.inner_text("#resp-bodies .rb-pos") == "1/6"
     assert page.is_disabled("#resp-bodies .rb-prev")
     run_info = page.locator("#resp-bodies .rb-run").text_content()
     assert "sample run" in run_info and "9/9 sent" in run_info
@@ -1106,6 +1106,16 @@ def test_run_responses_show_in_editor(page, servers):
     page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'missing #3'")
     assert page.is_disabled("#resp-bodies .rb-next")
     page.wait_for_function("document.querySelector('#body-list .body-item.active').textContent.startsWith('missing')")
+    # the arrows stay put whatever the length of the name on screen: they can be clicked again and again
+    arrows = lambda: [page.locator(f"#resp-bodies {a}").bounding_box()["x"] for a in (".rb-prev", ".rb-next")]
+    at_end = arrows()
+    page.click("#resp-bodies .rb-prev")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'missing #2'")
+    for _ in range(4):
+        assert arrows() == at_end
+        page.click("#resp-bodies .rb-prev")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'valid #1'")
+    assert arrows() == at_end
     # the GET without a body: one tab per iteration
     page.click("#req-list .req-item:has-text('Run plain')")
     page.wait_for_function("document.querySelector('#resp-bodies .rb-tab') && document.querySelector('#resp-bodies .rb-tab').textContent.startsWith('Iteration 1')")
@@ -1327,7 +1337,7 @@ def test_delete_checked_bodies(page, servers):
         page.click("#btn-body-add")
     assert page.locator("#body-list .body-item").count() == 3
     page.locator("#body-list .body-item").nth(1).locator("input").uncheck()
-    assert page.is_enabled("#btn-body-del-checked")
+    assert page.is_enabled("#btn-body-del-checked") and page.inner_text("#btn-body-del-checked .n") == "2"
     page.click("#btn-body-del-checked")
     page.wait_for_selector("#toast .toast-act")
     assert page.locator("#body-list .body-item").all_inner_texts()[0].startswith("Body 2")
@@ -1338,6 +1348,31 @@ def test_delete_checked_bodies(page, servers):
     page.click("#btn-body-none")
     assert page.is_disabled("#btn-body-del-checked")
     forget(page, app_url, "Bodies bulk delete")
+
+
+def test_delete_selected_requests(page, servers):
+    """The trash of the selection bar deletes every selected request, with one Undo."""
+    app_url, echo_url = servers
+    for name in ("Del A", "Del B", "Del C"):
+        new_request(page, echo_url, name)
+    assert page.is_hidden("#btn-del-sel")
+    for name in ("Del A", "Del C"):
+        page.locator(f"#req-list .req-item:has-text('{name}') input[type=checkbox]").check()
+    assert page.is_visible("#btn-del-sel") and page.inner_text("#btn-del-sel .n") == "2"
+    page.click("#btn-del-sel")
+    page.wait_for_selector("#toast .toast-act")
+    assert "2 requests" in page.inner_text("#toast")
+    names = page.locator("#req-list .req-item .name").all_text_contents()
+    assert "Del B" in names and "Del A" not in names and "Del C" not in names
+    assert page.is_hidden("#btn-del-sel")
+    page.click("#toast .toast-act")
+    page.wait_for_selector("#req-list .req-item:has-text('Del A')")
+    page.wait_for_selector("#req-list .req-item:has-text('Del C')")
+    assert page.inner_text("#selected-count") == "2 selected"
+    # deleted for real once the Undo is gone
+    page.click("#btn-del-sel")
+    page.wait_for_function(f"""fetch('{app_url}/api/requests?fields=list').then((r) => r.json()).then((l) => !l.some((r) => r.name === 'Del A' || r.name === 'Del C'))""", timeout=20000)
+    forget(page, app_url, "Del B")
 
 
 def test_request_tab_context_menu(page, servers):

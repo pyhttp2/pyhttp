@@ -92,6 +92,7 @@
           <label title="Select everything currently shown"><input type="checkbox" id="select-all"> All shown</label>
           <span id="selected-count" class="muted small">0 selected</span>
           <button id="btn-clear-sel" class="link small" hidden>clear</button>
+          <button id="btn-del-sel" class="icon danger del-many" hidden title="Delete the selected requests" aria-label="Delete the selected requests"><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg><span class="n"></span></button>
           <span class="run-group">
             <button id="btn-run" class="accent" disabled title="Choose a name, order and options, then run"><svg class="ic ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 5v14l11-7z" fill="currentColor"/></svg> Run selected</button>
             <button id="btn-run-now" class="icon" disabled title="Run now: skip the dialog and send the selected requests with the last run's options" aria-label="Run selected now"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M13 2 3.5 13.5H11l-1 8.5 9.5-11.5H13z"/></svg></button>
@@ -228,7 +229,7 @@
               <div class="row tight">
                 <input id="body-search" type="search" class="grow" placeholder="Search bodies…" autocomplete="off">
                 <button id="btn-body-add" class="icon" title="Add a new named body" aria-label="Add a body"><svg class="ic ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button>
-                <button id="btn-body-del-checked" class="icon danger" title="Delete the checked bodies" aria-label="Delete the checked bodies" disabled><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg></button>
+                <button id="btn-body-del-checked" class="icon danger del-many" title="Delete the checked bodies" aria-label="Delete the checked bodies" disabled><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg><span class="n"></span></button>
               </div>
               <div class="row tight small">
                 <button id="btn-body-all" class="link small">check all</button>

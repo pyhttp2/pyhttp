@@ -456,7 +456,7 @@ body.resizing.rows, body.resizing.rows * { cursor: row-resize !important; }
 .response, .editor-request { min-width: 0; }
 .editor.beside .response, .editor.beside .editor-request { min-width: 0; }   /* no overflow:hidden here: the drag handle hangs outside the response box */
 /* one row, whatever the number of responses: the response body keeps its room */
-#resp-bodies.resp-bodies { flex-wrap: nowrap; align-items: center; gap: 6px; overflow: hidden; padding-bottom: 10px; margin-bottom: 8px; min-width: 0; }
+#resp-bodies.resp-bodies { flex-wrap: wrap; align-items: center; gap: 6px 12px; overflow: hidden; padding-bottom: 10px; margin-bottom: 8px; min-width: 0; }
 #resp-bodies .rb-tab { flex: 0 1 auto; min-width: 0; margin: 0; padding: 4px 10px; gap: 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-3); color: var(--muted); box-shadow: none; max-width: 240px; }
 #resp-bodies .rb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #resp-bodies .rb-code, #resp-bodies .rb-ms, #resp-bodies .rb-pos { flex: none; white-space: nowrap; }
@@ -465,16 +465,21 @@ body.resizing.rows, body.resizing.rows * { cursor: row-resize !important; }
 #resp-bodies .rb-tab.pending { opacity: .55; }
 #resp-bodies .rb-tab .rb-ms { font-size: 11px; }
 /* when the row is short, the run summary gives way first, then the name of the response on screen */
-#resp-bodies .rb-run { flex: 1 1 0; min-width: 0; margin-left: auto; padding: 0; justify-content: flex-end; white-space: nowrap; }
+.rb-extra { display: flex; align-items: center; gap: 12px; margin-left: auto; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+#resp-bodies .rb-run { flex: 0 1 auto; min-width: 0; margin-left: 0; padding: 0; white-space: nowrap; }
 #resp-bodies .rb-run-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #resp-bodies .rb-run .rb-folder { flex: none; }
 #resp-bodies .rb-compare { flex: none; white-space: nowrap; }
 #resp-bodies .rb-failed { flex: none; color: var(--danger); white-space: nowrap; }
 
 /* more responses than chips: ‹ [the one on screen ▾] › and a picker */
-.rb-switch { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 190px; }
-.rb-switch .rb-prev, .rb-switch .rb-next { min-width: 26px; height: 28px; padding: 0 4px; background: none; border-color: transparent; color: var(--muted); }
-.rb-switch .rb-prev:hover:not(:disabled), .rb-switch .rb-next:hover:not(:disabled) { color: var(--text); background: var(--bg-4); }
+.rb-switch { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+/* ‹ › as one control at a fixed place, first in the row */
+.rb-steps { display: inline-flex; flex: none; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--bg-3); }
+.rb-steps .rb-prev, .rb-steps .rb-next { min-width: 32px; height: 28px; padding: 0 6px; margin: 0; background: none; border: 0; border-radius: 0; color: var(--text); }
+.rb-steps .rb-next { border-left: 1px solid var(--border); }
+.rb-steps button:hover:not(:disabled) { background: var(--bg-4); }
+.rb-switch > .rb-pos { flex: none; min-width: 3.6em; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text); }
 .rb-switch button:disabled { opacity: .35; cursor: default; }
 .rb-current {
   display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 420px; height: 28px; padding: 0 10px;
@@ -483,7 +488,6 @@ body.resizing.rows, body.resizing.rows * { cursor: row-resize !important; }
 .rb-current:hover { background: var(--bg-3); }
 .rb-current.pending { opacity: .7; }
 .rb-current .rb-name { font-weight: 600; }
-.rb-current .rb-pos { color: var(--muted); font-size: 11px; padding-left: 8px; border-left: 1px solid var(--border); }
 .rb-current svg.ic { width: 14px; height: 14px; color: var(--muted); }
 .rb-current .rb-code, .rb-opt .rb-code { font-family: var(--mono); font-weight: 700; }
 .rb-current .rb-ms, .rb-opt .rb-ms, .rb-opt .rb-size { font-family: var(--mono); color: var(--muted); font-size: 11px; }
@@ -815,3 +819,10 @@ button:not(:disabled):active { transform: translateY(1px) scale(.96); }
 .share-link { display: flex; gap: 8px; margin: 10px 0; }
 .share-link input { flex: 1; min-width: 0; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
 
+
+/* deleting many at once (checked bodies, selected requests): the trash carries the count, so it
+   reads apart from the single delete and says how many go */
+button.del-many { gap: 3px; padding: 2px 7px; }
+button.del-many .n { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+button.del-many .n:empty { display: none; }
+.select-bar #btn-del-sel { height: 26px; min-width: 0; }

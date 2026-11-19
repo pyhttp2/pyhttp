@@ -461,6 +461,10 @@ function updateSelectionBar() {
   $('#btn-run').innerHTML = icon('play') + (n ? ` Run selected (${n})` : ' Run selected');
   $('#btn-run-now').disabled = n === 0;
   $('#btn-clear-sel').hidden = n === 0;
+  const del = $('#btn-del-sel');
+  del.hidden = n === 0;
+  $('.n', del).textContent = n ? String(n) : '';
+  del.title = `Delete the ${n} selected request${n === 1 ? '' : 's'} (Undo in the message that follows)`;
   const shown = state.requests;
   $('#select-all').checked = shown.length > 0 && shown.every((r) => isSelected(r.id));
 }
@@ -622,6 +626,7 @@ function updateBodyHints() {
   $('#bodies-count').textContent = total ? `${on} of ${total} checked` : '';
   const del = $('#btn-body-del-checked');
   del.disabled = !on;
+  $('.n', del).textContent = on ? String(on) : '';
   del.title = on ? `Delete the ${on} checked ${on === 1 ? 'body' : 'bodies'}` : 'Delete the checked bodies (none is checked)';
   const type = $('#f-body-type').value;
   $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body send button when bodies are not sent
@@ -1068,33 +1073,41 @@ function commitPendingDeletes() {
   pendingDeletes.clear();
 }
 async function deleteRequestById(id, name) {
-  const isCurrent = !!(state.current && state.current.id === id);
-  if (isCurrent) {
+  await deleteRequests([{ id, name }]);
+}
+// The selected requests (the trash button of the selection bar), with one Undo for all of them.
+function deleteSelectedRequests() {
+  if (state.selected.length) deleteRequests(state.selected.map((s) => ({ id: s.id, name: s.name })));
+}
+async function deleteRequests(list) {
+  const ids = new Set(list.map((x) => x.id));
+  const current = state.current && ids.has(state.current.id) ? state.current.id : null;
+  if (current) {
     clearTimeout(autosave.timer);
     clearTimeout(autosave.retry);
     autosave.dirty = false;
     while (autosave.inFlight) await autosave.inFlight;
   }
-  const wasSelected = state.selected.find((x) => x.id === id) || null;
-  state.selected = state.selected.filter((x) => x.id !== id);
-  state.requests = state.requests.filter((r) => r.id !== id);
-  if (state.kbId === id) state.kbId = null;
-  tabsRemove(id);
-  if (isCurrent) { state.current = null; renderEditor(); }
+  const wasSelected = state.selected.filter((x) => ids.has(x.id));
+  state.selected = state.selected.filter((x) => !ids.has(x.id));
+  state.requests = state.requests.filter((r) => !ids.has(r.id));
+  if (ids.has(state.kbId)) state.kbId = null;
+  ids.forEach((id) => tabsRemove(id));
+  if (current) { state.current = null; renderEditor(); }
   renderList();
-  pendingDeletes.set(id, setTimeout(async () => {
+  ids.forEach((id) => pendingDeletes.set(id, setTimeout(async () => {
     pendingDeletes.delete(id);
     try { await api('/requests/' + id, { method: 'DELETE' }); }
     catch (e) { toast(e.message, 'error'); loadRequests(); }
-  }, UNDO_MS));
-  toast(`Deleted “${name}”`, '', { label: 'Undo', onClick: async () => {
-    const timer = pendingDeletes.get(id);
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    pendingDeletes.delete(id);
-    if (wasSelected) state.selected.push(wasSelected);
+  }, UNDO_MS)));
+  const what = list.length === 1 ? `“${list[0].name || 'Untitled'}”` : `${list.length} requests`;
+  toast(`Deleted ${what}`, '', { label: 'Undo', onClick: async () => {
+    const back = [...ids].filter((id) => pendingDeletes.has(id));
+    if (!back.length) return;
+    back.forEach((id) => { clearTimeout(pendingDeletes.get(id)); pendingDeletes.delete(id); });
+    state.selected.push(...wasSelected.filter((x) => back.includes(x.id)));
     await loadRequests();
-    openRequest(id);
+    if (current && back.includes(current)) openRequest(current);
   } });
 }
 async function duplicateRequestById(id) {
@@ -1432,11 +1445,16 @@ function renderResponseArea() {
       const i = keys.indexOf(rs.selected);
       const cur = rs.byKey[rs.selected];
       const nFail = keys.filter((k) => respFailed(rs.byKey[k])).length;
+      // the arrows come first, side by side: they stay where they are whatever the name, so
+      // they can be clicked again and again without moving the mouse
       switcher = `<div class="rb-switch" role="group" aria-label="Responses">`
+        + `<span class="rb-steps">`
         + `<button type="button" class="icon rb-prev" title="Previous response (←)" aria-label="Previous response" ${i <= 0 ? 'disabled' : ''}>${icon('chevron-left')}</button>`
-        + `<button type="button" class="rb-current ${cur.pending || cur.notSent ? 'pending' : ''}" data-key="${esc(rs.selected)}" aria-haspopup="listbox" aria-expanded="${$('#rb-pop') ? 'true' : 'false'}" title="Pick one of the ${keys.length} responses (Enter or ↓). ← → step through them">`
-        + `<span class="rb-name">${esc(nameOf(rs.selected))}</span>${respMeta(cur)}<span class="rb-pos">${i + 1} of ${keys.length}</span>${icon('chevron-down')}</button>`
         + `<button type="button" class="icon rb-next" title="Next response (→)" aria-label="Next response" ${i >= keys.length - 1 ? 'disabled' : ''}>${icon('chevron-right')}</button>`
+        + `</span>`
+        + `<span class="rb-pos" aria-live="polite">${i + 1}<span class="muted">/${keys.length}</span></span>`
+        + `<button type="button" class="rb-current ${cur.pending || cur.notSent ? 'pending' : ''}" data-key="${esc(rs.selected)}" aria-haspopup="listbox" aria-expanded="${$('#rb-pop') ? 'true' : 'false'}" title="Pick one of the ${keys.length} responses (Enter or ↓). ← → step through them">`
+        + `<span class="rb-name">${esc(nameOf(rs.selected))}</span>${respMeta(cur)}${icon('chevron-down')}</button>`
         + `</div>`
         + (nFail ? `<button type="button" class="link small rb-failed" title="Pick from the failed responses only">${nFail} failed</button>` : '');
     }
@@ -1448,7 +1466,10 @@ function renderResponseArea() {
     const real = keys.filter((k) => !rs.byKey[k].pending && !rs.byKey[k].notSent);
     const cmpBtn = real.length > 1 ? '<button class="link small rb-compare" title="Compare the response on screen with another one: body, headers and the request as sent, as a diff">' + icon('swap') + ' Compare</button>' : '';
     const refocus = strip.contains(document.activeElement) && document.activeElement.className.match(/rb-(prev|next|current)/);
-    strip.innerHTML = switcher + cmpBtn + runInfo;
+    // what is not for moving between responses sits apart, and goes to a line of its own when
+    // the row is too narrow, instead of squeezing the switcher
+    const extra = cmpBtn || runInfo ? `<span class="rb-extra">${cmpBtn}${runInfo}</span>` : '';
+    strip.innerHTML = switcher + extra;
     if (refocus) {   // the strip was rebuilt under the keyboard: keep the focus on the same control
       let el = $('.rb-' + refocus[1], strip);
       if (!el || el.disabled) el = $('.rb-current', strip);
@@ -3203,6 +3224,7 @@ function init() {
     renderList();
   });
   $('#btn-clear-sel').addEventListener('click', () => { state.selected = []; renderList(); });
+  $('#btn-del-sel').addEventListener('click', deleteSelectedRequests);
   $('#btn-run').addEventListener('click', () => openRunModal());
   $('#btn-run-now').addEventListener('click', runSelectedNow);
 
