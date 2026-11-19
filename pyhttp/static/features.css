@@ -313,6 +313,8 @@ mark.rv-m.cur { background: var(--warn); color: #111; outline: 2px solid var(--w
 .sidebar > .resizer { right: -4px; }
 .runs > .resizer { left: -4px; }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+/* an iframe under the pointer (response preview, views) would take the drag's moves and its release */
+body.resizing iframe { pointer-events: none !important; }
 @media (max-width: 960px) { .resizer { display: none !important; } }
 
 /* --------------------------------------------- request history extras */

@@ -2010,26 +2010,35 @@ function initResizers() {
     h.dataset.resize = typeof nameOf === 'function' ? nameOf() : nameOf;
     h.title = 'Drag to resize, double-click to reset';
     parent.appendChild(h);
+    // The drag is followed on the whole window, not on the handle: in WebKitGTK (the Linux app)
+    // pointer capture does not hold once the pointer leaves the handle or crosses an iframe (the
+    // response preview), and the panel stayed where the pointer left it, or stayed stuck to the
+    // pointer after a release that the handle never heard of.
     h.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
       const name = typeof nameOf === 'function' ? nameOf() : nameOf;
-      h.setPointerCapture(e.pointerId);
+      try { h.setPointerCapture(e.pointerId); } catch { /* the window listeners below do without */ }
       h.classList.add('dragging');
-      document.body.classList.add('resizing');
+      document.body.classList.add('resizing');   // also keeps iframes from taking the pointer (CSS)
       document.body.classList.toggle('rows', name === 'vsplit');
       const [, min, max] = PANEL_SIZES[name];
-      const move = (ev) => applyPanelSize(name, Math.min(max, Math.max(min, measure(ev))));
       const up = () => {
         h.classList.remove('dragging');
         document.body.classList.remove('resizing', 'rows');
-        h.removeEventListener('pointermove', move);
-        h.removeEventListener('pointerup', up);
-        h.removeEventListener('pointercancel', up);
+        window.removeEventListener('pointermove', move, true);
+        window.removeEventListener('pointerup', up, true);
+        window.removeEventListener('pointercancel', up, true);
+        window.removeEventListener('blur', up);
       };
-      h.addEventListener('pointermove', move);
-      h.addEventListener('pointerup', up);
-      h.addEventListener('pointercancel', up);
+      const move = (ev) => {
+        if (ev.buttons === 0) { up(); return; }   // released where nothing told us (outside the window)
+        applyPanelSize(name, Math.min(max, Math.max(min, measure(ev))));
+      };
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', up, true);
+      window.addEventListener('pointercancel', up, true);
+      window.addEventListener('blur', up);
     });
     h.addEventListener('dblclick', () => applyPanelSize(typeof nameOf === 'function' ? nameOf() : nameOf, null));
   };

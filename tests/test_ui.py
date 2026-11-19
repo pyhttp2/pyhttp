@@ -2334,3 +2334,51 @@ def test_tags_filter_folded_and_on_every_section(page, servers):
         page.request.delete(f"{app_url}/api/flows/{f['id']}")
     page.click("#side-tabs button[data-tab='collection']")
     forget(page, app_url, "Tagged A", "Tagged B")
+
+
+def test_dragging_a_divider_holds_where_pointer_capture_does_not(page, servers):
+    """The Linux app (WebKitGTK) does not keep pointer capture once the pointer leaves the
+    divider or crosses an iframe, and a release outside the window is not reported: the
+    response pane then stayed where the pointer left the divider, or stuck to the pointer.
+    Here pointer capture is switched off to stand in for that."""
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Divider")
+    page.click("#btn-send")
+    page.wait_for_function("document.querySelector('#r-status').textContent.trim().startsWith('200')", timeout=20000)
+    page.click("#sb-layout button[data-layout='beside']")
+    page.wait_for_function("document.querySelector('#editor-section').classList.contains('beside')")
+    page.evaluate("() => { Element.prototype.setPointerCapture = function () {}; }")   # asked for, not held: as in WebKitGTK
+    page.evaluate("""() => { const f = document.createElement('iframe'); f.id = 'probe-frame'; f.srcdoc = '<p>preview</p>';
+        f.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;opacity:0.01;z-index:1'; document.body.appendChild(f); }""")
+    handle = page.locator("#response > .resizer")
+    form = page.locator("#editor-form").bounding_box()
+    box = handle.bounding_box()
+    y = box["y"] + box["height"] / 2
+    req_width = lambda: page.locator("#editor-form > .editor-request").bounding_box()["width"]
+
+    # a long, quick drag to the right, far off the divider and over an iframe, then back
+    page.mouse.move(box["x"] + box["width"] / 2, y)
+    page.mouse.down()
+    assert page.evaluate("document.body.classList.contains('resizing')")
+    assert page.evaluate("getComputedStyle(document.querySelector('#probe-frame')).pointerEvents") == "none"
+    page.mouse.move(form["x"] + form["width"] * 0.78, y, steps=3)
+    far_right = req_width()
+    page.mouse.move(form["x"] + form["width"] * 0.3, y, steps=3)
+    back = req_width()
+    page.mouse.up()
+    assert far_right > back + form["width"] * 0.3, (far_right, back)   # it followed both ways
+    assert not page.evaluate("document.body.classList.contains('resizing')")
+    page.mouse.move(form["x"] + form["width"] * 0.7, y, steps=3)       # released: moving does nothing
+    assert abs(req_width() - back) < 2
+
+    # a release nobody reported (outside the window): the next move ends the drag
+    box = handle.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.evaluate("window.dispatchEvent(new PointerEvent('pointermove', {clientX: 300, clientY: 300, buttons: 0, bubbles: true}))")
+    assert not page.evaluate("document.body.classList.contains('resizing')")
+    page.mouse.up()
+    page.evaluate("document.querySelector('#probe-frame').remove()")
+    page.dblclick("#response > .resizer")
+    page.click("#r-layout")
+    forget(page, app_url, "Divider")
