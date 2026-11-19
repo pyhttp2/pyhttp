@@ -521,6 +521,16 @@ function restoreFlowSession(ids, front) {
 }
 
 // -------------------------------------------------------------- the inbox
+// The Inbox button of the rail: the inbox from any section. Without one (the desktop app, signed
+// out, or the cloud not answering) it says why, and offers to sign in.
+async function openInbox() {
+  try { await loadFlows(); } catch (err) { toast(err.message, 'error'); return; }
+  if (flowUi.mail) { openFlowInbox(); return; }
+  openModal('Test inbox', flowNoMail('flows can wait for mail sent to it, and you can read it here'),
+    [{ label: 'Close', cls: 'primary', onClick: closeModal }]);
+  bindFlowSignIn($('#modal-body'));
+}
+
 // Only where the app has a mail system (pyhttp on the web): /api/mail is answered there.
 async function openFlowInbox() {
   let data;
@@ -528,10 +538,11 @@ async function openFlowInbox() {
   const rows = data.messages.map((m) => `<tr data-id="${esc(m.id)}"><td>${fmtDate(m.received_at)}</td><td>${esc(m.from)}</td><td>${esc(m.subject || '(no subject)')}</td>
     <td><button class="link small" data-act="read">Read</button><button class="link small danger" data-act="del">Delete</button></td></tr>`).join('');
   openModal('Test inbox', `
-    <p class="muted small">Mail to <code>${esc(data.address)}</code> (and <code>${esc(data.address.replace('@', '+anything@'))}</code>). The newest ${data.kept} messages are kept; text only, attachments are not stored.</p>
+    <p class="muted small">Mail to <code>${esc(data.address)}</code> <button class="link small" id="flow-mail-copy" title="Copy the address">${icon('copy')} Copy</button> (and <code>${esc(data.address.replace('@', '+anything@'))}</code>). The newest ${data.kept} messages are kept; text only, attachments are not stored.</p>
     ${rows ? `<table class="htable"><tr><th>Received</th><th>From</th><th>Subject</th><th></th></tr>${rows}</table>` : '<p class="muted">Nothing received yet.</p>'}
     <pre id="flow-mail-text" class="flow-mail-text" hidden></pre>
   `, [{ label: 'Refresh', onClick: openFlowInbox }, { label: 'Done', cls: 'primary', onClick: closeModal }]);
+  $('#flow-mail-copy').addEventListener('click', async () => { if (await copyText(data.address)) toast('Address copied', 'ok'); });
   $$('#modal-body tr[data-id]').forEach((tr) => {
     $('[data-act=read]', tr).addEventListener('click', async () => {
       try {
@@ -1516,6 +1527,7 @@ function initFlows() {
     setFlowMode(b.dataset.tab === 'flows');
   }));
   $('#btn-flow-new').addEventListener('click', () => newFlow(''));
+  $('#btn-inbox').addEventListener('click', openInbox);
   bindFlowTabs();
   bindFlowListDrop();
   $('#flow-search').addEventListener('input', (e) => { flowUi.search = e.target.value; renderFlowList(); });

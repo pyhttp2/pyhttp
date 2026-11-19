@@ -1069,15 +1069,42 @@ def test_run_responses_show_in_editor(page, servers):
     # the request with two bodies: one tab per body and iteration, in body order
     page.click("#req-list .req-item:has-text('Run bodies')")
     page.wait_for_selector("#response:not([hidden]) #resp-bodies:not([hidden])")
-    tabs = page.locator("#resp-bodies .rb-tab")
-    assert [t.split("200")[0] for t in tabs.all_text_contents()] == ["valid #1", "valid #2", "valid #3", "missing #1", "missing #2", "missing #3"]
+    # six responses: one row (the one on screen, prev/next and a picker), not six chips
+    assert page.locator("#resp-bodies .rb-tab").count() == 0
+    strip = page.locator("#resp-bodies").bounding_box()
+    assert strip["height"] < 50, strip
+    cur = page.locator("#resp-bodies .rb-current")
+    assert cur.locator(".rb-name").text_content() == "valid #1" and "1 of 6" in cur.text_content()
+    assert page.is_disabled("#resp-bodies .rb-prev")
     run_info = page.locator("#resp-bodies .rb-run").text_content()
     assert "sample run" in run_info and "9/9 sent" in run_info
-    tabs.nth(1).click()
-    page.wait_for_function("document.querySelector('#resp-bodies .rb-tab.active').textContent.startsWith('valid #2')")
+    cur.click()
+    page.wait_for_selector("#rb-pop")
+    assert page.locator("#rb-pop .rb-opt .rb-name").all_text_contents() == ["valid #1", "valid #2", "valid #3", "missing #1", "missing #2", "missing #3"]
+    assert page.locator("#rb-pop .rb-opt.active .rb-name").text_content() == "valid #1"
+    page.click("#rb-pop .rb-opt:has-text('valid #2')")
+    assert page.locator("#rb-pop").count() == 0
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'valid #2'")
     assert "bob@example.com" in page.locator("#r-body").text_content()
     assert page.evaluate("document.querySelector('#body-list .body-item.active').textContent").startswith("valid")
-    tabs.nth(5).click()
+    # the keyboard: arrows step, the filter and Enter pick, Escape closes
+    page.focus("#resp-bodies .rb-current")
+    page.keyboard.press("ArrowRight")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'valid #3'")
+    page.keyboard.press("ArrowLeft")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'valid #2'")
+    page.click("#resp-bodies .rb-next")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'valid #3'")
+    page.keyboard.press("ArrowDown")
+    page.wait_for_selector("#rb-pop")
+    page.keyboard.press("Escape")
+    assert page.locator("#rb-pop").count() == 0
+    page.click("#resp-bodies .rb-current")
+    page.fill("#rb-pop .rb-pop-q", "missing #3")
+    assert page.locator("#rb-pop .rb-opt").count() == 1
+    page.keyboard.press("Enter")
+    page.wait_for_function("document.querySelector('#resp-bodies .rb-current .rb-name').textContent === 'missing #3'")
+    assert page.is_disabled("#resp-bodies .rb-next")
     page.wait_for_function("document.querySelector('#body-list .body-item.active').textContent.startsWith('missing')")
     # the GET without a body: one tab per iteration
     page.click("#req-list .req-item:has-text('Run plain')")
@@ -1854,9 +1881,9 @@ def test_the_rail_is_the_navigation(page, servers):
     """Sections and tools are on the left rail; the top bar keeps the project, the environment
     and the app's own actions."""
     rail = page.locator(".rail button").evaluate_all("(buttons) => buttons.map((b) => (b.querySelector('.rail-label') || b).textContent.trim())")
-    assert rail == ["Requests", "Flows", "Monitors", "Mocks", "Envs", "Variables", "Cookies"]
+    assert rail == ["Requests", "Flows", "Monitors", "Mocks", "Envs", "Variables", "Cookies", "Inbox"]
     in_topbar = page.locator(".topbar button").evaluate_all("(buttons) => buttons.filter((b) => b.offsetParent !== null).map((b) => b.id)")
-    assert not {"btn-envs", "btn-variables", "btn-cookies", "btn-monitors", "btn-mocks"} & set(in_topbar)
+    assert not {"btn-envs", "btn-variables", "btn-cookies", "btn-inbox", "btn-monitors", "btn-mocks"} & set(in_topbar)
     assert {"btn-project", "btn-import", "btn-export", "btn-help", "btn-settings"} <= set(in_topbar)
     # the rail does not cover the page: the sidebar begins where the rail ends, the status bar spans the window
     edge = page.evaluate("document.querySelector('.rail').getBoundingClientRect().right")
@@ -1868,7 +1895,7 @@ def test_the_rail_is_the_navigation(page, servers):
         page.wait_for_selector(view + " .page-empty, " + view + " .page-head")
         assert page.is_hidden("#modal") and not page.is_visible("#runs-panel")
     page.click("#side-tabs button[data-tab='collection']")
-    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie")):
+    for button, title in (("#btn-envs", "Environments"), ("#btn-variables", "Global variables"), ("#btn-cookies", "Cookie"), ("#btn-inbox", "Test inbox")):
         page.click(button)
         page.wait_for_selector("#modal:not([hidden])")
         assert title.lower() in page.inner_text("#modal-title").lower(), button

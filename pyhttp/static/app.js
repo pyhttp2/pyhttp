@@ -15,6 +15,7 @@ const ICONS = {
   'stop': '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   'chevron-up': '<path d="m6 15 6-6 6 6"/>',
+  'chevron-left': '<path d="m15 6-6 6 6 6"/>',
   'chevron-right': '<path d="m9 6 6 6-6 6"/>',
   'arrow-up': '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
   'arrow-down': '<path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/>',
@@ -1264,6 +1265,130 @@ async function pollBodyRun(rs) {
     if (data.status === 'running') setTimeout(() => pollBodyRun(rs), 400);
   } catch (e) { toast(e.message, 'error'); }
 }
+// ------------------------------------------------- picking one of many responses
+const RB_INLINE_MAX = 3;   // up to this many responses are shown as chips, more get the picker
+function respName(rs, k) {
+  const id = bodyOfKey(k), n = iterOfKey(k);
+  if (id === NO_BODY) return n ? `Iteration ${n}` : 'No body';
+  const b = state.bodies.find((x) => x.id === id);
+  return ((b && b.name) || rs.byKey[k].body_name || 'Body') + (n ? ` #${n}` : '');
+}
+function respMeta(r) {
+  if (r.pending) return '<span class="rb-ms">sending…</span>';
+  if (r.notSent) return '<span class="rb-ms">not sent</span>';
+  return `<span class="rb-code ${codeClass(r.status_code)}">${r.status_code ?? 'ERR'}</span><span class="rb-ms">${fmtMs(r.duration_ms)}</span>`;
+}
+const respFailed = (r) => !!r && !r.pending && !r.notSent && codeClass(r.status_code) === 'err';
+const respPick = { el: null, opts: null, q: '', failedOnly: false, outside: null };
+function closeRespPicker() {
+  if (!respPick.el) return;
+  respPick.el.remove();
+  respPick.el = null;
+  document.removeEventListener('mousedown', respPick.outside, true);
+  const cur = $('#resp-bodies .rb-current');
+  if (cur) cur.setAttribute('aria-expanded', 'false');
+}
+function toggleRespPicker(opts) {
+  if (respPick.el) { closeRespPicker(); return; }   // a second click on the button closes it
+  openRespPicker(opts);
+}
+function openRespPicker(opts) {
+  closeMenu();
+  closeRespPicker();
+  respPick.opts = opts;
+  respPick.q = '';
+  respPick.failedOnly = !!opts.failedOnly;
+  const el = document.createElement('div');
+  el.id = 'rb-pop';
+  el.className = 'menu rb-pop';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'Responses');
+  el.innerHTML = `<div class="rb-pop-head">
+      <input type="search" class="rb-pop-q" placeholder="Filter by name or status…" aria-label="Filter the responses" autocomplete="off">
+      <div class="rb-pop-filter" role="group" aria-label="Show"><button type="button" data-f="all"></button><button type="button" data-f="failed"></button></div>
+    </div>
+    <div class="rb-pop-list" role="listbox" aria-label="Responses"></div>`;
+  document.body.appendChild(el);
+  respPick.el = el;
+  const q = $('.rb-pop-q', el);
+  q.addEventListener('input', () => { respPick.q = q.value; renderRespPickerList(); });
+  $$('.rb-pop-filter button', el).forEach((b) => b.addEventListener('click', () => {
+    respPick.failedOnly = b.dataset.f === 'failed';
+    renderRespPickerList();
+    q.focus();
+  }));
+  const opts_ = () => $$('.rb-opt', el);
+  el.addEventListener('keydown', (e) => {
+    const list = opts_();
+    const i = list.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeRespPicker(); const c = $('#resp-bodies .rb-current'); if (c) c.focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); if (list.length) list[i < 0 ? 0 : Math.min(i + 1, list.length - 1)].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (i <= 0) q.focus(); else list[i - 1].focus(); }
+    else if (e.key === 'Enter' && document.activeElement === q) { e.preventDefault(); const a = $('.rb-opt.active', el) || list[0]; if (a) a.click(); }
+  });
+  respPick.outside = (e) => {
+    if (el.contains(e.target) || e.target.closest('.rb-current, .rb-failed')) return;
+    closeRespPicker();
+  };
+  document.addEventListener('mousedown', respPick.outside, true);
+  renderRespPickerList(true);
+  const cur = $('#resp-bodies .rb-current');
+  if (cur) cur.setAttribute('aria-expanded', 'true');
+  q.focus();
+}
+function placeRespPicker() {
+  const el = respPick.el, anchor = $('#resp-bodies .rb-switch');
+  if (!el || !anchor) return;
+  const r = anchor.getBoundingClientRect();
+  const w = Math.min(Math.max(r.width, 360), window.innerWidth - 16);
+  el.style.width = w + 'px';
+  let top = r.bottom + 4;
+  const room = window.innerHeight - top - 8;
+  if (room < 220 && r.top > room) { el.style.maxHeight = Math.min(r.top - 12, 480) + 'px'; top = r.top - 4 - el.offsetHeight; }
+  else el.style.maxHeight = Math.min(room, 480) + 'px';
+  el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  el.style.top = Math.max(8, top) + 'px';
+}
+function renderRespPickerList(scrollToActive = false) {
+  const el = respPick.el;
+  if (!el) return;
+  const all = respPick.opts.items();
+  const nFail = all.filter((it) => respFailed(it.r)).length;
+  if (!nFail) respPick.failedOnly = false;
+  const fa = $('.rb-pop-filter [data-f=all]', el), ff = $('.rb-pop-filter [data-f=failed]', el);
+  fa.textContent = `All ${all.length}`;
+  ff.textContent = `Failed ${nFail}`;
+  ff.hidden = !nFail;
+  fa.classList.toggle('active', !respPick.failedOnly);
+  ff.classList.toggle('active', respPick.failedOnly);
+  const terms = respPick.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const sel = respPick.opts.selected();
+  const shown = all.filter((it) => {
+    if (respPick.failedOnly && !respFailed(it.r)) return false;
+    const hay = `${it.name} ${it.r.status_code ?? (it.r.pending ? 'sending' : it.r.notSent ? 'not sent' : 'err')}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+  const list = $('.rb-pop-list', el);
+  const focusKey = list.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+  list.innerHTML = shown.length ? shown.map((it) => {
+    const size = it.r.response && it.r.response.size != null ? `<span class="rb-size">${fmtBytes(it.r.response.size)}</span>` : '';
+    return `<button type="button" class="rb-opt ${it.key === sel ? 'active' : ''} ${it.r.pending || it.r.notSent ? 'pending' : ''}" role="option" aria-selected="${it.key === sel}" data-key="${esc(it.key)}" title="${esc(it.name)}">`
+      + `<span class="rb-name">${esc(it.name)}</span>${respMeta(it.r)}${size}</button>`;
+  }).join('') : `<div class="rb-pop-none muted small">No response matches.</div>`;
+  $$('.rb-opt', list).forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.key;
+    closeRespPicker();
+    respPick.opts.pick(k);
+    const c = $('#resp-bodies .rb-current');
+    if (c) c.focus();
+  }));
+  if (focusKey) { const f = $(`.rb-opt[data-key="${CSS.escape(focusKey)}"]`, list); if (f) f.focus(); }
+  placeRespPicker();
+  if (scrollToActive) { const a = $('.rb-opt.active', list); if (a) a.scrollIntoView({ block: 'nearest' }); }
+}
+// a run still in progress keeps updating the responses: the open picker follows
+function refreshRespPicker() { if (respPick.el) renderRespPickerList(); }
+
 function renderResponseArea() {
   if (typeof renderWsPanel === 'function' && renderWsPanel()) return;   // a WebSocket request shows its console here
   const rs = responsesFor();
@@ -1280,30 +1405,55 @@ function renderResponseArea() {
   if (!rs.selected || !rs.byKey[rs.selected]) rs.selected = keys[0];
   const strip = $('#resp-bodies');
   strip.hidden = keys.length < 2 && !(rs.run && rs.run.status === 'running');
+  if (strip.hidden) closeRespPicker();
   if (!strip.hidden) {
-    const nameOf = (k) => {
-      const id = bodyOfKey(k), n = iterOfKey(k);
-      if (id === NO_BODY) return n ? `Iteration ${n}` : 'No body';
-      const b = state.bodies.find((x) => x.id === id);
-      return ((b && b.name) || rs.byKey[k].body_name || 'Body') + (n ? ` #${n}` : '');
-    };
+    const nameOf = (k) => respName(rs, k);
     const tab = (k) => {
       const r = rs.byKey[k];
-      let meta = '';
-      if (r.pending) meta = '<span class="rb-ms">sending…</span>';
-      else if (r.notSent) meta = '<span class="rb-ms">not sent</span>';
-      else meta = `<span class="rb-code ${codeClass(r.status_code)}">${r.status_code ?? 'ERR'}</span><span class="rb-ms">${fmtMs(r.duration_ms)}</span>`;
       const title = iterOfKey(k) ? `Show the response from iteration ${iterOfKey(k)}` : `Show the response for “${esc(nameOf(k))}”`;
-      return `<button class="rb-tab ${k === rs.selected ? 'active' : ''} ${r.pending || r.notSent ? 'pending' : ''}" data-key="${esc(k)}" title="${title}">${esc(nameOf(k))}${meta}</button>`;
+      return `<button class="rb-tab ${k === rs.selected ? 'active' : ''} ${r.pending || r.notSent ? 'pending' : ''}" data-key="${esc(k)}" title="${title}"><span class="rb-name">${esc(nameOf(k))}</span>${respMeta(r)}</button>`;
     };
+    const selectResp = (k) => {
+      rs.selected = k;
+      renderResponseArea();
+      const bid = bodyOfKey(rs.selected);
+      if (state.bodies.some((b) => b.id === bid) && state.activeBodyId !== bid) {
+        flushBody();
+        state.activeBodyId = bid;
+        renderBodies();
+      }
+    };
+    // A few responses: one chip each, one click away. More than that: one row whatever the count,
+    // the response on screen, ‹ › to step through them and a picker with search and a failed filter,
+    // so the response body keeps its room.
+    let switcher;
+    if (keys.length <= RB_INLINE_MAX) switcher = keys.map(tab).join('');
+    else {
+      const i = keys.indexOf(rs.selected);
+      const cur = rs.byKey[rs.selected];
+      const nFail = keys.filter((k) => respFailed(rs.byKey[k])).length;
+      switcher = `<div class="rb-switch" role="group" aria-label="Responses">`
+        + `<button type="button" class="icon rb-prev" title="Previous response (←)" aria-label="Previous response" ${i <= 0 ? 'disabled' : ''}>${icon('chevron-left')}</button>`
+        + `<button type="button" class="rb-current ${cur.pending || cur.notSent ? 'pending' : ''}" data-key="${esc(rs.selected)}" aria-haspopup="listbox" aria-expanded="${$('#rb-pop') ? 'true' : 'false'}" title="Pick one of the ${keys.length} responses (Enter or ↓). ← → step through them">`
+        + `<span class="rb-name">${esc(nameOf(rs.selected))}</span>${respMeta(cur)}<span class="rb-pos">${i + 1} of ${keys.length}</span>${icon('chevron-down')}</button>`
+        + `<button type="button" class="icon rb-next" title="Next response (→)" aria-label="Next response" ${i >= keys.length - 1 ? 'disabled' : ''}>${icon('chevron-right')}</button>`
+        + `</div>`
+        + (nFail ? `<button type="button" class="link small rb-failed" title="Pick from the failed responses only">${nFail} failed</button>` : '');
+    }
     const runInfo = rs.run
-      ? `<span class="rb-run">${rs.run.name !== undefined ? `Run${rs.run.name ? ` “${esc(rs.run.name)}”` : ''}${rs.run.status === 'running' ? ' (running)' : ''}: ` : ''}${rs.run.completed}/${rs.run.total} sent${rs.run.parallel ? ' in parallel' : ''}${rs.run.failed ? ` · ${rs.run.failed} failed` : ''}
+      ? `<span class="rb-run"><span class="rb-run-t">${rs.run.name !== undefined ? `Run${rs.run.name ? ` “${esc(rs.run.name)}”` : ''}${rs.run.status === 'running' ? ' (running)' : ''}: ` : ''}${rs.run.completed}/${rs.run.total} sent${rs.run.parallel ? ' in parallel' : ''}${rs.run.failed ? ` · ${rs.run.failed} failed` : ''}</span>
           <button class="link small rb-folder" title="${esc(rs.run.output_dir || '')}">Open output folder</button></span>`
       : '';
     // two or more real responses: any two of them can be compared as a diff
     const real = keys.filter((k) => !rs.byKey[k].pending && !rs.byKey[k].notSent);
     const cmpBtn = real.length > 1 ? '<button class="link small rb-compare" title="Compare the response on screen with another one: body, headers and the request as sent, as a diff">' + icon('swap') + ' Compare</button>' : '';
-    strip.innerHTML = keys.map(tab).join('') + cmpBtn + runInfo;
+    const refocus = strip.contains(document.activeElement) && document.activeElement.className.match(/rb-(prev|next|current)/);
+    strip.innerHTML = switcher + cmpBtn + runInfo;
+    if (refocus) {   // the strip was rebuilt under the keyboard: keep the focus on the same control
+      let el = $('.rb-' + refocus[1], strip);
+      if (!el || el.disabled) el = $('.rb-current', strip);
+      if (el) el.focus();
+    }
     const cmp = $('.rb-compare', strip);
     if (cmp) cmp.addEventListener('click', () => {
       const others = real.filter((k) => k !== rs.selected);
@@ -1312,16 +1462,26 @@ function renderResponseArea() {
       if (others.length === 1) go(others[0]);
       else openMenu('rb-compare', cmp, null, others.map((k) => ({ act: 'cmp:' + k, icon: 'swap', label: `with “${nameOf(k)}”`, run: () => go(k) })));
     });
-    $$('.rb-tab', strip).forEach((el) => el.addEventListener('click', () => {
-      rs.selected = el.dataset.key;
-      renderResponseArea();
-      const bid = bodyOfKey(rs.selected);
-      if (state.bodies.some((b) => b.id === bid) && state.activeBodyId !== bid) {
-        flushBody();
-        state.activeBodyId = bid;
-        renderBodies();
+    $$('.rb-tab', strip).forEach((el) => el.addEventListener('click', () => selectResp(el.dataset.key)));
+    const step = (d) => { const j = keys.indexOf(rs.selected) + d; if (j >= 0 && j < keys.length) selectResp(keys[j]); };
+    const picker = (failedOnly) => ({ rs, failedOnly,
+      items: () => keys.map((k) => ({ key: k, name: nameOf(k), r: rs.byKey[k] })), selected: () => rs.selected, pick: selectResp });
+    const curBtn = $('.rb-current', strip);
+    if (curBtn) {
+      $('.rb-prev', strip).addEventListener('click', () => step(-1));
+      $('.rb-next', strip).addEventListener('click', () => step(1));
+      curBtn.addEventListener('click', () => toggleRespPicker(picker(false)));
+      $('.rb-switch', strip).addEventListener('keydown', (e) => {   // on any of ‹ [current] ›
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); step(e.key === 'ArrowLeft' ? -1 : 1); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); openRespPicker(picker(false)); }
+      });
+      const failBtn = $('.rb-failed', strip);
+      if (failBtn) failBtn.addEventListener('click', () => openRespPicker(picker(true)));
+      if (respPick.el) {   // open while the responses change (a run in progress): follow them, or close for another request
+        if (respPick.opts.rs !== rs) closeRespPicker();
+        else { respPick.opts = picker(respPick.failedOnly); refreshRespPicker(); }
       }
-    }));
+    } else closeRespPicker();
     const folderBtn = $('.rb-folder', strip);
     if (folderBtn) folderBtn.addEventListener('click', () => openRunFolder(rs.run.id));
   }
