@@ -619,6 +619,9 @@ function updateBodyHints() {
   const total = state.bodies.length;
   const on = state.bodies.filter((b) => b.enabled).length;
   $('#bodies-count').textContent = total ? `${on} of ${total} checked` : '';
+  const del = $('#btn-body-del-checked');
+  del.disabled = !on;
+  del.title = on ? `Delete the ${on} checked ${on === 1 ? 'body' : 'bodies'}` : 'Delete the checked bodies (none is checked)';
   const type = $('#f-body-type').value;
   $('#body-list').classList.toggle('no-send', type === 'none');   // no per-body send button when bodies are not sent
   let hint = '';
@@ -920,6 +923,32 @@ async function deleteBody(which = null) {
     if (!state.current || state.current.id !== reqId) { toast('That body belongs to another request', 'error'); return; }
     state.bodies.splice(Math.min(i, state.bodies.length), 0, b);
     if (wasActive || !state.activeBodyId) state.activeBodyId = b.id;
+    renderBodies();
+    renderResponseArea();
+    scheduleSave();
+  } });
+}
+// The trash button above the list: delete every checked body at once, with one Undo.
+function deleteCheckedBodies() {
+  flushBody();
+  const gone = state.bodies.map((b, i) => ({ b, i })).filter((x) => x.b.enabled);
+  if (!gone.length) return;
+  const reqId = state.current && state.current.id;
+  const wasActive = state.activeBodyId;
+  state.bodies = state.bodies.filter((b) => !b.enabled);
+  if (!state.bodies.some((b) => b.id === state.activeBodyId)) {
+    const first = gone.find((x) => x.b.id === wasActive);
+    const next = state.bodies[Math.min(first ? first.i - gone.filter((x) => x.i < first.i).length : 0, state.bodies.length - 1)];
+    state.activeBodyId = next ? next.id : null;
+  }
+  renderBodies();
+  renderResponseArea();
+  scheduleSave();
+  const n = gone.length;
+  toast(`Deleted ${n} ${n === 1 ? 'body' : 'bodies'}`, '', { label: 'Undo', onClick: () => {
+    if (!state.current || state.current.id !== reqId) { toast('Those bodies belong to another request', 'error'); return; }
+    gone.forEach(({ b, i }) => state.bodies.splice(Math.min(i, state.bodies.length), 0, b));
+    state.activeBodyId = wasActive;
     renderBodies();
     renderResponseArea();
     scheduleSave();
@@ -2079,7 +2108,7 @@ function openMenu(key, anchor, at, items) {
     m.appendChild(b);
   });
   document.body.appendChild(m);
-  const row = anchor.closest('.req-item, .folder-item, .h-item, .body-item');
+  const row = anchor.closest('.req-item, .folder-item, .h-item, .body-item, .req-tab');
   if (row) row.classList.add('menu-open');
   const rect = anchor.getBoundingClientRect();
   let left = at ? at.x : rect.right - m.offsetWidth;
@@ -3062,6 +3091,7 @@ function init() {
   $('#btn-body-del').addEventListener('click', () => deleteBody());
   $('#btn-body-all').addEventListener('click', () => setAllBodies(true));
   $('#btn-body-none').addEventListener('click', () => setAllBodies(false));
+  $('#btn-body-del-checked').addEventListener('click', deleteCheckedBodies);
 
   $('#btn-variables').addEventListener('click', openVariables);
   $('#btn-export').addEventListener('click', (e) => exportMenu(e.currentTarget));

@@ -1536,6 +1536,54 @@ function bindReqTabs() {
     if (el.dataset.key !== tabKey(state.current)) openRequest(el.dataset.key);
   });
   box.addEventListener('auxclick', (e) => { const el = e.target.closest('.req-tab'); if (el && e.button === 1) closeTab(el.dataset.key); });
+  box.addEventListener('contextmenu', (e) => {
+    const el = e.target.closest('.req-tab');
+    if (!el) return;
+    e.preventDefault();
+    openTabMenu(el.dataset.key, el, { x: e.clientX, y: e.clientY });
+  });
+}
+// Right click on a tab: what the request's own menu has, and the ways to close tabs.
+function openTabMenu(key, anchor, at) {
+  const keys = tabs.list.map((t) => t.id);
+  const i = keys.indexOf(key);
+  if (i === -1) return;
+  const r = key === 'draft' ? null : state.requests.find((x) => x.id === key) || (state.current && state.current.id === key ? state.current : null);
+  const others = keys.filter((k) => k !== key);
+  const items = [
+    { act: 'new', icon: 'plus', label: 'New tab', run: () => newRequest(r ? r.folder_id : null) },
+  ];
+  if (r) {
+    items.push(
+      { act: 'dup', icon: 'copy', label: 'Duplicate', run: () => duplicateRequestById(r.id) },
+      { act: 'move', icon: 'move', label: 'Move to folder…', run: () => moveRequestDialog(r) },
+      { act: 'share', icon: 'link', label: 'Share link…', run: () => shareDialog('request', r.id, r.name) },
+    );
+  }
+  items.push('-',
+    { act: 'close', icon: 'x', label: 'Close tab', run: () => closeTab(key) },
+  );
+  if (others.length) items.push({ act: 'close-others', icon: 'x', label: 'Close other tabs', run: () => closeTabs(others) });
+  if (i > 0) items.push({ act: 'close-left', icon: 'x', label: 'Close tabs to the left', run: () => closeTabs(keys.slice(0, i)) });
+  if (i < keys.length - 1) items.push({ act: 'close-right', icon: 'x', label: 'Close tabs to the right', run: () => closeTabs(keys.slice(i + 1)) });
+  items.push({ act: 'close-all', icon: 'x', label: 'Close all tabs', run: () => closeTabs(keys) });
+  if (r) items.push('-', { act: 'del', icon: 'trash', label: 'Delete', danger: true, run: () => deleteRequestById(r.id, r.name) });
+  openMenu('tab:' + key, anchor, at, items);
+}
+// Close several tabs at once; when the one in front goes, the nearest one left opens.
+async function closeTabs(keys) {
+  const drop = new Set(keys);
+  const cur = tabKey(state.current);
+  const i = tabs.list.findIndex((t) => t.id === cur);
+  const before = tabs.list.slice(0, Math.max(i, 0)).filter((t) => !drop.has(t.id));
+  tabs.list = tabs.list.filter((t) => !drop.has(t.id));
+  if (cur && drop.has(cur)) {
+    await saveNow();
+    const next = tabs.list[Math.min(before.length, tabs.list.length - 1)];
+    if (next) await openRequest(next.id);
+    else { state.current = null; renderEditor(); renderList(); }
+  }
+  renderReqTabs();
 }
 async function closeTab(key) {
   const cur = tabKey(state.current);
@@ -1996,11 +2044,13 @@ function initResizers() {
 }
 
 // ================================================================ sidebar
+// No separate toggle button: the rail is the toggle. Picking a section shows its list; picking
+// the section already in front again hides the sidebar (Ctrl+\ too).
 function setSidebar(show) {
   $('.layout').classList.toggle('no-side', !show);
-  const b = $('#btn-sidebar');
-  b.classList.toggle('on', show);
-  b.title = show ? 'Hide the sidebar (Ctrl+\\)' : 'Show the sidebar (Ctrl+\\)';
+  $$('#side-tabs button[data-tab]').forEach((b) => {
+    b.setAttribute('aria-expanded', String(show && b.classList.contains('active')));
+  });
   try { localStorage.setItem('pyhttp.side', show ? '1' : '0'); } catch { /* ignore */ }
 }
 function sidebarShown() { return !$('.layout').classList.contains('no-side'); }
@@ -2103,7 +2153,13 @@ function initFeatures() {
   $('#data-file').addEventListener('change', (e) => { if (e.target.files[0]) loadDataFile(e.target.files[0]); e.target.value = ''; });
   $$('#sb-layout button[data-layout]').forEach((b) => b.addEventListener('click', () => { if (appSettings.layout !== b.dataset.layout) saveSettings({ layout: b.dataset.layout }); }));
   $('#r-layout').addEventListener('click', () => saveSettings({ layout: appSettings.layout === 'beside' ? 'below' : 'beside' }));
-  $('#btn-sidebar').addEventListener('click', () => setSidebar(!sidebarShown()));
+  // capture: runs before the section switch, so a click on the open section only hides its list
+  $('#side-tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-tab]');
+    if (!b) return;
+    if (b.classList.contains('active') && sidebarShown()) { e.stopPropagation(); setSidebar(false); }
+    else if (!sidebarShown()) setSidebar(true);
+  }, true);
   try { if (localStorage.getItem('pyhttp.side') === '0') setSidebar(false); } catch { /* ignore */ }
   initResizers();
   $('#sb-runs').addEventListener('click', () => setRunsPanel(!runsPanelShown()));

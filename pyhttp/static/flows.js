@@ -1514,8 +1514,6 @@ function initFlows() {
   bindTabs(tabs, $('#side-panels'));
   $$('button[data-tab]', tabs).forEach((b) => b.addEventListener('click', () => {
     setFlowMode(b.dataset.tab === 'flows');
-    // the rail stays when the sidebar is hidden: picking a section there brings its list back
-    if ($('.layout').classList.contains('no-side') && $('#btn-sidebar')) $('#btn-sidebar').click();
   }));
   $('#btn-flow-new').addEventListener('click', () => newFlow(''));
   bindFlowTabs();

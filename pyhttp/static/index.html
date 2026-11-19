@@ -28,9 +28,6 @@
 </head>
 <body>
 <header class="topbar">
-  <button id="btn-sidebar" class="icon-btn hamburger on" title="Hide the sidebar (Ctrl+\)" aria-label="Show or hide the sidebar">
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
-  </button>
   <div class="brand" title="pyhttp: local HTTP client">
     <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
       <defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#10b981"/></linearGradient></defs>
@@ -220,24 +217,25 @@
             <div class="bodies-side">
               <div class="row tight">
                 <input id="body-search" type="search" class="grow" placeholder="Search bodies…" autocomplete="off">
-                <button id="btn-body-add" title="Add a new named body">+ Body</button>
+                <button id="btn-body-add" class="icon" title="Add a new named body" aria-label="Add a body"><svg class="ic ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button>
               </div>
               <div class="row tight small">
                 <button id="btn-body-all" class="link small">check all</button>
                 <button id="btn-body-none" class="link small">uncheck all</button>
                 <span class="grow"></span>
                 <span id="bodies-count" class="muted small"></span>
+                <button id="btn-body-del-checked" class="icon danger" title="Delete the checked bodies" aria-label="Delete the checked bodies" disabled><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg></button>
               </div>
               <ul id="body-list" class="body-list"></ul>
             </div>
             <div class="bodies-main">
-              <div id="body-editor-empty" class="empty small">Add a body with “+ Body”. Each named body is sent separately when you press Send.</div>
+              <div id="body-editor-empty" class="empty small">Add a body with the + button. Each named body is sent separately when you press Send.</div>
               <div id="body-editor" hidden>
                 <div class="row tight">
                   <input id="body-name" class="grow" placeholder="Body name, e.g. valid user / missing email">
                   <button id="btn-format-json" class="link" title="Beautify (Ctrl+B)">Beautify</button>
-                  <button id="btn-body-dup" title="Duplicate this body">Duplicate</button>
-                  <button id="btn-body-del" class="danger" title="Delete this body">Delete</button>
+                  <button id="btn-body-dup" class="icon" title="Duplicate this body" aria-label="Duplicate this body"><svg class="ic ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
+                  <button id="btn-body-del" class="icon danger" title="Delete this body" aria-label="Delete this body"><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg></button>
                 </div>
                 <div id="body-text-wrap">
                   <textarea id="f-body" class="mono body-input" rows="14" spellcheck="false" placeholder='{"name": "{{user_name}}"}  // Ctrl+/ comments a line'></textarea>

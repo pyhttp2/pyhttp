@@ -897,8 +897,9 @@ def test_layout_sidebar_and_scripts_tab(page, servers):
         bodies: [{id: 's1', name: 'first', body: '{}', enabled: true}, {id: 's2', name: 'second', body: '{}', enabled: false}]})})""", [app_url, echo_url])
     page.reload()
     page.wait_for_selector("#btn-new")
-    # sidebar toggle: button and Ctrl+\
-    page.click("#btn-sidebar")
+    # sidebar toggle: a second click on the open section of the rail, and Ctrl+\
+    assert page.locator("#btn-sidebar").count() == 0
+    page.click("#side-tabs button[data-tab='collection']")
     assert page.evaluate("document.querySelector('.layout').classList.contains('no-side')")
     assert not page.locator(".sidebar").is_visible()
     page.keyboard.press("Control+\\")
@@ -1288,6 +1289,51 @@ def test_undo_delete_body(page, servers):
     assert page.locator("#body-list .body-item").count() == 0
     page.click("#toast .toast-act")
     page.wait_for_selector("#body-list .body-item:has-text('only body')")
+
+
+def test_delete_checked_bodies(page, servers):
+    """The trash button above the body list deletes every checked body, with one Undo."""
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Bodies bulk delete")
+    page.click("#editor-tabs button[data-tab='body']")
+    for _ in range(3):
+        page.click("#btn-body-add")
+    assert page.locator("#body-list .body-item").count() == 3
+    page.locator("#body-list .body-item").nth(1).locator("input").uncheck()
+    assert page.is_enabled("#btn-body-del-checked")
+    page.click("#btn-body-del-checked")
+    page.wait_for_selector("#toast .toast-act")
+    assert page.locator("#body-list .body-item").all_inner_texts()[0].startswith("Body 2")
+    assert page.locator("#body-list .body-item").count() == 1
+    page.click("#toast .toast-act")
+    page.wait_for_function("document.querySelectorAll('#body-list .body-item').length === 3")
+    assert [t.split("\n")[0] for t in page.locator("#body-list .bname").all_inner_texts()] == ["Body 1", "Body 2", "Body 3"]
+    page.click("#btn-body-none")
+    assert page.is_disabled("#btn-body-del-checked")
+    forget(page, app_url, "Bodies bulk delete")
+
+
+def test_request_tab_context_menu(page, servers):
+    """Right click on a request tab: duplicate and the close actions."""
+    app_url, echo_url = servers
+    for name in ("Tab A", "Tab B", "Tab C"):
+        new_request(page, echo_url, name)
+    tab = lambda name: page.locator(f"#req-tabs .req-tab:has-text('{name}')")
+    tab("Tab B").click(button="right")
+    page.wait_for_selector("#ctx-menu")
+    acts = page.eval_on_selector_all("#ctx-menu button", "bs => bs.map((b) => b.dataset.act)")
+    for act in ("dup", "close", "close-others", "close-left", "close-right", "close-all", "del"):
+        assert act in acts, act
+    page.click("#ctx-menu button[data-act='dup']")
+    page.wait_for_selector("#req-tabs .req-tab:has-text('Tab B (copy)')")
+    tab("Tab B (copy)").click(button="right")
+    page.click("#ctx-menu button[data-act='close-others']")
+    page.wait_for_function("document.querySelectorAll('#req-tabs .req-tab').length === 1")
+    assert "Tab B (copy)" in page.inner_text("#req-tabs .req-tab")
+    tab("Tab B (copy)").click(button="right")
+    page.click("#ctx-menu button[data-act='close-all']")
+    page.wait_for_function("!document.querySelector('#req-tabs .req-tab')")
+    forget(page, app_url, "Tab A", "Tab B", "Tab C", "Tab B (copy)")
 
 
 def test_monitors_page(page, servers):
@@ -1827,8 +1873,8 @@ def test_the_rail_is_the_navigation(page, servers):
         page.wait_for_selector("#modal:not([hidden])")
         assert title.lower() in page.inner_text("#modal-title").lower(), button
         page.click("#modal-close")
-    # with the sidebar hidden the rail stays, and picking a section brings the list back
-    page.click("#btn-sidebar")
+    # a second click on the open section hides the sidebar; the rail stays, and picking a section brings the list back
+    page.click("#side-tabs button[data-tab='collection']")
     assert not page.is_visible(".sidebar") and page.is_visible(".rail")
     page.click("#side-tabs button[data-tab='flows']")
     assert page.is_visible(".sidebar") and page.is_visible("#flow-list")
