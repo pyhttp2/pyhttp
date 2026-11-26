@@ -1624,6 +1624,49 @@ def test_send_one_body_button_keeps_checkboxes(page, servers):
     assert page.locator("#body-list .body-item .bsend").nth(0).is_hidden()
 
 
+def test_body_groups_toolbar_send_and_maximize(page, servers):
+    """Bodies can be grouped (fold, send a group), the toolbar Send sends the body on screen, the
+    maximize button lifts the bodies into a card and Esc puts them back, and the response copy is an icon."""
+    app_url, echo_url = servers
+    new_request(page, echo_url, "Body groups")
+    page.select_option("#f-method", "POST")
+    page.click("#editor-tabs button[data-tab='body']")
+    for i, (name, group) in enumerate([("ok1", "Happy"), ("ok2", "Happy"), ("bad", "Invalid")]):
+        page.click("#btn-body-add")
+        page.fill("#body-name", name)
+        set_editor(page, "#f-body", '{"which": %d}' % i)
+        page.fill("#body-group", group)
+        page.press("#body-group", "Enter")
+    page.wait_for_function("document.querySelector('#save-state').textContent === 'Saved'")
+    assert page.locator("#body-list .bg-name").all_inner_texts() == ["HAPPY", "INVALID"]
+    saved = page.request.get(f"{app_url}/api/requests/" + page.evaluate("state.current.id")).json()["bodies"]
+    assert [b.get("group") for b in saved] == ["Happy", "Happy", "Invalid"]
+    # a group folds
+    page.locator("#body-list .body-group").nth(0).locator(".bg-caret").click()
+    assert page.locator("#body-list .body-item").count() == 1
+    page.locator("#body-list .body-group").nth(0).locator(".bg-caret").click()
+    # the toolbar Send sends the body on screen only (no "which body?" dialog), checkboxes untouched
+    page.locator("#body-list .body-item input").nth(2).uncheck()
+    page.locator("#body-list .body-item:has-text('bad')").click()
+    page.click("#btn-body-send")
+    page.wait_for_selector("#response:not([hidden]) .jv")
+    assert page.locator(".dialog-backdrop").count() == 0
+    assert '\\"which\\": 2' in page.locator("#r-body .jv-node[data-path='body'] .jv-s").text_content()
+    assert not page.locator("#body-list .body-item input").nth(2).is_checked()
+    # the copy button is an icon in the response's corner
+    assert page.inner_text("#r-copy").strip() == ""
+    # maximize: the same elements move into the card; search works there; Esc restores
+    page.click("#btn-bodies-max")
+    page.wait_for_selector("#bodies-max .bodies-max-card #body-list")
+    page.fill("#body-search", "ok")
+    page.wait_for_function("document.querySelectorAll('#body-list .body-item').length === 2")
+    page.fill("#body-search", "")
+    page.keyboard.press("Escape")
+    assert page.locator("#bodies-max").count() == 0
+    assert page.locator("#editor-panels .tab-panel[data-panel='body'] #body-list").count() == 1
+    forget(page, app_url, "Body groups")
+
+
 def test_response_views_tab_and_history(page, servers, tmp_path):
     app_url, echo_url = servers
     new_request(page, echo_url, "views demo")

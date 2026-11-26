@@ -456,6 +456,20 @@ def test_cookies_redirects_and_binary(client, echo_url):
     assert res["status_code"] == 200 and json.loads(res["response"]["body_text"])["auth"].startswith("Digest ")
 
 
+def test_body_groups_are_kept(client):
+    """A body's group is stored with the request (whitespace collapsed); a body without one has no key."""
+    r = client.post("/api/requests", json={"name": "Grouped", "method": "POST", "url": "http://x", "body_type": "json", "bodies": [
+        {"id": "a", "name": "a", "body": "{}", "group": "  Happy   path "},
+        {"id": "b", "name": "b", "body": "{}", "group": ""},
+        {"id": "c", "name": "c", "body": "{}", "group": "x" * 80},
+    ]}).json()
+    got = client.get(f"/api/requests/{r['id']}").json()["bodies"]
+    assert got[0]["group"] == "Happy path"
+    assert "group" not in got[1]
+    assert got[2]["group"] == "x" * 60
+    client.delete(f"/api/requests/{r['id']}")
+
+
 def test_body_types(client, echo_url, tmp_path):
     f = tmp_path / "up.txt"
     f.write_text("hello")

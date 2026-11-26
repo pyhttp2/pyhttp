@@ -662,10 +662,59 @@ function flushBody() {
 }
 function bodyMatches(b, q) {
   if (!q) return true;
-  const hay = `${b.name}\n${b.body}`.toLowerCase();
+  const hay = `${b.name}\n${b.group || ''}\n${b.body}`.toLowerCase();
   return q.toLowerCase().split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
 }
 const SEND_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M2.5 3.3 22 12 2.5 20.7l2.9-7.2L15 12 5.4 10.5z"/></svg>';
+
+// Body groups: a body may carry a group name; the list then shows each group under a header that
+// folds, checks or sends all of its bodies. Groups exist through their bodies (no empty groups) and
+// are listed in the order of their first body. A request without groups looks as it always did.
+const BODY_GROUP_MAX = 60;
+const bodyGroup = (b) => (b && b.group) || '';
+const normGroup = (s) => String(s || '').split(/\s+/).filter(Boolean).join(' ').slice(0, BODY_GROUP_MAX);
+function bodyGroups() {
+  const out = [];
+  state.bodies.forEach((b) => { const g = bodyGroup(b); if (!out.includes(g)) out.push(g); });
+  return out;
+}
+const bodyGroupsClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem('pyhttp.bodyGroupsClosed') || '[]')); } catch { return new Set(); } })();
+const bodyGroupKey = (g) => `${(state.current && state.current.id) || ''}|${g}`;
+function setBodyGroupClosed(g, closed) {
+  const k = bodyGroupKey(g);
+  if (closed) bodyGroupsClosed.add(k); else bodyGroupsClosed.delete(k);
+  try { localStorage.setItem('pyhttp.bodyGroupsClosed', JSON.stringify([...bodyGroupsClosed].slice(-300))); } catch { /* ignore */ }
+}
+function bodyGroupRow(g, items, closed) {
+  const li = document.createElement('li');
+  const label = g || 'No group';
+  const on = items.filter((b) => b.enabled).length;
+  li.className = 'body-group' + (closed ? ' closed' : '') + (g ? '' : ' ungrouped') + (items.some((b) => b.id === state.activeBodyId) ? ' has-active' : '');
+  li.dataset.group = g;
+  li.innerHTML =
+    `<button type="button" class="icon bg-caret" aria-expanded="${!closed}" title="${closed ? 'Show' : 'Hide'} the bodies of “${esc(label)}”" aria-label="${closed ? 'Show' : 'Hide'} the bodies of ${esc(label)}">${icon('chevron-down')}</button>` +
+    `<input type="checkbox" title="Check or uncheck every body in “${esc(label)}”" aria-label="Check every body in ${esc(label)}">` +
+    `<span class="bg-name">${esc(label)}</span>` +
+    `<span class="bg-count" title="${on} of ${items.length} checked">${on}/${items.length}</span>` +
+    `<button type="button" class="icon bsend" title="Send the ${items.length} ${items.length === 1 ? 'body' : 'bodies'} of “${esc(label)}” (the checkboxes stay as they are)" aria-label="Send the group ${esc(label)}">${SEND_ICON}</button>` +
+    `<button type="button" class="icon bmore" title="Group actions" aria-label="Actions for the group ${esc(label)}" aria-haspopup="menu">${icon('more')}</button>`;
+  const box = $('input', li);
+  box.checked = on > 0 && on === items.length;
+  box.indeterminate = on > 0 && on < items.length;
+  box.addEventListener('click', (e) => {
+    e.stopPropagation();
+    items.forEach((b) => { b.enabled = e.target.checked; });
+    renderBodies();
+    scheduleSave();
+  });
+  const toggle = () => { setBodyGroupClosed(g, !closed); renderBodies(); };
+  $('.bg-caret', li).addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  $('.bsend', li).addEventListener('click', (e) => { e.stopPropagation(); sendBodyGroup(g); });
+  $('.bmore', li).addEventListener('click', (e) => { e.stopPropagation(); openBodyGroupMenu(g, e.currentTarget); });
+  li.addEventListener('contextmenu', (e) => { e.preventDefault(); openBodyGroupMenu(g, li, { x: e.clientX, y: e.clientY }); });
+  li.addEventListener('click', toggle);
+  return li;
+}
 function renderBodies() {
   const ul = $('#body-list');
   const shown = state.bodies.filter((b) => bodyMatches(b, state.bodyQ));
@@ -673,31 +722,19 @@ function renderBodies() {
   ul.innerHTML = '';
   if (!state.bodies.length) ul.innerHTML = '<li class="none">No bodies yet.</li>';
   else if (!shown.length) ul.innerHTML = '<li class="none">No bodies match.</li>';
-  shown.forEach((b) => {
-    const li = document.createElement('li');
-    li.className = 'body-item' + (b.id === state.activeBodyId ? ' active' : '') + (b.enabled ? '' : ' off');
-    li.dataset.id = b.id;
-    const preview = (b.body || '').replace(/\s+/g, ' ').slice(0, 80) || 'empty';
-    li.innerHTML =
-      `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Include this body when pressing Send">` +
-      `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>` +
-      `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)" aria-label="Send only ${esc(b.name || 'Unnamed')}">${SEND_ICON}</button>` +
-      `<button type="button" class="icon bmore" title="Body actions" aria-label="Actions for ${esc(b.name || 'Unnamed')}" aria-haspopup="menu">${icon('more')}</button>`;
-    $('input', li).addEventListener('click', (e) => {
-      e.stopPropagation();
-      b.enabled = e.target.checked;
-      renderBodies();
-      scheduleSave();   // checked bodies are remembered with the request, across tabs and restarts
-    });
-    $('.bsend', li).addEventListener('click', (e) => {
-      e.stopPropagation();
-      sendOneBody(b.id);
-    });
-    $('.bmore', li).addEventListener('click', (e) => { e.stopPropagation(); openBodyMenu(b, e.currentTarget); });
-    li.addEventListener('contextmenu', (e) => { e.preventDefault(); openBodyMenu(b, li, { x: e.clientX, y: e.clientY }); });
-    li.addEventListener('click', () => selectBody(b.id));
-    ul.appendChild(li);
+  const grouped = state.bodies.some((b) => bodyGroup(b));
+  ul.classList.toggle('grouped', grouped);
+  (grouped ? bodyGroups() : ['']).forEach((g) => {
+    const items = shown.filter((b) => bodyGroup(b) === g);
+    if (!items.length) return;
+    const closed = grouped && !state.bodyQ && bodyGroupsClosed.has(bodyGroupKey(g));   // a search opens every group
+    if (grouped) ul.appendChild(bodyGroupRow(g, items, closed));
+    if (!closed) items.forEach((b) => ul.appendChild(bodyRow(b, grouped)));
   });
+  const groups = bodyGroups().filter(Boolean);
+  const dl = $('#body-groups');
+  const opts = groups.map((g) => `<option value="${esc(g)}"></option>`).join('');
+  if (dl.innerHTML !== opts) dl.innerHTML = opts;
   ul.scrollTop = keepScroll;
   ul.classList.toggle('one', state.bodies.length < 2);
   const b = activeBody();
@@ -705,11 +742,38 @@ function renderBodies() {
   $('#body-editor-empty').hidden = !!b;
   if (b) {
     if ($('#body-name').value !== b.name) $('#body-name').value = b.name;
+    if (document.activeElement !== $('#body-group') && $('#body-group').value !== bodyGroup(b)) $('#body-group').value = bodyGroup(b);
     showBodyEditor(b);
   }
+  if (bodiesMax.on) renderBodiesMaxTitle();
   updateBodyHints();
   updateTabCounts();
   if (typeof refreshTestBodyScopes === 'function') refreshTestBodyScopes();   // tests can be scoped to a body
+}
+function bodyRow(b, grouped) {
+  const li = document.createElement('li');
+  li.className = 'body-item' + (b.id === state.activeBodyId ? ' active' : '') + (b.enabled ? '' : ' off') + (grouped ? ' in-group' : '');
+  li.dataset.id = b.id;
+  const preview = (b.body || '').replace(/\s+/g, ' ').slice(0, 80) || 'empty';
+  li.innerHTML =
+    `<input type="checkbox" ${b.enabled ? 'checked' : ''} title="Include this body when pressing Send">` +
+    `<div style="min-width:0"><div class="bname">${esc(b.name || 'Unnamed')}</div><div class="bprev">${esc(preview)}</div></div>` +
+    `<button type="button" class="icon bsend" title="Send only “${esc(b.name || 'Unnamed')}” now (the checkboxes stay as they are)" aria-label="Send only ${esc(b.name || 'Unnamed')}">${SEND_ICON}</button>` +
+    `<button type="button" class="icon bmore" title="Body actions" aria-label="Actions for ${esc(b.name || 'Unnamed')}" aria-haspopup="menu">${icon('more')}</button>`;
+  $('input', li).addEventListener('click', (e) => {
+    e.stopPropagation();
+    b.enabled = e.target.checked;
+    renderBodies();
+    scheduleSave();   // checked bodies are remembered with the request, across tabs and restarts
+  });
+  $('.bsend', li).addEventListener('click', (e) => {
+    e.stopPropagation();
+    sendOneBody(b.id);
+  });
+  $('.bmore', li).addEventListener('click', (e) => { e.stopPropagation(); openBodyMenu(b, e.currentTarget); });
+  li.addEventListener('contextmenu', (e) => { e.preventDefault(); openBodyMenu(b, li, { x: e.clientX, y: e.clientY }); });
+  li.addEventListener('click', () => selectBody(b.id));
+  return li;
 }
 function updateBodyHints() {
   const total = state.bodies.length;
@@ -747,6 +811,21 @@ function renderDependencyBadge(dep) {
   else if (dep.state === 'loop') { text = `${name}: skipped`; title = 'Skipped: the dependencies form a loop.'; }
   el.innerHTML = iconText('link', text); el.title = title; el.className = cls;
 }
+// The Send button on the body toolbar: sends the body on screen, whatever is checked.
+function renderBodySendButton(type, sending) {
+  const bs = $('#btn-body-send');
+  const b = activeBody();
+  bs.hidden = false;
+  bs.disabled = sending || type === 'none' || !b;
+  const label = sending ? 'Sending…' : 'Send';
+  const title = sending ? 'A send of this request is in flight. Cancel it with the Cancel button first.'
+    : type === 'none' ? 'Body type is “No body”: pick a body type to send a body'
+    : b ? `Send “${b.name || 'Unnamed'}” only (Ctrl+Shift+Enter). The checkboxes stay as they are.` : 'No body';
+  const span = $('span', bs);
+  if (span.textContent !== label) span.textContent = label;
+  if (bs.title !== title) bs.title = title;
+  bs.classList.toggle('busy', sending);
+}
 function renderSendButton() {
   const btn = $('#btn-send');
   if (typeof isWsRequest === 'function' && isWsRequest()) {   // a ws:// address connects instead of sending
@@ -760,12 +839,14 @@ function renderSendButton() {
     if (btn.textContent !== label) btn.textContent = label;
     $('#btn-send-mode').hidden = true;
     $('#body-list').classList.remove('sending');
+    $('#btn-body-send').hidden = true;
     return;
   }
   const type = $('#f-body-type').value;
   const on = state.bodies.filter((b) => b.enabled).length;
   const n = type === 'none' ? 1 : on;
   const sending = state.sending && state.sending.key === responseKey();
+  renderBodySendButton(type, !!sending);
   btn.classList.toggle('cancel', !!sending);
   btn.disabled = false;
   const par = !!appSettings.parallel;
@@ -953,7 +1034,34 @@ function sendOneBody(id) {
   if (state.sending && state.sending.key === responseKey()) { toast('A send is already in flight. Cancel it first.', 'error'); return; }
   if ($('#f-body-type').value === 'none') { toast('Body type is “No body”. Pick a body type to send a body.', 'error'); return; }
   selectBody(id);   // the editor and the response pane follow the body that is sent
-  sendCurrent({ onlyBodyId: id });
+  const sent = sendCurrent({ onlyBodyId: id });
+  if (bodiesMax.on) reportMaxSend(sent, [id]);
+}
+// The send button of a group header: send every body of the group, whatever is checked.
+function sendBodyGroup(g) {
+  const ids = state.bodies.filter((b) => bodyGroup(b) === g).map((b) => b.id);
+  if (!ids.length) return;
+  if (ids.length === 1) { sendOneBody(ids[0]); return; }
+  if (state.sending && state.sending.key === responseKey()) { toast('A send is already in flight. Cancel it first.', 'error'); return; }
+  if ($('#f-body-type').value === 'none') { toast('Body type is “No body”. Pick a body type to send a body.', 'error'); return; }
+  const sent = sendCurrent({ onlyBodyIds: ids });
+  if (bodiesMax.on) reportMaxSend(sent, ids);
+}
+// The response pane is under the maximized bodies: say how the send went, with a way to look at it.
+async function reportMaxSend(sent, ids) {
+  await sent;
+  if (!bodiesMax.on) return;
+  const rs = responsesFor();
+  const show = { label: 'Show response', onClick: () => setBodiesMax(false) };
+  if (ids.length > 1) {
+    if (rs && rs.run && rs.run.status === 'running') toast(`Sending ${ids.length} bodies…`, '', show);
+    return;
+  }
+  const r = rs && rs.byKey[ids[0]];
+  if (!r || r.pending) return;
+  const name = (state.bodies.find((b) => b.id === ids[0]) || {}).name || 'body';
+  if (r.error && !r.status_code) toast(`“${name}”: ${r.error}`, 'error', show);
+  else toast(`“${name}”: ${r.status_code} ${r.reason || ''} · ${fmtMs(r.duration_ms)}`.replace(/\s+·/, ' ·'), r.status_code < 400 ? 'ok' : 'error', show);
 }
 function selectBody(id) {
   flushBody();
@@ -966,7 +1074,7 @@ function selectBody(id) {
   if (key && bodyOfKey(rs.selected || '') !== id) { rs.selected = key; renderResponseArea(); }
   else if (rs && rs.selected && rs.byKey[rs.selected] && !rs.byKey[rs.selected].pending && !rs.byKey[rs.selected].notSent) renderResponse(rs.byKey[rs.selected], !$('#resp-bodies').hidden);
 }
-function addBody(from, at = null) {
+function addBody(from, at = null, group = null) {
   flushBody();
   const b = {
     id: newBodyId(),
@@ -974,6 +1082,16 @@ function addBody(from, at = null) {
     body: from ? from.body : '',
     enabled: true,
   };
+  const g = normGroup(from ? bodyGroup(from) : group);
+  if (g) {
+    b.group = g;
+    setBodyGroupClosed(g, false);
+    if (at == null) {   // at the end of its group
+      let last = -1;
+      state.bodies.forEach((x, i) => { if (bodyGroup(x) === g) last = i; });
+      if (last >= 0) at = last + 1;
+    }
+  }
   if (at == null || at < 0 || at > state.bodies.length) state.bodies.push(b); else state.bodies.splice(at, 0, b);
   state.activeBodyId = b.id;
   if ($('#f-body-type').value === 'none') $('#f-body-type').value = 'json';
@@ -987,20 +1105,84 @@ function addBody(from, at = null) {
 function openBodyMenu(b, anchor, at) {
   flushBody();
   const i = state.bodies.indexOf(b);
-  const moveTo = (j) => {
-    state.bodies.splice(i, 1);
-    state.bodies.splice(j, 0, b);
+  const g = bodyGroup(b);
+  // up / down move past the neighbour in the same group, which is the one shown next to it
+  const sibling = (dir) => { for (let j = i + dir; j >= 0 && j < state.bodies.length; j += dir) if (bodyGroup(state.bodies[j]) === g) return j; return -1; };
+  const swapWith = (j) => {
+    if (j < 0) return;
+    [state.bodies[i], state.bodies[j]] = [state.bodies[j], state.bodies[i]];
     renderBodies();
     scheduleSave();
   };
+  const moves = bodyGroups().filter((x) => x && x !== g).slice(0, 6)
+    .map((x) => ({ act: 'group', icon: 'move', label: `Move to “${x}”`, run: () => setBodyGroup(b, x) }));
+  moves.push({ act: 'group-new', icon: 'folder-plus', label: 'Move to a new group…', run: async () => { const n = await askGroupName('Move to a new group', '', 'Move'); if (n) setBodyGroup(b, n); } });
+  if (g) moves.push({ act: 'ungroup', icon: 'folder', label: 'Take out of the group', run: () => setBodyGroup(b, '') });
   openMenu('body:' + b.id, anchor, at, [
     { act: 'send', icon: 'send', label: 'Send only this body', run: () => sendOneBody(b.id) },
     { act: 'dup', icon: 'copy', label: 'Duplicate', run: () => addBody(b, i + 1) },
-    { act: 'up', icon: 'arrow-up', label: 'Move up', run: () => { if (i > 0) moveTo(i - 1); } },
-    { act: 'down', icon: 'arrow-down', label: 'Move down', run: () => { if (i < state.bodies.length - 1) moveTo(i + 1); } },
+    { act: 'up', icon: 'arrow-up', label: 'Move up', run: () => swapWith(sibling(-1)) },
+    { act: 'down', icon: 'arrow-down', label: 'Move down', run: () => swapWith(sibling(1)) },
+    '-',
+    ...moves,
     '-',
     { act: 'del', icon: 'trash', label: 'Delete', danger: true, run: () => deleteBody(b) },
   ]);
+}
+async function askGroupName(title, value = '', okLabel = 'Save') {
+  const v = await promptDialog(title, { label: 'Group name', value, placeholder: 'e.g. Invalid input', okLabel });
+  return v == null ? '' : normGroup(v);
+}
+function setBodyGroup(b, name) {
+  const g = normGroup(name);
+  if (!b || bodyGroup(b) === g) return;
+  if (g) { b.group = g; setBodyGroupClosed(g, false); } else delete b.group;
+  renderBodies();
+  scheduleSave();
+  toast(g ? `“${b.name || 'Unnamed'}” is in the group “${g}”` : `“${b.name || 'Unnamed'}” is no longer in a group`, 'ok');
+}
+async function newBodyGroup() {
+  const g = await askGroupName('New group', '', 'Create');
+  if (g) addBody(null, null, g);
+}
+function openBodyGroupMenu(g, anchor, at) {
+  const items = [
+    { act: 'send', icon: 'send', label: 'Send this group', run: () => sendBodyGroup(g) },
+    { act: 'add', icon: 'plus', label: g ? 'Add a body to this group' : 'Add a body without a group', run: () => addBody(null, null, g) },
+  ];
+  if (g) {
+    items.push(
+      { act: 'rename', icon: 'pencil', label: 'Rename group…', run: () => renameBodyGroup(g) },
+      { act: 'ungroup', icon: 'folder', label: 'Ungroup (keep the bodies)', run: () => ungroupBodies(g) },
+      '-',
+      { act: 'del', icon: 'trash', label: 'Delete the group and its bodies', danger: true, run: () => deleteBodies((b) => bodyGroup(b) === g, `group “${g}”`) },
+    );
+  }
+  openMenu('bgroup:' + g, anchor, at, items);
+}
+async function renameBodyGroup(g) {
+  const n = await askGroupName('Rename group', g, 'Rename');
+  if (!n || n === g) return;
+  const merge = bodyGroups().includes(n);
+  state.bodies.forEach((b) => { if (bodyGroup(b) === g) b.group = n; });
+  setBodyGroupClosed(n, bodyGroupsClosed.has(bodyGroupKey(g)) && !merge);
+  setBodyGroupClosed(g, false);
+  renderBodies();
+  scheduleSave();
+  if (merge) toast(`Merged into the group “${n}”`, 'ok');
+}
+function ungroupBodies(g) {
+  const moved = state.bodies.filter((b) => bodyGroup(b) === g);
+  const reqId = state.current && state.current.id;
+  moved.forEach((b) => { delete b.group; });
+  renderBodies();
+  scheduleSave();
+  toast(`Ungrouped “${g}”`, '', { label: 'Undo', onClick: () => {
+    if (!state.current || state.current.id !== reqId) { toast('Those bodies belong to another request', 'error'); return; }
+    moved.forEach((b) => { b.group = g; });
+    renderBodies();
+    scheduleSave();
+  } });
 }
 async function deleteBody(which = null) {
   const b = which || activeBody();
@@ -1026,13 +1208,15 @@ async function deleteBody(which = null) {
   } });
 }
 // The trash button above the list: delete every checked body at once, with one Undo.
-function deleteCheckedBodies() {
+function deleteCheckedBodies() { deleteBodies((b) => b.enabled); }
+// Delete the bodies that match, with one Undo (the checked ones, or a group).
+function deleteBodies(pred, what = '') {
   flushBody();
-  const gone = state.bodies.map((b, i) => ({ b, i })).filter((x) => x.b.enabled);
+  const gone = state.bodies.map((b, i) => ({ b, i })).filter((x) => pred(x.b));
   if (!gone.length) return;
   const reqId = state.current && state.current.id;
   const wasActive = state.activeBodyId;
-  state.bodies = state.bodies.filter((b) => !b.enabled);
+  state.bodies = state.bodies.filter((b) => !pred(b));
   if (!state.bodies.some((b) => b.id === state.activeBodyId)) {
     const first = gone.find((x) => x.b.id === wasActive);
     const next = state.bodies[Math.min(first ? first.i - gone.filter((x) => x.i < first.i).length : 0, state.bodies.length - 1)];
@@ -1042,7 +1226,7 @@ function deleteCheckedBodies() {
   renderResponseArea();
   scheduleSave();
   const n = gone.length;
-  toast(`Deleted ${n} ${n === 1 ? 'body' : 'bodies'}`, '', { label: 'Undo', onClick: () => {
+  toast(`Deleted ${what ? what + ': ' : ''}${n} ${n === 1 ? 'body' : 'bodies'}`, '', { label: 'Undo', onClick: () => {
     if (!state.current || state.current.id !== reqId) { toast('Those bodies belong to another request', 'error'); return; }
     gone.forEach(({ b, i }) => state.bodies.splice(Math.min(i, state.bodies.length), 0, b));
     state.activeBodyId = wasActive;
@@ -1055,6 +1239,59 @@ function setAllBodies(on) {
   state.bodies.filter((b) => bodyMatches(b, state.bodyQ)).forEach((b) => { b.enabled = on; });
   renderBodies();
   scheduleSave();
+}
+
+// ------------------------------------------------- maximized bodies card
+// The maximize button of the Body tab lifts the whole tab (search, groups, list, editor, Send) into a
+// large card over the app. The same elements move into the card and back, so nothing is copied and
+// every handler keeps working; Esc, the button again or a click outside restores.
+const bodiesMax = { on: false };
+function renderBodiesMaxTitle() {
+  const el = $('#bodies-max-title');
+  const method = $('#f-method').value;
+  const name = $('#f-name').value.trim() || 'Untitled';
+  const url = $('#f-url').value.trim();
+  el.innerHTML = `<span class="method m-${esc(method)}">${esc(method)}</span><strong>${esc(name)}</strong><span class="mono muted">${esc(url)}</span>`;
+  el.title = `${method} ${url}`;
+}
+function setBodiesMax(on) {
+  if (on === bodiesMax.on) return;
+  const panel = $('#editor-panels .tab-panel[data-panel="body"]');
+  flushBody();
+  if (on) {
+    if (!panel || panel.hidden) return;
+    const back = document.createElement('div');
+    back.id = 'bodies-max';
+    back.className = 'bodies-max-back';
+    back.innerHTML = '<div class="bodies-max-card" role="dialog" aria-modal="true" aria-label="Bodies of this request"></div>';
+    const card = back.firstChild;
+    while (panel.firstChild) card.appendChild(panel.firstChild);
+    back.addEventListener('mousedown', (e) => { if (e.target === back) setBodiesMax(false); });
+    document.body.appendChild(back);
+    bodiesMax.on = true;
+    bodiesMax.prevFocus = document.activeElement;
+    renderBodiesMaxTitle();
+    $('#bodies-max-title').hidden = false;
+    $('#body-search').focus();
+  } else {
+    const back = $('#bodies-max');
+    if (back) {
+      const card = $('.bodies-max-card', back);
+      while (card.firstChild) panel.appendChild(card.firstChild);
+      back.remove();
+    }
+    bodiesMax.on = false;
+    $('#bodies-max-title').hidden = true;
+    const prev = bodiesMax.prevFocus;
+    bodiesMax.prevFocus = null;
+    if (prev && prev.focus && document.contains(prev) && prev !== $('#btn-bodies-max')) prev.focus(); else $('#btn-bodies-max').focus();
+  }
+  const btn = $('#btn-bodies-max');
+  btn.innerHTML = icon(on ? 'minimize' : 'maximize');
+  btn.setAttribute('aria-pressed', String(on));
+  btn.setAttribute('aria-label', on ? 'Restore the bodies' : 'Maximize the bodies');
+  btn.title = on ? 'Restore (Esc)' : 'Maximize the bodies: a large, searchable view of every body of this request (Esc restores)';
+  if (bodyEditor && bodyEditor.api) bodyEditor.api.refresh();   // the code editor measures itself again in its new size
 }
 
 // ----------------------------------------------------------------- autosave
@@ -1219,19 +1456,20 @@ async function duplicateRequestById(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function sendCurrent({ onlyBodyId = null } = {}) {
+async function sendCurrent({ onlyBodyId = null, onlyBodyIds = null } = {}) {
   if (!state.current) return;
   if (typeof isWsRequest === 'function' && isWsRequest()) { wsToggle(true); return; }   // Ctrl+Enter: connect, never disconnect
   await saveNow();
   const data = readEditor();
   data.folder_id = state.current.folder_id || null;
-  if (onlyBodyId && data.body_type !== 'none') {
-    // this send only: just that body, the checkboxes stay as they are
-    data.bodies = data.bodies.map((b) => ({ ...b, enabled: b.id === onlyBodyId }));
+  const only = onlyBodyIds ? new Set(onlyBodyIds) : onlyBodyId ? new Set([onlyBodyId]) : null;
+  if (only && data.body_type !== 'none') {
+    // this send only: just those bodies (one body, or a group), the checkboxes stay as they are
+    data.bodies = data.bodies.map((b) => ({ ...b, enabled: only.has(b.id) }));
   }
   let enabled = data.body_type === 'none' ? [] : data.bodies.filter((b) => b.enabled);
   if (state.sending && state.sending.key === responseKey()) return;
-  const viewing = onlyBodyId || data.body_type === 'none' ? null : data.bodies.find((b) => b.id === state.activeBodyId);
+  const viewing = only || data.body_type === 'none' ? null : data.bodies.find((b) => b.id === state.activeBodyId);
   if (viewing && !viewing.enabled) {
     const what = enabled.length === 1 ? `the checked body ${strong(enabled[0].name)}`
       : enabled.length ? `the ${enabled.length} checked bodies` : 'no body (none is checked)';
@@ -2388,7 +2626,7 @@ function openMenu(key, anchor, at, items) {
     m.appendChild(b);
   });
   document.body.appendChild(m);
-  const row = anchor.closest('.req-item, .folder-item, .h-item, .body-item, .req-tab');
+  const row = anchor.closest('.req-item, .folder-item, .h-item, .body-item, .body-group, .req-tab');
   if (row) row.classList.add('menu-open');
   const rect = anchor.getBoundingClientRect();
   let left = at ? at.x : rect.right - m.offsetWidth;
@@ -3027,7 +3265,8 @@ function currentRespView() {
 function updateCopyButton() {
   const view = currentRespView();
   const label = { body: 'response body', headers: 'response headers', request: 'request as sent', cookies: 'cookies', tests: 'test results' }[view] || 'response';
-  $('#r-copy').title = `Copy the ${label}`;
+  const copy = $('#r-copy');
+  if (!copy.classList.contains('done')) { copy.title = `Copy the ${label}`; copy.setAttribute('aria-label', `Copy the ${label}`); }
   $('#r-save').hidden = view !== 'body';
   $('#r-copy').hidden = view === 'view';   // a view is a page of its own: nothing here to copy
 }
@@ -3048,10 +3287,13 @@ async function copyResponse() {
   const btn = $('#r-copy');
   if (!text) { toast('Nothing to copy', 'error'); return; }
   if (await copyText(text)) {
+    // icon-only button: it turns into a check for a moment, and says so to screen readers
     btn.classList.add('done');
-    $('span', btn).innerHTML = 'Copied ' + icon('check');
+    btn.innerHTML = icon('check');
+    btn.title = 'Copied';
+    btn.setAttribute('aria-label', 'Copied');
     clearTimeout(btn._t);
-    btn._t = setTimeout(() => { btn.classList.remove('done'); $('span', btn).textContent = 'Copy'; }, 1500);
+    btn._t = setTimeout(() => { btn.classList.remove('done'); btn.innerHTML = icon('copy'); updateCopyButton(); }, 1500);
   } else toast('Could not copy to the clipboard', 'error');
 }
 
@@ -3373,6 +3615,21 @@ function init() {
   $('#btn-body-all').addEventListener('click', () => setAllBodies(true));
   $('#btn-body-none').addEventListener('click', () => setAllBodies(false));
   $('#btn-body-del-checked').addEventListener('click', deleteCheckedBodies);
+  $('#btn-body-group-add').addEventListener('click', newBodyGroup);
+  $('#btn-body-send').addEventListener('click', () => { if (activeBody()) sendOneBody(state.activeBodyId); });
+  $('#body-group').addEventListener('change', (e) => { flushBody(); setBodyGroup(activeBody(), e.target.value); e.target.value = bodyGroup(activeBody()); });
+  $('#body-group').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+  $('#btn-bodies-max').addEventListener('click', () => setBodiesMax(!bodiesMax.on));
+  // Esc restores the maximized bodies, unless it is closing something on top of them first
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !bodiesMax.on) return;
+    if ($('#ctx-menu') || $('.dialog-backdrop') || !$('#modal').hidden) return;
+    if (e.target.closest && e.target.closest('.cm-panels, .var-suggest')) return;
+    if ($$('.var-suggest').some((el) => !el.hidden && el.offsetParent)) return;
+    if (e.target.id === 'body-search' && e.target.value) return;   // the first Esc empties the search
+    e.preventDefault();
+    setBodiesMax(false);
+  }, true);
 
   $('#btn-variables').addEventListener('click', openVariables);
   $('#btn-export').addEventListener('click', (e) => exportMenu(e.currentTarget));

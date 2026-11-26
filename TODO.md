@@ -4,6 +4,22 @@
 Status: `[x]` done · `[~]` in progress · `[ ]` open. Newest decisions at the top of each
 section. Keep this file honest: when an item ships, tick it and say where (file or release).
 
+## Shipped on 2026-11-26
+
+- [x] **Body groups.** A body can be put in a group (the Group field next to its name, the
+  folder+ button for a new group, or a body's ⋯ menu). The list then shows each group under a
+  header that folds, checks/unchecks and sends all of its bodies (⋯: add, rename, ungroup,
+  delete with Undo). Search also matches group names. Stored as `group` on each body; a request
+  without groups looks as before. → `bodyGroupRow()` in `app.js`, `db._bodies`.
+  - [ ] Not done: groups in the Postman/OpenAPI export and in the documentation export.
+- [x] **Send on the body toolbar** (right end of the name row): sends the body on screen only,
+  whatever is checked, like Ctrl+Shift+Enter. → `renderBodySendButton()`.
+- [x] **Maximize the bodies** (top-right of the Body tab): the Body tab's own elements move into
+  a large card (search, groups, list, editor, Send); Esc, the button or a click outside restores.
+  A send from the card reports its status in a toast with "Show response". → `setBodiesMax()`.
+- [x] **Response copy is an icon** in the top-right corner of the response, on every tab; it
+  turns into a check for a moment after copying.
+
 ## Shipped on 2026-11-13
 
 - [x] **2.1.0**: a WebSocket address may start with a variable (`{{events_url}}/orders`): the

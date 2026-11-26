@@ -828,3 +828,80 @@ button.del-many { gap: 3px; padding: 2px 7px; }
 button.del-many .n { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 button.del-many .n:empty { display: none; }
 .select-bar #btn-del-sel { height: 26px; min-width: 0; }
+/* ------------------------------------------------------------ body groups
+   A group header folds, checks and sends the bodies under it. It reads as a quiet section label,
+   so the bodies themselves stay what the eye lands on. */
+.body-group { display: grid; grid-template-columns: 20px 16px minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center; padding: 3px 4px 3px 2px; margin-top: 8px; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.body-group:first-child { margin-top: 0; }
+.body-group:hover { background: var(--bg-3); color: var(--text); }
+.body-group input[type="checkbox"] { width: 14px; height: 14px; margin: 0; }
+.body-group .bg-caret { min-width: 20px; height: 20px; padding: 0; background: none; border-color: transparent; color: inherit; }
+.body-group .bg-caret svg { width: 14px; height: 14px; transition: transform .15s ease; }
+.body-group.closed .bg-caret svg { transform: rotate(-90deg); }
+.body-group .bg-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.body-group.ungrouped .bg-name { font-weight: 600; opacity: .8; }
+/* a folded group that holds the body in the editor shows a dot, so the selection is never lost */
+.body-group.closed.has-active .bg-name::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--primary); vertical-align: middle; }
+.body-group .bg-count { font-size: 10px; font-weight: 600; letter-spacing: 0; font-variant-numeric: tabular-nums; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.body-group .bsend, .body-group .bmore { min-width: 22px; height: 22px; padding: 0; background: none; border-color: transparent; color: var(--muted); opacity: 0; }
+.body-group:hover .bsend, .body-group:hover .bmore, .body-group .bsend:focus-visible, .body-group .bmore:focus-visible, .body-group.menu-open .bmore { opacity: 1; }
+.body-group .bsend:hover { color: var(--accent); border-color: var(--border); background: var(--bg-4); }
+.body-group .bmore:hover { border-color: var(--border); background: var(--bg-4); color: var(--text); }
+.body-list.no-send .body-group .bsend, .body-list.sending .body-group .bsend { visibility: hidden; }
+/* bodies of a group sit under its header, on a guide line */
+.body-list.grouped .body-item.in-group { margin-left: 10px; }
+.body-list.grouped .body-item.in-group:not(.active) { border-left-color: var(--border); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+
+/* the Group field of the body toolbar */
+.body-group-field { position: relative; display: inline-flex; align-items: center; flex: 0 1 170px; min-width: 110px; }
+.body-group-field svg { position: absolute; left: 8px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.body-group-field input { width: 100%; padding-left: 28px; }
+/* Send on the body toolbar: the last thing on the line, after a divider, like the URL row's Send */
+.tb-sep { flex: none; width: 1px; align-self: stretch; margin: 3px 2px; background: var(--border); }
+button.body-send { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; }
+button.body-send svg { flex: none; }
+button.body-send.busy { cursor: progress; }
+
+/* the narrow chip layout: a group header becomes a small label in the row of chips */
+@container reqpane (max-width: 680px) and (max-height: 520px) {
+  .body-group { grid-template-columns: 18px auto auto; margin: 0; padding: 2px 6px 2px 0; }
+  .body-group input[type="checkbox"], .body-group .bsend, .body-group .bmore { display: none; }
+  .body-list.grouped .body-item.in-group { margin-left: 0; }
+}
+
+/* ---------------------------------------------- maximized bodies card
+   The Body tab's own elements move into this card, so search, groups, list, editor and Send all
+   work the same; the card only gives them room. Below dialogs and menus (z-index 50+). */
+.bodies-max-back { position: fixed; inset: 0; z-index: 45; display: flex; align-items: stretch; justify-content: center; padding: 28px; background: rgba(0, 0, 0, .55); animation: fade-in .12s ease-out; }
+.bodies-max-card { width: min(1440px, 100%); min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 64px rgba(0, 0, 0, .45); animation: pop-in .14s ease-out; }
+.bodies-max-card > .row { flex: none; margin: 0; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.bodies-max-title { order: -1; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; max-width: 50%; }
+.bodies-max-title strong { white-space: nowrap; }
+.bodies-max-title .mono { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bodies-max-card .bodies { flex: 1 1 auto; min-height: 0; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; }
+.bodies-max-card .bodies-side { border-right: 1px solid var(--border); border-bottom: none; padding: 0 16px 0 0; max-height: none; }
+.bodies-max-card .body-list { flex: 1 1 auto; max-height: none; }
+.bodies-max-card #body-search { font-size: 14px; padding-top: 7px; padding-bottom: 7px; }
+/* with the room, a body's preview shows two lines instead of one */
+.bodies-max-card .body-item .bprev { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.bodies-max-card #body-text-wrap > .code-editor { min-height: 0; }
+@media (max-width: 760px) {
+  .bodies-max-back { padding: 8px; }
+  .bodies-max-title { max-width: 100%; flex-basis: 100%; }
+  .bodies-max-card > .row { flex-wrap: wrap; }
+  .bodies-max-card .bodies { grid-template-columns: 1fr; grid-template-rows: minmax(96px, 32%) minmax(0, 1fr); gap: 10px; }
+  .bodies-max-card .bodies-side { border-right: none; border-bottom: 1px solid var(--border); padding: 0 0 8px; }
+}
+
+/* ---------------------------------------- response copy, top-right corner
+   One icon over the response, whatever tab is shown; it copies what that tab shows. */
+.resp-panels-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.response.collapsed .resp-panels-wrap, .response.first-send .resp-panels-wrap, .response.streaming .resp-panels-wrap { display: none !important; }
+.r-copy { position: absolute; top: 2px; right: 14px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; background: var(--bg-3); border: 1px solid var(--border); color: var(--muted); opacity: .85; transition: opacity .15s, color .15s, background .15s; }
+.r-copy:hover, .r-copy:focus-visible { opacity: 1; color: var(--text); background: var(--bg-4); }
+.r-copy.done { opacity: 1; color: var(--ok); border-color: var(--ok); }
+.r-copy svg.ic { width: 15px; height: 15px; }
+/* the Pretty / Raw bar and the other tabs leave the corner to it */
+#resp-panels #r-body.rv > .rv-bar { padding-right: 40px; }
+#resp-panels > .r-panel:not(#r-body):not(#r-view) { padding-right: 40px; }
+.response.is-sending:not(.first-send) .r-copy { opacity: .4; }

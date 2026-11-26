@@ -228,11 +228,14 @@
               <option value="graphql">GraphQL</option>
             </select>
             <span id="bodies-hint" class="muted small grow"></span>
+            <span id="bodies-max-title" class="bodies-max-title" hidden></span>
+            <button id="btn-bodies-max" class="icon" title="Maximize the bodies: a large, searchable view of every body of this request (Esc restores)" aria-label="Maximize the bodies" aria-pressed="false"><svg class="ic ic-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
           </div>
           <div class="bodies">
             <div class="bodies-side">
               <div class="row tight">
                 <input id="body-search" type="search" class="grow" placeholder="Search bodies…" autocomplete="off">
+                <button id="btn-body-group-add" class="icon" title="New group: adds a body in a group of its own. Move other bodies into it with the Group field or a body's ⋯ menu" aria-label="New group"><svg class="ic ic-folder-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path d="M12 11v5M9.5 13.5h5"/></svg></button>
                 <button id="btn-body-add" class="icon" title="Add a new named body" aria-label="Add a body"><svg class="ic ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button>
                 <button id="btn-body-del-checked" class="icon danger del-many" title="Delete the checked bodies" aria-label="Delete the checked bodies" disabled><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg><span class="n"></span></button>
               </div>
@@ -248,10 +251,17 @@
               <div id="body-editor-empty" class="empty small">Add a body with the + button. Each named body is sent separately when you press Send.</div>
               <div id="body-editor" hidden>
                 <div class="row tight">
-                  <input id="body-name" class="grow" placeholder="Body name, e.g. valid user / missing email">
+                  <input id="body-name" class="grow" placeholder="Body name, e.g. valid user / missing email" aria-label="Body name">
+                  <label class="body-group-field" title="The group this body is listed under. Type a new name to make a group; empty it to take the body out of its group">
+                    <svg class="ic ic-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+                    <input id="body-group" list="body-groups" placeholder="No group" autocomplete="off" spellcheck="false" maxlength="60" aria-label="Group">
+                  </label>
+                  <datalist id="body-groups"></datalist>
                   <button id="btn-format-json" class="link" title="Beautify (Ctrl+B)">Beautify</button>
                   <button id="btn-body-dup" class="icon" title="Duplicate this body" aria-label="Duplicate this body"><svg class="ic ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
                   <button id="btn-body-del" class="icon danger" title="Delete this body" aria-label="Delete this body"><svg class="ic ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6"/><path d="m5.5 7 1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg></button>
+                  <span class="tb-sep" aria-hidden="true"></span>
+                  <button id="btn-body-send" class="accent body-send" title="Send this body only (Ctrl+Shift+Enter)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M2.5 3.3 22 12 2.5 20.7l2.9-7.2L15 12 5.4 10.5z"/></svg><span>Send</span></button>
                 </div>
                 <div id="body-text-wrap">
                   <textarea id="f-body" class="mono body-input" rows="14" spellcheck="false" placeholder='{"name": "{{user_name}}"}  // Ctrl+/ comments a line'></textarea>
@@ -330,11 +340,9 @@
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
             <span>Save</span>
           </button>
-          <button id="r-copy" class="copy-btn" title="Copy the response body">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V6a2 2 0 0 1 2-2h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            <span>Copy</span>
-          </button>
         </div>
+        <div class="resp-panels-wrap">
+        <button id="r-copy" class="r-copy" title="Copy the response body" aria-label="Copy the response body"><svg class="ic ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
         <div class="tab-panels" id="resp-panels">
           <div id="r-body" class="tab-panel r-panel" data-panel="body"></div>
           <div id="r-view" class="tab-panel r-panel vw-host" data-panel="view" hidden></div>
@@ -342,6 +350,7 @@
           <div id="r-headers" class="tab-panel r-panel" data-panel="headers" hidden></div>
           <div id="r-tests" class="tab-panel r-panel" data-panel="tests" hidden></div>
           <div id="r-request" class="tab-panel r-panel" data-panel="request" hidden></div>
+        </div>
         </div>
         <!-- shown instead of the response when the URL is ws:// or wss:// -->
         <div id="ws-panel" class="ws-panel" hidden>

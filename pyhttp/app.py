@@ -62,6 +62,7 @@ class BodyIn(BaseModel):
     name: str = ""
     body: str = ""
     enabled: bool = True
+    group: str = ""     # the group the body is listed under in the editor ("" = none)
 
 
 class RequestIn(BaseModel):

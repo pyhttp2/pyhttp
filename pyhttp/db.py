@@ -536,6 +536,9 @@ def normalize_options(data: Any) -> dict[str, Any]:
     return out
 
 
+BODY_GROUP_MAX = 60     # characters of a body's group name
+
+
 def _bodies(rows: Any, legacy_body: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -546,12 +549,17 @@ def _bodies(rows: Any, legacy_body: str) -> list[dict[str, Any]]:
         while bid in seen:
             bid = uuid.uuid4().hex[:10]
         seen.add(bid)
-        out.append({
+        row = {
             "id": bid,
             "name": str(r.get("name") or "").strip() or f"Body {i}",
             "body": str(r.get("body") or ""),
             "enabled": bool(r.get("enabled", True)),
-        })
+        }
+        # optional group the body is listed under in the editor; only stored when set
+        group = " ".join(str(r.get("group") or "").split())[:BODY_GROUP_MAX]
+        if group:
+            row["group"] = group
+        out.append(row)
     if not out and legacy_body:
         out.append({"id": "default", "name": "Default", "body": legacy_body, "enabled": True})
     return out

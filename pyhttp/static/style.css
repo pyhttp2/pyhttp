@@ -303,7 +303,7 @@ body.native .result-item, body.native .history-item { cursor: default; }
 
 /* --------------------------------------------------------- named bodies */
 .row.tight { margin-bottom: 6px; gap: 6px; }
-.bodies { display: grid; grid-template-columns: 240px 1fr; gap: 12px; min-height: 260px; }
+.bodies { display: grid; grid-template-columns: 256px 1fr; gap: 12px; min-height: 260px; }
 .bodies-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); padding-right: 12px; }
 .bodies-main { min-width: 0; }
 .body-list { list-style: none; margin: 0; padding: 0; overflow: auto; max-height: 340px; display: flex; flex-direction: column; gap: 2px; user-select: none; }
