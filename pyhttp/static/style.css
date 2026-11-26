@@ -298,8 +298,6 @@ pre { margin: 0; background: var(--bg-2); border: 1px solid var(--border); borde
 .history-item, .run-actions, .modal-head, .modal-foot, .order-list, button, label {
   user-select: none; -webkit-user-select: none;
 }
-body.native button, body.native .req-item, body.native .chip,
-body.native .result-item, body.native .history-item { cursor: default; }
 
 /* --------------------------------------------------------- named bodies */
 .row.tight { margin-bottom: 6px; gap: 6px; }

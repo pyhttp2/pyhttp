@@ -176,3 +176,44 @@ body, .topbar, .rail, .sidebar, .runs, .statusbar { background: var(--chrome); }
 :root[data-theme="light"] #editor-section .code-editor,
 :root[data-theme="light"] .bodies-max-card .code-editor { --bg-3: #fbfcfd; --bg-2: #f4f6f8; background: var(--bg-3); }
 :root[data-theme="light"] #editor-section .rv-body { background: #fbfcfd; }
+
+/* ---------------------------------------------------- clickable affordance
+   Everything that does something when clicked shows a hand and changes its background on hover,
+   in the browser and in the desktop app alike, so nothing clickable looks like plain text.
+   Items that are already the current one (.active / .on) keep their look. Disabled controls
+   keep the not-allowed cursor. :root raises these rules above the per-component ones. */
+:root { --hover-bg: color-mix(in srgb, var(--text) 8%, transparent); --hover-solid: color-mix(in srgb, var(--text) 10%, var(--bg-4)); }
+:root[data-theme="light"] { --hover-bg: color-mix(in srgb, var(--text) 6%, transparent); --hover-solid: color-mix(in srgb, var(--text) 8%, var(--bg-3)); }
+
+/* the hand */
+:root :is(button, a[href], select, summary, [role=button], [role=tab], [role=menuitem], [role=option],
+  input[type=checkbox], input[type=radio], input[type=file], input[type=color],
+  label:has(> input[type=checkbox]), label:has(> input[type=radio]), label:has(.switch), .switch-row,
+  .req-item, .folder-item, .body-item, .body-group, .h-item, .history-item, .result-item, .env-item,
+  .page-item, .page-row, .req-tab, .mock-call, .mon-pick-row) { cursor: pointer; }
+:root :is(button, select, input, textarea):disabled { cursor: not-allowed; }
+
+/* quiet controls (no fill of their own): a soft fill on hover */
+:root :is(.tabs button, .status-btn, .rail-btn, .tag-bar-toggle, .rt-add, .h-resend, button.link):not(:disabled):not(.active):not(.on):not(.danger):hover {
+  background-color: var(--hover-bg);
+}
+/* small framed buttons (icons, copy, segmented, viewer bar): a solid step, a tint would not show on their fill */
+:root :is(button.icon, .icon-btn, .copy-btn, .r-copy, .rv-btn, .seg button):not(:disabled):not(.active):not(.on):not(.danger):not(.done):hover {
+  background-color: var(--hover-solid);
+}
+/* red icon buttons (delete): a red tint */
+:root button.icon.danger:not(:disabled):hover { background-color: color-mix(in srgb, var(--danger) 14%, transparent); }
+:root .tabs button:not(.active):hover { border-radius: 6px 6px 0 0; }
+:root button.link:not(:disabled):hover { text-decoration: none; }
+/* text links and check-box labels: the fill reaches a little past the text, without moving anything */
+:root :is(a[href], label:has(> input[type=checkbox]), label:has(> input[type=radio]), .kv-all):hover {
+  background-color: var(--hover-bg); box-shadow: 0 0 0 3px var(--hover-bg); border-radius: 4px;
+}
+:root .result-item a[href]:hover, :root .jv a[href]:hover { box-shadow: none; }
+/* filled controls and cards: one step deeper */
+:root :is(.switch-row, .result-item, .history-item, .chip:not(.active)):hover { background-color: var(--hover-solid); }
+:root select:not(:disabled):hover { background-color: var(--hover-solid); }
+:root[data-theme="light"] :is(.layout, .topbar, .bodies-max-card) select:not(:disabled):hover { background-color: var(--bg-3); }   /* the white fields */
+:root input[type=checkbox]:not(:checked):not(:indeterminate):not(:disabled):hover { background-color: var(--hover-bg); border-color: var(--primary); }
+/* the main Send keeps its blue, one shade darker */
+:root #btn-send:not(.cancel):not(:disabled):hover, :root #btn-send-mode:not(:disabled):hover { background-color: var(--primary-2); border-color: var(--primary-2); }

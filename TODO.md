@@ -21,6 +21,11 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   prominent surface: white in light mode (was grey #f4f5f7), a lifted slate #13171d in dark.
   In dark, the top bar, rail, sidebar, runs panel and status bar recede one step (`--chrome`);
   in light the whole app is white, panels set apart by their borders, fields white with a border. → "surfaces" in `ui.css`.
+- [x] **Clickable things look clickable.** A hand cursor and a hover background on every
+  button, tab, link, dropdown, check-box label, settings row, chip and list row, in both themes
+  and in the desktop app too (the old `body.native { cursor: default }` rule is gone). Current
+  items (.active/.on) keep their look. Audited with a script over ~1500 clickable elements in
+  every section. → "clickable affordance" in `ui.css`.
 - [x] **Response copy is an icon** in the top-right corner of the response, on every tab; it
   turns into a check for a moment after copying.
 
