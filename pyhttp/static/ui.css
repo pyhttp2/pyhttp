@@ -158,3 +158,21 @@ button.link { font-weight: 400; }
 
 /* room for the caret next to "ANY of these (or)" */
 .flow-match-mode select { min-width: 158px; }
+
+/* --------------------------------------------------------------- surfaces
+   The main window (request editor, response, flows, pages) is the surface you work on, so it is
+   the most prominent one: white in the light theme, a lifted slate in the dark one. The frame
+   around it (top bar, rail, sidebar, runs panel, status bar) recedes one step, so the eye lands
+   on the work and not on the chrome. Inside the main window --bg follows the canvas, so sticky
+   bars and canvases painted with it match. */
+:root { --canvas: #13171d; --chrome: #0e1116; }
+:root[data-theme="light"] { --canvas: #ffffff; --chrome: #ffffff; }   /* light: one white surface, panels set apart by their borders */
+body, .topbar, .rail, .sidebar, .runs, .statusbar { background: var(--chrome); }
+#editor-section { --bg: var(--canvas); background: var(--canvas); }
+.bodies-max-card { background: var(--canvas); }
+/* fields: white with a border in the light theme (grey fields on white read as disabled) */
+:root[data-theme="light"] :is(.layout, .topbar, .bodies-max-card) :is(input:not([type=checkbox]):not([type=radio]), select, textarea) { background: #fff; }
+/* code editors and the response body: a near-white well, with a slightly deeper gutter */
+:root[data-theme="light"] #editor-section .code-editor,
+:root[data-theme="light"] .bodies-max-card .code-editor { --bg-3: #fbfcfd; --bg-2: #f4f6f8; background: var(--bg-3); }
+:root[data-theme="light"] #editor-section .rv-body { background: #fbfcfd; }

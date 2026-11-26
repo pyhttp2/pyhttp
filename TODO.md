@@ -17,6 +17,10 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
 - [x] **Maximize the bodies** (top-right of the Body tab): the Body tab's own elements move into
   a large card (search, groups, list, editor, Send); Esc, the button or a click outside restores.
   A send from the card reports its status in a toast with "Show response". → `setBodiesMax()`.
+- [x] **Main window surface.** The main window (editor, response, flows, pages) is now the most
+  prominent surface: white in light mode (was grey #f4f5f7), a lifted slate #13171d in dark.
+  In dark, the top bar, rail, sidebar, runs panel and status bar recede one step (`--chrome`);
+  in light the whole app is white, panels set apart by their borders, fields white with a border. → "surfaces" in `ui.css`.
 - [x] **Response copy is an icon** in the top-right corner of the response, on every tab; it
   turns into a check for a moment after copying.
 
