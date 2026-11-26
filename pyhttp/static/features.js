@@ -800,6 +800,20 @@ function renderResponsePanels(result) {
       ${(req.files || []).length ? `<div class="muted small">Files: ${req.files.map((f) => `${esc(f.field)} = ${esc(f.filename)} (${fmtBytes(f.size)})`).join(', ')}</div>` : ''}
       ${req.body ? `<pre class="rv-pre mono">${esc(req.body)}</pre>` : '<div class="muted small">No body</div>'}
     </div>`;
+  // copy buttons, each in the top-right corner of what it copies
+  if (!resp) addCornerCopy(bodyBox, () => result.error || '', 'the error');
+  if (hs.length) addCornerCopy($('#r-headers'), () => responseTextFor('headers'), 'the response headers');
+  if (cs.length) addCornerCopy($('#r-cookies'), () => responseTextFor('cookies'), 'the cookies');
+  if (tests.length) addCornerCopy($('#r-tests'), () => responseTextFor('tests'), 'the test results');
+  addCornerCopy($('#r-request .req-sent'), () => responseTextFor('request'), 'the whole request as sent');
+  const sentBody = $('#r-request .req-sent > pre.rv-pre');
+  if (sentBody) {
+    const wrapBody = document.createElement('div');
+    wrapBody.className = 'req-sent-body';
+    sentBody.replaceWith(wrapBody);
+    wrapBody.appendChild(sentBody);
+    addCornerCopy(wrapBody, () => req.body || '', 'the request body');
+  }
   afterResponseForViews(result);
   $('#r-save').disabled = !resp;
   $('#r-example').disabled = !resp || !!resp.is_binary;

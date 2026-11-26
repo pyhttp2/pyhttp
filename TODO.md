@@ -26,8 +26,11 @@ section. Keep this file honest: when an item ships, tick it and say where (file 
   and in the desktop app too (the old `body.native { cursor: default }` rule is gone). Current
   items (.active/.on) keep their look. Audited with a script over ~1500 clickable elements in
   every section. → "clickable affordance" in `ui.css`.
-- [x] **Response copy is an icon** in the top-right corner of the response, on every tab; it
-  turns into a check for a moment after copying.
+- [x] **Copy buttons inside what they copy** (`cornerCopy()` in `app.js`): a still icon in the
+  top-right corner of the response body box (every viewer), the request as sent and its body
+  (Request tab), the headers, cookies and tests tabs, and the request body editor (it steps
+  aside while Find is open). Replaces the floating copy button over the response, which faded
+  in and out.
 
 ## Shipped on 2026-11-13
 

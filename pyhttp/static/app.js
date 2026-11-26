@@ -3262,13 +3262,8 @@ function currentRespView() {
   const active = $('#resp-tabs button.active');
   return active ? active.dataset.tab : 'body';
 }
-function updateCopyButton() {
-  const view = currentRespView();
-  const label = { body: 'response body', headers: 'response headers', request: 'request as sent', cookies: 'cookies', tests: 'test results' }[view] || 'response';
-  const copy = $('#r-copy');
-  if (!copy.classList.contains('done')) { copy.title = `Copy the ${label}`; copy.setAttribute('aria-label', `Copy the ${label}`); }
-  $('#r-save').hidden = view !== 'body';
-  $('#r-copy').hidden = view === 'view';   // a view is a page of its own: nothing here to copy
+function updateRespTabTools() {
+  $('#r-save').hidden = currentRespView() !== 'body';
 }
 function responseTextFor(view) {
   const r = lastResult;
@@ -3281,20 +3276,36 @@ function responseTextFor(view) {
   if (view === 'request') return formatRequest(r.request);
   return '';
 }
-async function copyResponse() {
-  const view = currentRespView();
-  const text = responseTextFor(view);
-  const btn = $('#r-copy');
-  if (!text) { toast('Nothing to copy', 'error'); return; }
-  if (await copyText(text)) {
-    // icon-only button: it turns into a check for a moment, and says so to screen readers
-    btn.classList.add('done');
-    btn.innerHTML = icon('check');
-    btn.title = 'Copied';
-    btn.setAttribute('aria-label', 'Copied');
-    clearTimeout(btn._t);
-    btn._t = setTimeout(() => { btn.classList.remove('done'); btn.innerHTML = icon('copy'); updateCopyButton(); }, 1500);
-  } else toast('Could not copy to the clipboard', 'error');
+// A copy button for the top-right corner of a box (response body, request as sent, a table…).
+// Always shown, no fade: it turns into a check for a moment after copying, and says so.
+function cornerCopy(getText, what) {
+  const label = `Copy ${what}`;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'corner-copy';
+  const reset = () => { b.classList.remove('done'); b.innerHTML = icon('copy'); b.title = label; b.setAttribute('aria-label', label); };
+  reset();
+  b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const text = typeof getText === 'function' ? getText() : getText;
+    if (!text) { toast('Nothing to copy', 'error'); return; }
+    if (!(await copyText(text))) { toast('Could not copy to the clipboard', 'error'); return; }
+    b.classList.add('done');
+    b.innerHTML = icon('check');
+    b.title = 'Copied';
+    b.setAttribute('aria-label', 'Copied');
+    clearTimeout(b._t);
+    b._t = setTimeout(reset, 1500);
+  });
+  return b;
+}
+// Put a corner copy button in a box (replacing the one it had)
+function addCornerCopy(box, getText, what) {
+  if (!box) return;
+  const old = box.querySelector(':scope > .corner-copy');
+  if (old) old.remove();
+  box.classList.add('has-corner-copy');
+  box.appendChild(cornerCopy(getText, what));
 }
 
 // ============================================================== settings
@@ -3669,8 +3680,9 @@ function init() {
   api('/meta').then((m) => { const el = $('#meta-info'); el.textContent = `v${m.version}`; el.title = 'Run outputs are saved in ' + m.output_dir; }).catch(() => {});
   bindConsole();
   loadSettings();
-  $('#r-copy').addEventListener('click', copyResponse);
-  $$('#resp-tabs button').forEach((b) => b.addEventListener('click', updateCopyButton));
+  $$('#resp-tabs button').forEach((b) => b.addEventListener('click', updateRespTabTools));
+  // copy the request body from the editor: a button in the editor's top-right corner
+  addCornerCopy($('#body-text-wrap'), () => { flushBody(); return activeBody() ? activeBody().body : ''; }, 'this body');
   $('#btn-settings').addEventListener('click', openSettings);
   $('#sb-ssl').addEventListener('click', openSettings);
   $('#link-settings').addEventListener('click', openSettings);

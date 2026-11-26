@@ -893,15 +893,25 @@ button.body-send.busy { cursor: progress; }
   .bodies-max-card .bodies-side { border-right: none; border-bottom: 1px solid var(--border); padding: 0 0 8px; }
 }
 
-/* ---------------------------------------- response copy, top-right corner
-   One icon over the response, whatever tab is shown; it copies what that tab shows. */
-.resp-panels-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.response.collapsed .resp-panels-wrap, .response.first-send .resp-panels-wrap, .response.streaming .resp-panels-wrap { display: none !important; }
-.r-copy { position: absolute; top: 2px; right: 14px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; background: var(--bg-3); border: 1px solid var(--border); color: var(--muted); opacity: .85; transition: opacity .15s, color .15s, background .15s; }
-.r-copy:hover, .r-copy:focus-visible { opacity: 1; color: var(--text); background: var(--bg-4); }
-.r-copy.done { opacity: 1; color: var(--ok); border-color: var(--ok); }
-.r-copy svg.ic { width: 15px; height: 15px; }
-/* the Pretty / Raw bar and the other tabs leave the corner to it */
-#resp-panels #r-body.rv > .rv-bar { padding-right: 40px; }
-#resp-panels > .r-panel:not(#r-body):not(#r-view) { padding-right: 40px; }
-.response.is-sending:not(.first-send) .r-copy { opacity: .4; }
+
+/* ------------------------------------------------ copy, top-right corner of a box
+   cornerCopy() in app.js: a small framed icon inside the top-right corner of what it copies
+   (response body, request as sent and its body, headers, cookies, tests, the body editor).
+   Always visible and still: no fade, no dimming while a send runs. */
+.has-corner-copy { position: relative; }
+.corner-copy { position: absolute; top: 6px; right: 6px; z-index: 2; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; background: var(--bg-3); border: 1px solid var(--border); color: var(--muted); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+.corner-copy:hover, .corner-copy:focus-visible { color: var(--text); }
+.corner-copy.done { color: var(--ok); border-color: var(--ok); }
+.corner-copy svg.ic { width: 15px; height: 15px; }
+/* the response body: the box is the body's size, the button sits on its border's inside */
+.rv-box { min-width: 0; flex: none; }   /* its full height: the sticky Pretty/Raw bar needs a parent as tall as the body */
+.rv-box > .corner-copy { top: 7px; right: 7px; }
+/* the body editor: clear of the scrollbar */
+#body-text-wrap > .corner-copy { right: 12px; }
+/* the find / replace panel has its close button in that corner: the copy button steps aside while it is open */
+#body-text-wrap:has(.cm-panel) > .corner-copy { display: none; }
+/* panels and the request as sent: text never runs under the button */
+.r-panel.has-corner-copy, .req-sent.has-corner-copy { padding-right: 40px; }
+.req-sent-body { margin-top: 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 44px 8px 10px; font-size: var(--editor-font); }
+.req-sent-body > pre.rv-pre { white-space: pre-wrap; word-break: break-word; }
+:root[data-theme="light"] #editor-section .req-sent-body { background: #fbfcfd; }

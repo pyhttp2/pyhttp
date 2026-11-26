@@ -1653,8 +1653,11 @@ def test_body_groups_toolbar_send_and_maximize(page, servers):
     assert page.locator(".dialog-backdrop").count() == 0
     assert '\\"which\\": 2' in page.locator("#r-body .jv-node[data-path='body'] .jv-s").text_content()
     assert not page.locator("#body-list .body-item input").nth(2).is_checked()
-    # the copy button is an icon in the response's corner
-    assert page.inner_text("#r-copy").strip() == ""
+    # copy buttons sit in the top-right corner of what they copy: the response body, the body editor
+    assert page.locator("#r-body .rv-box > .corner-copy").count() == 1
+    assert page.locator("#body-text-wrap > .corner-copy").count() == 1
+    page.click("#resp-tabs button[data-tab='request']")
+    assert page.locator("#r-request .req-sent-body > .corner-copy").count() == 1
     # maximize: the same elements move into the card; search works there; Esc restores
     page.click("#btn-bodies-max")
     page.wait_for_selector("#bodies-max .bodies-max-card #body-list")

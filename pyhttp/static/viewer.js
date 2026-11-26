@@ -532,7 +532,16 @@ function mountViewer(container, resp, opts = {}) {
   const body = document.createElement('div');
   body.className = 'rv-body' + (state.wrap ? ' wrap' : '');
   container.appendChild(bar);
-  container.appendChild(body);
+  // the body box sits in a wrapper that also holds the copy button in its top-right corner;
+  // the button stays outside the body, which is re-rendered on every view change
+  const frame = document.createElement('div');
+  frame.className = 'rv-box';
+  frame.appendChild(body);
+  if (opts.copy !== false && resp && !resp.is_binary && typeof cornerCopy === 'function') {
+    frame.classList.add('has-corner-copy');
+    frame.appendChild(cornerCopy(() => text, opts.copyWhat || 'the response body'));
+  }
+  container.appendChild(frame);
 
   function parseJson() {
     if (state.json !== undefined) return state.json;
